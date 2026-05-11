@@ -1,4 +1,17 @@
-venv/
+# Database
+mro.db
+*.db-journal
+*.db-wal
+
+# Python
 __pycache__/
-*.pyc
-.streamlit/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Streamlit
+.streamlit/secrets.toml

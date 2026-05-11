@@ -18,7 +18,7 @@ from services.db_functions import (
     importar_solicitacoes_protheus, listar_recebimentos_sc,
     atualizar_localizacao_e_inventariar, atualizar_item_inventario,
     obter_analitico_movimentacoes, obter_analitico_divergencias,
-    obter_analitico_rupturas
+    obter_analitico_rupturas, exportar_movimentacoes_df
 )
 
 criar_banco()
@@ -760,6 +760,26 @@ elif pagina == "🔄 Movimentações":
                 )
             else:
                 st.info("Nenhuma movimentação encontrada para os filtros selecionados.")
+            
+        # --- BOTÃO DE EXPORTAR (Abaixo do dataframe de histórico) ---
+            st.markdown("---")
+            col_btn, _ = st.columns([1, 4])
+            with col_btn:
+                    # Passamos os filtros atuais para a função
+                df_exp_mov = exportar_movimentacoes_df(item_id=item_id_f, tipos_selecionados=f_tipo)
+                    
+                if not df_exp_mov.empty:
+                    buf = io.BytesIO()
+                    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+                        df_exp_mov.to_excel(w, index=False, sheet_name="Movimentacoes")
+                        
+                    st.download_button(
+                        label="⬇️ Baixar Excel",
+                        data=buf.getvalue(),
+                        file_name=f"movimentacoes_{date.today().strftime('%d-%m-%Y')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="btn_exp_mov"
+                    )
 
 
     # === TAB 3: ANALYTICS COMPLETO (VOLUME + DIVERGÊNCIAS + RUPTURA) ===
@@ -1172,7 +1192,7 @@ elif pagina == "🧾 Compras (SC)":
                     "Importância.": st.column_config.TextColumn("Importância.", width="small"),
                     "PN": st.column_config.TextColumn("Part Number", width="small"),
                     "Item": st.column_config.TextColumn("Descrição", width="large"),
-                    "Solicitado": st.column_config.TextColumn("Saldo", width="small"),
+                    "Solicitado": st.column_config.TextColumn("Solicitado", width="small"),
                     "Estoque": st.column_config.TextColumn("Estoque Atual", width="small"),
                     "Qty Mín": st.column_config.TextColumn("Mínimo", width="small"),
                     "Ruptura (d)": st.column_config.TextColumn("Ruptura", width="small"),

@@ -1394,6 +1394,30 @@ def exportar_inventario_df():
     
     return df
 
+def exportar_movimentacoes_df(item_id=None, tipos_selecionados=None):
+    import pandas as pd
+    # Busca todas as movimentações (sem o limite da tela para o relatório ser completo)
+    movs = listar_movimentacoes(item_id=item_id, limit=5000)
+    
+    if not movs:
+        return pd.DataFrame()
+    
+    # Filtro de tipo em memória (mesma lógica que você usa no app.py)
+    if tipos_selecionados:
+        movs = [m for m in movs if m['tipo'] in tipos_selecionados]
+        
+    df = pd.DataFrame(movs)
+    
+    # Colunas desejadas para o Excel
+    colunas = ["data_hora", "part_number", "nome_item", "tipo", "quantidade", "saldo_apos", "emitente", "observacao"]
+    
+    df = df[[c for c in colunas if c in df.columns]]
+    
+    # Renomear para o cabeçalho do Excel
+    df.columns = ["Data/Hora", "PN", "Item", "Tipo", "Qtd", "Saldo Pós", "Responsável", "Observação"]
+    
+    return df
+
 def _recalcular_lead_time_real(conn, item_id):
     """
     Calcula o Lead Time Médio Real baseado no histórico de SCs recebidas.
