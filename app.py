@@ -290,7 +290,7 @@ if pagina == "📊 Dashboard":
                 )
             )
             
-            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+            st.plotly_chart(fig, width='stretch', config={'displayModeBar': False})
             
         else:
             st.info(f"Nenhum dado de consumo registrado no período de {periodo_str}.")
@@ -1258,7 +1258,7 @@ elif pagina == "🧾 Compras (SC)":
 
         if st.session_state.sc_criada:
             st.success(f"✅ {st.session_state.sc_criada}")
-            if st.button("➕ Criar outra SC", use_container_width=True):
+            if st.button("➕ Criar outra SC", width="stretch"):
                 st.session_state.sc_criada = None; st.rerun()
             st.stop()
 
@@ -1274,7 +1274,7 @@ elif pagina == "🧾 Compras (SC)":
             
             obs_i    = st.text_area("Justificativa / Urgência", placeholder="Ex: Parada de linha iminente...", height=60)
             
-            add_isc = st.form_submit_button("➕ Adicionar à Lista", use_container_width=True)
+            add_isc = st.form_submit_button("➕ Adicionar à Lista", width="stretch")
 
         if add_isc:
             if not item_sc_add:
@@ -1299,7 +1299,7 @@ elif pagina == "🧾 Compras (SC)":
             df_prev_sc = pd.DataFrame(st.session_state.itens_nova_sc)[["part_number", "nome_item", "quantidade_solicitada", "data_necessidade"]]
             df_prev_sc.columns = ["PN", "Nome", "Qtd Solic.", "Data Nec."]
             df_prev_sc["Data Nec."] = df_prev_sc["Data Nec."].apply(fmt)
-            st.dataframe(df_prev_sc, use_container_width=True, hide_index=True)
+            st.dataframe(df_prev_sc, width="stretch", hide_index=True)
             
             if st.button("🗑️ Limpar Lista", type="secondary"):
                 st.session_state.itens_nova_sc = []; st.rerun()
@@ -1311,7 +1311,7 @@ elif pagina == "🧾 Compras (SC)":
             num_sc = c1.text_input("Número da SC *", placeholder="Ex: SC-2026-001")
             dt_ab  = c2.date_input("Data de Abertura *", value=date.today())
             obs_sc = st.text_area("Observações Gerais", height=60)
-            criar_b = st.form_submit_button("✅ Criar S.C.", use_container_width=True, type="primary")
+            criar_b = st.form_submit_button("✅ Criar S.C.", width="stretch", type="primary")
             
         if criar_b:
             if not num_sc.strip():
@@ -1503,7 +1503,7 @@ elif pagina == "🧾 Compras (SC)":
                             "observacao_item": item_sc.get("observacao_item") or "",
                         })
                         
-                    salv_sc = st.form_submit_button("💾 Salvar Atualizações", use_container_width=True, type="primary")
+                    salv_sc = st.form_submit_button("💾 Salvar Atualizações", width="stretch", type="primary")
                     
                 if salv_sc:
                     data_aprovacao_str = str(dt_aprovacao) if dt_aprovacao else None
