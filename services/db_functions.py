@@ -381,18 +381,17 @@ sc_item_id=None, requisicao_id=None, data_hora=None):
         conn.close(); return False,"Item não encontrado."
     
     estoque = r["estoque_atual"]
-    
-    # PERMITIR QUANTIDADE 0 PARA TRANSFERÊNCIAS/INVENTÁRIO SEM ALTERAÇÃO DE SALDO
-    # Se for saída e a quantidade for maior que o estoque, bloqueia. 
-    # Se for 0, passa direto.
-    if tipo == "saida" and quantidade > estoque:
+
+    # ✅ AJUSTE: Permitir quantidade 0 para registros de auditoria/conferência
+    # Só bloqueia saída se a quantidade for MAIOR que o estoque e maior que 0
+    if tipo == "saida" and quantidade > 0 and quantidade > estoque:
         conn.close(); return False,f"Estoque insuficiente. Disponível: {estoque}"
 
-    novo_saldo = estoque + quantidade if tipo in ("entrada", "devolucao") else estoque - quantidade
-    
-    # Se a quantidade for 0, o saldo não muda, mas registramos o evento
+    # Calcula novo saldo
     if quantidade == 0:
-        novo_saldo = estoque
+        novo_saldo = estoque # Saldo não muda
+    else:
+        novo_saldo = estoque + quantidade if tipo in ("entrada", "devolucao") else estoque - quantidade
 
     agora = data_hora or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -404,12 +403,13 @@ sc_item_id=None, requisicao_id=None, data_hora=None):
     """,(item_id,tipo,quantidade,novo_saldo,agora,
         centro_custo,setor,solicitante,emitente,observacao,sc_item_id,requisicao_id))
 
-    # Atualiza o estoque apenas se houver mudança real de quantidade
+    # Atualiza o estoque APENAS se houver mudança real de quantidade
     if quantidade != 0:
         conn.execute(
             "UPDATE inventario SET estoque_atual=?,data_atualizacao=? WHERE id=?",
             (novo_saldo,agora,item_id)
         )
+        # Recálculos de consumo/ruptura só fazem sentido se houve movimento físico
         if tipo in ("saida", "devolucao"):
             _recalcular_consumo(conn,item_id)
         _recalcular_ruptura_by_id(conn,item_id)
@@ -1369,29 +1369,51 @@ def exportar_inventario_df():
     if not itens:
         return pd.DataFrame()
     
-    # v2.0: Incluir colunas da nova hierarquia
+    # v2.0.2: Atualização da estrutura de exportação
     colunas = [
         "part_number", "nome_item", "descricao", "unidade", "importancia",
         "tipo_material", "local_armazenagem", 
         "estoque_atual", "estoque_minimo", "estoque_seguranca",
-        "estoque_em_transito",  # NOVO: Saldo pendente em SCs
+        "estoque_em_transito",
         "consumo_medio_diario", "lead_time_dias", "previsao_ruptura_dias",
-        "sc_numero", "status_material", "status_sc",  # NOVO: Separação de status
-        "data_inventario"
+        "sc_numero", "status_material", "status_sc",
+        "data_inventario",
+        "caixa_identificacao" # Campo reutilizado para Obs Operacional
     ]
-    
+
     df = pd.DataFrame(itens)[[c for c in colunas if c in pd.DataFrame(itens).columns]]
+
+    # Renomear para exportação clara e operacional
+    # Mapeamento seguro: se a coluna existir, renomeia.
+    rename_map = {
+        "part_number": "PN",
+        "nome_item": "Nome",
+        "descricao": "Descrição",
+        "unidade": "UN",
+        "importancia": "Importância",
+        "tipo_material": "Tipo",
+        "local_armazenagem": "Local",
+        "estoque_atual": "Estoque Atual",
+        "estoque_minimo": "Mínimo",
+        "estoque_seguranca": "Segurança",
+        "estoque_em_transito": "Em Trânsito",
+        "consumo_medio_diario": "Consumo/Dia",
+        "lead_time_dias": "Lead Time(d)",
+        "previsao_ruptura_dias": "Ruptura(d)",
+        "sc_numero": "Última SC",
+        "status_material": "Status Material",
+        "status_sc": "Status SC",
+        "data_inventario": "Inventariado",
+        "caixa_identificacao": "Obs. Inventário" # NOVO NOME NA EXPORTAÇÃO
+    }
+
+    # Filtra apenas colunas que existem no DF antes de renomear
+    cols_presentes = [c for c in colunas if c in df.columns]
+    df = df[cols_presentes]
     
-    # Renomear para exportação
-    df.columns = [
-        "PN", "Nome", "Descrição", "UN", "Importância", "Tipo", "Local",
-        "Estoque Atual", "Mínimo", "Segurança",
-        "Em Trânsito",  # NOVO
-        "Consumo/Dia", "Lead Time(d)", "Ruptura(d)",
-        "Última SC", "Status Material", "Status SC",  # NOVO
-        "Inventariado"
-    ][:len(df.columns)]
-    
+    # Aplica rename apenas nas colunas presentes
+    df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
+
     return df
 
 def exportar_movimentacoes_df(item_id=None, tipos_selecionados=None):

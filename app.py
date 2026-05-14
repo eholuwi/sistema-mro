@@ -336,7 +336,6 @@ if pagina == "📊 Dashboard":
 elif pagina == "📋 Inventário":
     st.title("📋 Inventário MRO")
     itens = listar_inventario()
-    
     if not itens:
         st.info("Nenhum item cadastrado. Vá em **➕ Gerenciar Itens** para começar.")
         st.stop()
@@ -346,9 +345,7 @@ elif pagina == "📋 Inventário":
         with st.expander("🔍 Filtros Avançados", expanded=False):
             c1, c2, c3, c4 = st.columns(4)
             
-            # Carrega locais do banco para o filtro
             locais_db = listar_valores("local")
-            # Fallback se estiver vazio
             if not locais_db:
                 locais_db = [f"ARM-{i:02d}" for i in range(1, 6)] + [f"MRO-{i:02d}" for i in range(1, 6)]
                 
@@ -360,27 +357,24 @@ elif pagina == "📋 Inventário":
             c5, c6 = st.columns(2)
             f_busca  = c5.text_input("🔎 Buscar PN ou Nome")
             f_inv    = c6.selectbox("Inventariado", ["Todos", "✅ Inventariado", "Não inventariado"])
-            
+        
 
         df = pd.DataFrame(itens)
         
-        # Aplicação dos Filtros (ATENÇÃO: Nomes das colunas SEM ESPAÇOS)
+        # Aplicação dos Filtros
         if f_loc != "Todas":
             if "local_armazenagem" in df.columns:
                 df = df[df["local_armazenagem"] == f_loc]
-            else:
-                st.error("Coluna 'local_armazenagem' não encontrada nos dados.")
-                
+            
         if f_imp:    
             df = df[df["importancia"].isin(f_imp)]
         if f_tipo:   
             df = df[df["tipo_material"].isin(f_tipo)]
         if f_status: 
-            # Usa status_material pois status_display pode não existir dependendo da versão
             col_status = "status_material" if "status_material" in df.columns else "status_display"
             if col_status in df.columns:
                 df = df[df[col_status].isin(f_status)]
-                
+            
         if f_inv == "✅ Inventariado":    
             df = df[df["data_inventario"].fillna("").str.strip().str.len() > 0]
         if f_inv == "Não inventariado": 
@@ -397,18 +391,19 @@ elif pagina == "📋 Inventário":
     with st.container(border=True):
         cols_show = [
             "part_number", "nome_item", "importancia", "unidade", "tipo_material",
-            "local_armazenagem", "caixa_identificacao", "estoque_minimo", "estoque_atual",
+            "local_armazenagem", 
+            "estoque_minimo", "estoque_atual",
             "status_material", "previsao_ruptura_dias", "data_inventario",
-            "lead_time_dias", "sc_numero", "status_sc", "sc_po"
+            "lead_time_dias", "sc_numero", "status_sc", "sc_po",
+            "caixa_identificacao" # Adicionado para visualização rápida da obs
         ]
-        # Filtra apenas colunas que existem no DataFrame
         cols_show = [c for c in cols_show if c in df.columns]
         
         df_exib = df[cols_show].copy()
         df_exib["data_inventario"] = df_exib["data_inventario"].apply(lambda v: fmt(v) if v else "—")
 
         num_linhas = len(df_exib)
-        altura_tabela = min(40 + (num_linhas * 35), 600) if num_linhas > 0 else 100
+        altura_tabela = min(40 + (num_linhas * 35), 320) if num_linhas > 0 else 100
 
         st.dataframe(
             df_exib,
@@ -421,7 +416,6 @@ elif pagina == "📋 Inventário":
                 "unidade": st.column_config.TextColumn("UN", width="small"),
                 "tipo_material": st.column_config.TextColumn("TIPO", width="small"),
                 "local_armazenagem": st.column_config.TextColumn("Localidade", width="small"),
-                "caixa_identificacao": st.column_config.TextColumn("CAIXA", width="small"),
                 "estoque_minimo": st.column_config.NumberColumn("Mínimo", format="%d"),
                 "estoque_atual": st.column_config.NumberColumn("Estoque", format="%d"),
                 "status_material": st.column_config.TextColumn("Status Material", width="small"),
@@ -431,6 +425,7 @@ elif pagina == "📋 Inventário":
                 "sc_numero": st.column_config.TextColumn("Nº SC", width="small"),
                 "status_sc": st.column_config.TextColumn("Status SC", width="small"),
                 "sc_po": st.column_config.TextColumn("P.O.", width="small"),
+                "caixa_identificacao": st.column_config.TextColumn("Obs. Inventário", width="medium"), # Nova coluna na tabela
             }
         )
 
@@ -444,33 +439,15 @@ elif pagina == "📋 Inventário":
 
             # Carrega locais disponíveis
             locais_disp = listar_valores("local") or ["Geral"]
-            # Garante que o local atual esteja na lista se não estiver nas configurações
             if item_inv.get("local_armazenagem") and item_inv.get("local_armazenagem") not in locais_disp: 
                 locais_disp.insert(0, item_inv["local_armazenagem"])
             
-            # Carrega caixas disponíveis (usando a mesma lista de locais ou uma específica se houver)
-            # Aqui usamos listar_valores("local") como base, mas você pode criar um tipo 'caixa' se preferir
-            caixas_disp = listar_valores("local") or ["Geral"]
+            c_q, c_l = st.columns(2) 
             
-            # ✅ ADICIONA OPÇÃO VAZIA NO INÍCIO DA LISTA DE CAIXAS
-            opcoes_caixas = [" "] + caixas_disp
-            
-            # Determina o índice inicial da Caixa
-            caixa_atual = item_inv.get("caixa_identificacao")
-            idx_caixa_inicial = 0 # Padrão é "Vazio"
-            
-            if caixa_atual and caixa_atual in caixas_disp:
-                # Se tem caixa e ela está na lista, seleciona ela (+1 por causa do "Vazio" no início)
-                idx_caixa_inicial = caixas_disp.index(caixa_atual) + 1
-            elif caixa_atual:
-                # Se tem caixa mas não está na lista padrão, adiciona temporariamente para seleção
-                opcoes_caixas.insert(1, caixa_atual)
-                idx_caixa_inicial = 1
-
-            c_q, c_l, c_c = st.columns(3)
+            # Inicializa com o estoque atual. Se for 0, começa em 0.
             nova_qtd = c_q.number_input("Quantidade Real", min_value=0.0, step=1.0, value=float(item_inv['estoque_atual']))
             
-            # Selectbox de Local (Obrigatório ter um local, mesmo que seja "Geral")
+            # Selectbox de Local (Obrigatório)
             local_atual = item_inv.get("local_armazenagem")
             idx_local_inicial = 0
             if local_atual and local_atual in locais_disp:
@@ -478,45 +455,65 @@ elif pagina == "📋 Inventário":
                 
             novo_local = c_l.selectbox("Local (1ª Locação)", options=locais_disp, index=idx_local_inicial)
             
-            # ✅ Selectbox de Caixa (Opcional, com opção Vazia)
-            nova_caixa_raw = c_c.selectbox("Caixa/ID (2ª Locação - Opcional)", options=opcoes_caixas, index=idx_caixa_inicial)
-            
-            # Converte "— Vazio —" para string vazia ""
-            nova_caixa = "" if nova_caixa_raw == "— Vazio —" else nova_caixa_raw
+            # ✅ NOVO CAMPO: Observação Operacional (Texto Livre)
+            obs_inventario = st.text_input(
+                "📝 Observação de Inventário", 
+                value=item_inv.get("caixa_identificacao") or "", 
+                placeholder="Ex: material danificado, sem etiqueta, divergência física, caixa avariada..."
+            )
 
             col_btn1, col_btn2, _ = st.columns([1, 1, 2])
             
             if col_btn1.button("✅ Confirmar Contagem", type="primary", width="stretch"):
                 delta = nova_qtd - item_inv['estoque_atual']
                 
-                # Verifica mudança de local ou caixa
+                # Verifica mudanças operacionais
                 mudou_local = (novo_local != item_inv.get("local_armazenagem"))
-                mudou_caixa = (nova_caixa != item_inv.get("caixa_identificacao"))
+                mudou_obs = (obs_inventario.strip() != (item_inv.get("caixa_identificacao") or "").strip())
+                mudou_qtd = (delta != 0)
 
-                if delta != 0 or mudou_local or mudou_caixa:
-                    tipo_aj = "entrada" if delta >= 0 else "saida"
-                    qtd_reg = abs(delta) if delta != 0 else 0.0
-                    
-                    obs_partes = []
-                    if mudou_local: 
-                        obs_partes.append(f"Local: {item_inv.get('local_armazenagem','N/A')} → {novo_local}")
-                    if mudou_caixa: 
-                        obs_partes.append(f"Caixa: {item_inv.get('caixa_identificacao','N/A') or 'Vazio'} → {nova_caixa or 'Vazio'}")
-                    
-                    obs_final = f"Ajuste Físico {' | '.join(obs_partes)} | Qtd: {item_inv['estoque_atual']} → {nova_qtd}"
-
-                    # Registra movimentação apenas se houve mudança de quantidade
-                    if qtd_reg > 0:
-                        registrar_movimentacao(
-                            item_id=item_inv["id"], tipo=tipo_aj, quantidade=qtd_reg,
-                            centro_custo="INVENTÁRIO", solicitante="Inventário", emitente="Inventário",
-                            observacao=obs_final
-                        )
-
-                    # Atualiza localização e marca como inventariado
-                    ok_loc, msg_loc = atualizar_localizacao_e_inventariar(item_inv["id"], novo_local, nova_caixa)
+                # Se nada mudou, avisa o usuário
+                if not mudou_qtd and not mudou_local and not mudou_obs:
+                    st.warning("⚠️ Nenhuma alteração detectada. O item já está com esses dados.")
+                else:
+                    # 1. Atualiza sempre os metadados (Local e Obs) e marca como inventariado
+                    ok_loc, msg_loc = atualizar_localizacao_e_inventariar(item_inv["id"], novo_local, obs_inventario)
                     
                     if ok_loc:
+                        # 2. Lógica de Movimentação (Histórico)
+                        # Precisamos registrar no histórico se houve mudança de QTD OU de Metadados (Local/Obs)
+                        
+                        obs_partes = []
+                        if mudou_local: 
+                            obs_partes.append(f"Local: {item_inv.get('local_armazenagem','N/A')} → {novo_local}")
+                        if mudou_obs: 
+                            obs_partes.append(f"Obs: '{item_inv.get('caixa_identificacao','')}' → '{obs_inventario}'")
+                        
+                        # Se houve mudança de quantidade, registramos entrada/saída normal
+                        if mudou_qtd:
+                            tipo_aj = "entrada" if delta > 0 else "saida"
+                            qtd_reg = abs(delta)
+                            
+                            obs_final = f"Ajuste Físico {' | '.join(obs_partes)} | Qtd: {item_inv['estoque_atual']} → {nova_qtd}"
+                            
+                            registrar_movimentacao(
+                                item_id=item_inv["id"], tipo=tipo_aj, quantidade=qtd_reg,
+                                centro_custo="INVENTÁRIO", solicitante="Inventário", emitente="Inventário",
+                                observacao=obs_final
+                            )
+                        
+                        # ✅ CORREÇÃO: Se NÃO mudou quantidade, mas mudou Local/Obs, registramos uma "Conferência"
+                        # Usamos tipo 'entrada' com qtd 0 apenas para gerar o log histórico, 
+                        # pois a tabela exige um tipo válido.
+                        elif mudou_local or mudou_obs:
+                            obs_final = f"Conferência de Inventário (Sem alteração de Qtd) {' | '.join(obs_partes)}"
+                            
+                            registrar_movimentacao(
+                                item_id=item_inv["id"], tipo="entrada", quantidade=0.0, # Qtd 0 para não alterar saldo
+                                centro_custo="INVENTÁRIO", solicitante="Inventário", emitente="Inventário",
+                                observacao=obs_final
+                            )
+
                         st.success(f"✅ Contagem registrada! Novo saldo: `{nova_qtd}`")
                         time.sleep(1.2)
                         st.rerun()
@@ -748,8 +745,11 @@ elif pagina == "🔄 Movimentações":
                     if val == 'devolucao': return 'color: #3498db; font-weight: bold;'
                     return ''
 
+                # Opcional: Adicionar uma coluna calculada para identificar "Conferência"
+                df_exib['Tipo Display'] = df_exib.apply(lambda x: '📋 Conferência' if x['Qtd'] == 0 else x['Tipo'], axis=1)
+
                 st.dataframe(
-                    df_exib.style.map(colorir_tipo, subset=['Tipo']),
+                    df_exib.style.map(colorir_tipo, subset=['Tipo']), # Mantém a cor original do tipo banco
                     width="stretch",
                     hide_index=True,
                     height=600,
