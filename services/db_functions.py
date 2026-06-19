@@ -237,7 +237,9 @@ def listar_inventario():
         
         # Compatibilidade com código legado
         item["status_display"] = item["status_material"]
-        
+
+        item["estoque_maximo"] = (item.get("estoque_minimo") or 0) * 2
+
         resultado.append(item)
 
     conn.close()
@@ -1373,7 +1375,7 @@ def exportar_inventario_df():
     colunas = [
         "part_number", "nome_item", "descricao", "unidade", "importancia",
         "tipo_material", "local_armazenagem", 
-        "estoque_atual", "estoque_minimo", "estoque_seguranca",
+        "estoque_atual", "estoque_minimo", "estoque_maximo", "estoque_seguranca",
         "estoque_em_transito",
         "consumo_medio_diario", "lead_time_dias", "previsao_ruptura_dias",
         "sc_numero", "status_material", "status_sc",
@@ -1395,6 +1397,7 @@ def exportar_inventario_df():
         "local_armazenagem": "Local",
         "estoque_atual": "Estoque Atual",
         "estoque_minimo": "Mínimo",
+        "estoque_maximo": "Máximo",
         "estoque_seguranca": "Segurança",
         "estoque_em_transito": "Em Trânsito",
         "consumo_medio_diario": "Consumo/Dia",

@@ -392,7 +392,7 @@ elif pagina == "📋 Inventário":
         cols_show = [
             "part_number", "nome_item", "importancia", "unidade", "tipo_material",
             "local_armazenagem", 
-            "estoque_minimo", "estoque_atual",
+            "estoque_minimo", "estoque_maximo", "estoque_atual",
             "status_material", "previsao_ruptura_dias", "data_inventario",
             "lead_time_dias", "sc_numero", "status_sc", "sc_po",
             "caixa_identificacao" # Adicionado para visualização rápida da obs
@@ -417,6 +417,7 @@ elif pagina == "📋 Inventário":
                 "tipo_material": st.column_config.TextColumn("TIPO", width="small"),
                 "local_armazenagem": st.column_config.TextColumn("Localidade", width="small"),
                 "estoque_minimo": st.column_config.NumberColumn("Mínimo", format="%d"),
+                "estoque_maximo": st.column_config.NumberColumn("Máximo", format="%d"),
                 "estoque_atual": st.column_config.NumberColumn("Estoque", format="%d"),
                 "status_material": st.column_config.TextColumn("Status Material", width="small"),
                 "previsao_ruptura_dias": st.column_config.NumberColumn("Dias Ruptura", format="%d"),
