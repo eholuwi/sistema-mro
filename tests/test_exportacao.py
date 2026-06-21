@@ -1,9 +1,8 @@
 """Fase 5 (T-01/T-02): cobertura das exportacoes para DataFrame.
 
-Cobre banco vazio (DataFrame vazio sem excecao), presenca das colunas renomeadas
-e o filtro por tipo que casa. O caso de filtro que NAO casa nenhum registro tem
-um bug latente conhecido (ValueError ao reatribuir colunas a DataFrame vazio) e
-nao e exercitado aqui -- registrado para correcao controlada futura.
+Cobre banco vazio (DataFrame vazio sem excecao), presenca das colunas renomeadas,
+o filtro por tipo que casa e o filtro que NAO casa nenhum registro (B-01,
+corrigido na Fase 5.1: deve retornar DataFrame vazio, nao lancar ValueError).
 """
 from services import db_functions as F
 
@@ -42,3 +41,12 @@ def test_exportar_movimentacoes_filtro_que_casa(db, make_item):
     F.registrar_movimentacao(item_id, "entrada", 50, CC, "Joao", "Joao")
     df = F.exportar_movimentacoes_df(item_id=item_id, tipos_selecionados=["entrada"])
     assert len(df) == 1
+
+
+def test_exportar_movimentacoes_filtro_sem_match_retorna_vazio(db, make_item):
+    # B-01 (Fase 5.1): filtro de tipo que nao casa nenhum registro deve
+    # retornar DataFrame vazio, nao lancar ValueError.
+    item_id = make_item("PN-EXP4", estoque=100)
+    F.registrar_movimentacao(item_id, "entrada", 50, CC, "Joao", "Joao")
+    df = F.exportar_movimentacoes_df(item_id=item_id, tipos_selecionados=["devolucao"])
+    assert df.empty

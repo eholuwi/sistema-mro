@@ -1208,8 +1208,13 @@ def exportar_movimentacoes_df(item_id=None, tipos_selecionados=None):
     if tipos_selecionados:
         movs = [m for m in movs if m['tipo'] in tipos_selecionados]
         
+    # B-01: se o filtro de tipo zerou o resultado, retorna DataFrame vazio
+    # (evita ValueError ao reatribuir colunas a um DataFrame sem linhas).
+    if not movs:
+        return pd.DataFrame()
+
     df = pd.DataFrame(movs)
-    
+
     # Colunas desejadas para o Excel
     colunas = ["data_hora", "part_number", "nome_item", "tipo", "quantidade", "saldo_apos", "emitente", "observacao"]
     
