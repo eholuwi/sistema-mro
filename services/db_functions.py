@@ -1,7 +1,14 @@
 import sqlite3, json, re, unicodedata
+import logging
 from datetime import datetime
 from database import get_connection
+from services.constants import (
+    MARGEM_ATENCAO, FATOR_ESTOQUE_MAXIMO, FATOR_ESTOQUE_SEGURANCA,
+    JANELA_CONSUMO_DIAS, PREVISAO_RUPTURA_SEM_RISCO,
+)
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTES E HELPERS PARA IMPORTAÇÃO PROTHEUS
@@ -14,84 +21,6 @@ SOLICITANTES_MRO = {
 }
 
 PALAVRAS_CRITICAS = ("parada", "critico", "critica", "urgente", "linha")
-
-def _normalizar_txt(valor):
-    if valor is None:
-        return ""
-    texto = str(valor).strip()
-    texto = unicodedata.normalize("NFKD", texto)
-    texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
-    return re.sub(r"\s+", " ", texto).lower()
-
-def _normalizar_coluna(coluna):
-    return _normalizar_txt(coluna).replace(".", " ").replace("/", " ").strip()
-
-def _coluna(df, nomes):
-    mapa = {_normalizar_coluna(c): c for c in df.columns}
-    for nome in nomes:
-        chave = _normalizar_coluna(nome)
-        if chave in mapa:
-            return mapa[chave]
-    return None
-
-def _valor(row, coluna, padrao=None):
-    if not coluna:
-        return padrao
-    valor = row.get(coluna, padrao)
-    try:
-        if pd.isna(valor):
-            return padrao
-    except Exception:
-        pass
-    return valor
-
-def _to_float(valor):
-    if valor is None:
-        return 0.0
-    try:
-        if pd.isna(valor):
-            return 0.0
-    except Exception:
-        pass
-    if isinstance(valor, (int, float)):
-        return float(valor)
-    texto = str(valor).strip()
-    if not texto:
-        return 0.0
-    texto = texto.replace(".", "").replace(",", ".") if "," in texto else texto
-    try:
-        return float(texto)
-    except ValueError:
-        return 0.0
-
-def _to_date_str(valor):
-    if valor is None:
-        return None
-    try:
-        dt = pd.to_datetime(valor, errors="coerce", dayfirst=True)
-        if pd.isna(dt):
-            return None
-        return dt.strftime("%Y-%m-%d")
-    except Exception:
-        return None
-
-def _status_sc_importado(status_protheus, saldo_residual):
-    status_norm = _normalizar_txt(status_protheus)
-    if "rejeit" in status_norm or "cancel" in status_norm:
-        return "Cancelado"
-    if saldo_residual <= 0:
-        return "Recebido"
-    if "pedido" in status_norm:
-        return "Pedido Emitido"
-    if "cot" in status_norm:
-        return "Em Cotação"
-    if "aprov" in status_norm or "rascunho" in status_norm:
-        return "Aguardando Aprovação"
-    return "Aguardando Aprovação"
-
-def _tem_prioridade_critica(justificativa):
-    texto = _normalizar_txt(justificativa)
-    return any(palavra in texto for palavra in PALAVRAS_CRITICAS)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -123,7 +52,7 @@ def calcular_status_inventario(estoque_atual, estoque_minimo, estoque_em_transit
         return "🔴 COMPRAR"
     
     # ZONA DE ATENÇÃO: Acima do mínimo, mas dentro de 20% de margem
-    limite_atencao = estoque_minimo * 1.2
+    limite_atencao = estoque_minimo * MARGEM_ATENCAO
     if estoque_atual <= limite_atencao:
         return "🟡 ATENÇÃO"
     
@@ -238,7 +167,7 @@ def listar_inventario():
         # Compatibilidade com código legado
         item["status_display"] = item["status_material"]
 
-        item["estoque_maximo"] = (item.get("estoque_minimo") or 0) * 2
+        item["estoque_maximo"] = (item.get("estoque_minimo") or 0) * FATOR_ESTOQUE_MAXIMO
 
         resultado.append(item)
 
@@ -279,21 +208,12 @@ def salvar_item(part_number, nome_item, descricao, unidade, importancia,
                  tipo_material,setor,local,caixa,estoque_atual,estoque_minimo,lead_time))
         conn.commit()
         _recalcular_ruptura_by_pn(conn, part_number)
+        conn.commit()  # F4-11: persiste a ruptura (by_pn nao comita mais com conn externa)
         return True,"Item salvo com sucesso."
     except sqlite3.IntegrityError:
         return False,f"Part Number '{part_number}' já existe."
     finally:
         conn.close()
-
-def marcar_inventariado(item_id):
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn = get_connection()
-    conn.execute(
-        "UPDATE inventario SET data_inventario=?,data_atualizacao=? WHERE id=?",
-        (agora, agora, item_id)
-    )
-    conn.commit(); conn.close()
-    return True, agora
 
 def desmarcar_inventariado(item_id):
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -306,18 +226,30 @@ def desmarcar_inventariado(item_id):
     return True, "Inventário removido."
 
 def _recalcular_ruptura_by_pn(conn, part_number):
-    r = conn.execute(
-        "SELECT id,estoque_atual,consumo_medio_diario,lead_time_dias FROM inventario WHERE part_number=?",
-        (part_number,)
-    ).fetchone()
-    if not r: return
-    consumo = r["consumo_medio_diario"] or 0
-    ruptura = (r["estoque_atual"]/consumo) if consumo > 0 else 999
-    seguranca = consumo*(r["lead_time_dias"] or 0)*1.5
-    conn.execute("""
-        UPDATE inventario SET previsao_ruptura_dias=?,estoque_seguranca=?,data_atualizacao=? WHERE id=?
-    """,(ruptura,seguranca,datetime.now().strftime("%Y-%m-%d %H:%M:%S"),r["id"]))
-    conn.commit()
+    # F4-11: mesmo padrao de _recalcular_ruptura_by_id/_recalcular_consumo --
+    # so abre/comita/fecha se a conexao for criada aqui; respeita transacao externa.
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    try:
+        r = conn.execute(
+            "SELECT id,estoque_atual,consumo_medio_diario,lead_time_dias FROM inventario WHERE part_number=?",
+            (part_number,)
+        ).fetchone()
+        if not r:
+            return
+        consumo = r["consumo_medio_diario"] or 0
+        ruptura = (r["estoque_atual"]/consumo) if consumo > 0 else PREVISAO_RUPTURA_SEM_RISCO
+        seguranca = consumo*(r["lead_time_dias"] or 0)*FATOR_ESTOQUE_SEGURANCA
+        conn.execute("""
+            UPDATE inventario SET previsao_ruptura_dias=?,estoque_seguranca=?,data_atualizacao=? WHERE id=?
+        """,(ruptura,seguranca,datetime.now().strftime("%Y-%m-%d %H:%M:%S"),r["id"]))
+        if close_conn:
+            conn.commit()
+    finally:
+        if close_conn:
+            conn.close()
 
 def _recalcular_ruptura_by_id(conn, item_id):
     """
@@ -344,29 +276,6 @@ def _recalcular_ruptura_by_id(conn, item_id):
     finally:
         if close_conn:
             conn.close()
-
-def atualizar_parametros_calculo(item_id, consumo_mensal, lead_time):
-    conn = get_connection()
-    consumo_diario = consumo_mensal/30 if consumo_mensal > 0 else 0
-    seguranca = consumo_diario*lead_time*1.5
-    estoque_minimo = (consumo_diario*lead_time)+seguranca
-    r = conn.execute("SELECT estoque_atual FROM inventario WHERE id=?",(item_id,)).fetchone()
-    estoque_atual = r["estoque_atual"] if r else 0
-    ruptura = (estoque_atual/consumo_diario) if consumo_diario > 0 else 999
-    conn.execute("""
-        UPDATE inventario SET
-            consumo_medio_diario=?,lead_time_dias=?,estoque_seguranca=?,
-            estoque_minimo=?,previsao_ruptura_dias=?,data_atualizacao=?
-        WHERE id=?
-    """,(consumo_diario,lead_time,seguranca,estoque_minimo,
-         ruptura,datetime.now().strftime("%Y-%m-%d %H:%M:%S"),item_id))
-    conn.commit(); conn.close()
-    return True,{
-        "consumo_diario":round(consumo_diario,4),
-        "estoque_seguranca":round(seguranca,2),
-        "estoque_minimo":round(estoque_minimo,2),
-        "previsao_ruptura_dias":round(ruptura,1),
-    }
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MOVIMENTAÇÕES
@@ -432,12 +341,12 @@ def _recalcular_consumo(conn, item_id):
         close_conn = True
 
     try:
-        r = conn.execute("""
+        r = conn.execute(f"""
             SELECT COALESCE(SUM(quantidade),0) AS total FROM movimentacoes
-            WHERE item_id=? AND tipo='saida' AND data_hora >= datetime('now','-30 days')
+            WHERE item_id=? AND tipo='saida' AND data_hora >= datetime('now','-{JANELA_CONSUMO_DIAS} days')
         """, (item_id,)).fetchone()
-        
-        consumo_diario = (r["total"]/30) if r else 0
+
+        consumo_diario = (r["total"]/JANELA_CONSUMO_DIAS) if r else 0
         conn.execute("UPDATE inventario SET consumo_medio_diario=? WHERE id=?", (consumo_diario, item_id))
         
         if close_conn:
@@ -500,20 +409,21 @@ def criar_requisicao(setor, emitente, centro_custo, autorizador_tipo, autorizado
         # 2. Itens e Baixa Imediata (Manual para evitar lock)
         for it in itens:
             qtd_sol = float(it.get("quantidade_solicitada", 0))
+            qtd_ate = float(it.get("quantidade_atendida", qtd_sol))
             if qtd_sol <= 0: continue
-            
-            # Registra item da req
+
+            # Registra item da req (solicitada e atendida persistidas separadamente)
             conn.execute("INSERT INTO itens_requisicao (requisicao_id,item_id,quantidade_solicitada,quantidade_atendida) VALUES (?,?,?,?)",
-                         (req_id, it["item_id"], qtd_sol, qtd_sol))
+                         (req_id, it["item_id"], qtd_sol, qtd_ate))
             
             # Baixa física manual na mesma conexão
             r_est = conn.execute("SELECT estoque_atual FROM inventario WHERE id=?", (it["item_id"],)).fetchone()
-            if not r_est or r_est["estoque_atual"] < qtd_sol:
+            if not r_est or r_est["estoque_atual"] < qtd_ate:
                 raise Exception(f"Estoque insuficiente para {it.get('part_number', 'Item')}.")
-            
-            novo_saldo = r_est["estoque_atual"] - qtd_sol
+
+            novo_saldo = r_est["estoque_atual"] - qtd_ate
             conn.execute("INSERT INTO movimentacoes (item_id,tipo,quantidade,saldo_apos,data_hora,centro_custo,setor,solicitante,emitente,observacao,requisicao_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                         (it["item_id"], "saida", qtd_sol, novo_saldo, agora, centro_custo, setor, emitente, emitente, f"Req {num}", req_id))
+                         (it["item_id"], "saida", qtd_ate, novo_saldo, agora, centro_custo, setor, emitente, emitente, f"Req {num}", req_id))
             conn.execute("UPDATE inventario SET estoque_atual=?, data_atualizacao=? WHERE id=?", (novo_saldo, agora, it["item_id"]))
             
             # Recalcula métricas na mesma conexão
@@ -757,7 +667,6 @@ def _valor(row, coluna, padrao=None):
         return padrao
     valor = row.get(coluna, padrao)
     try:
-        import pandas as pd
         if pd.isna(valor):
             return padrao
     except Exception:
@@ -768,7 +677,6 @@ def _to_float(valor):
     if valor is None:
         return 0.0
     try:
-        import pandas as pd
         if pd.isna(valor):
             return 0.0
     except Exception:
@@ -788,7 +696,6 @@ def _to_date_str(valor):
     if valor is None:
         return None
     try:
-        import pandas as pd
         if pd.isna(valor):
             return None
         dt = pd.to_datetime(valor, errors="coerce", dayfirst=True)
@@ -849,7 +756,6 @@ def _garantir_item_importado(conn, part_number, nome_item, descricao, prioridade
     return cur.lastrowid
 
 def importar_solicitacoes_protheus(arquivo_excel, nome_arquivo="Solicitacoes.xlsx"):
-    import pandas as pd
     df = pd.read_excel(arquivo_excel)
     if df.empty:
         return False, {"erro": "A planilha esta vazia."}
@@ -1124,62 +1030,106 @@ def listar_itens_sc(sc_id):
 def registrar_recebimento_sc(sc_id, item_sc_id, qtd_recebida,
 centro_custo, solicitante, emitente,
 fornecedor, data_recebimento, obs_nf=""):
+    # DT-2: recebimento atomico. Toda a operacao roda em UMA conexao/transacao,
+    # com um unico commit ao final. Qualquer falha faz rollback total (nenhum
+    # efeito parcial em itens_sc, solicitacoes_compra, movimentacoes ou inventario).
     conn = get_connection()
-    sc_item = conn.execute("SELECT * FROM itens_sc WHERE id=?",(item_sc_id,)).fetchone()
-    if not sc_item:
-        conn.close(); return False, "Item da SC nao encontrado."
+    try:
+        # (1) Validacao (somente leitura; retornos antecipados nao persistem nada)
+        sc_item = conn.execute("SELECT * FROM itens_sc WHERE id=?",(item_sc_id,)).fetchone()
+        if not sc_item:
+            return False, "Item da SC nao encontrado."
 
-    negociada = sc_item["quantidade_pedido"] or sc_item["quantidade_solicitada"] or 0
-    pendente = sc_item["saldo_residual"]
-    if pendente is None or pendente <= 0:
-        pendente = max(negociada - (sc_item["quantidade_recebida"] or 0), 0)
-    if qtd_recebida <= 0:
-        conn.close(); return False, "Quantidade recebida deve ser maior que zero."
-    if qtd_recebida > pendente:
-        conn.close(); return False, f"Excede o pendente ({pendente})."
+        negociada = sc_item["quantidade_pedido"] or sc_item["quantidade_solicitada"] or 0
+        pendente = sc_item["saldo_residual"]
+        if pendente is None or pendente <= 0:
+            pendente = max(negociada - (sc_item["quantidade_recebida"] or 0), 0)
+        if qtd_recebida <= 0:
+            return False, "Quantidade recebida deve ser maior que zero."
+        if qtd_recebida > pendente:
+            return False, f"Excede o pendente ({pendente})."
 
-    nova_rec = (sc_item["quantidade_recebida"] or 0) + qtd_recebida
-    novo_saldo = max(negociada - nova_rec, 0)
-    status_item = "Recebido" if novo_saldo <= 0 else "Parcial"
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    data_mov = f"{data_recebimento} {datetime.now().strftime('%H:%M:%S')}" if data_recebimento and len(str(data_recebimento)) == 10 else (data_recebimento or agora)
-    nf = (obs_nf or "").strip()
+        item_id = sc_item["item_id"]
+        nova_rec = (sc_item["quantidade_recebida"] or 0) + qtd_recebida
+        novo_saldo = max(negociada - nova_rec, 0)
+        status_item = "Recebido" if novo_saldo <= 0 else "Parcial"
+        agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        data_mov = f"{data_recebimento} {datetime.now().strftime('%H:%M:%S')}" if data_recebimento and len(str(data_recebimento)) == 10 else (data_recebimento or agora)
+        nf = (obs_nf or "").strip()
 
-    conn.execute("""
-        UPDATE itens_sc SET
-            quantidade_recebida=?, saldo_residual=?, status_item=?,
-            documento_nf=COALESCE(NULLIF(?, ''), documento_nf),
-            quantidade_nfe=?, fornecedor_item=COALESCE(NULLIF(?, ''), fornecedor_item),
-            ultima_importacao=?
-        WHERE id=?
-    """,(nova_rec, novo_saldo, status_item, nf, qtd_recebida, fornecedor or "", agora, item_sc_id))
-    conn.execute("""
-        UPDATE solicitacoes_compra
-        SET fornecedor=COALESCE(NULLIF(?, ''), fornecedor)
-        WHERE id=?
-    """,(fornecedor or "", sc_id))
-    conn.commit(); conn.close()
+        # (2) Atualiza itens_sc
+        conn.execute("""
+            UPDATE itens_sc SET
+                quantidade_recebida=?, saldo_residual=?, status_item=?,
+                documento_nf=COALESCE(NULLIF(?, ''), documento_nf),
+                quantidade_nfe=?, fornecedor_item=COALESCE(NULLIF(?, ''), fornecedor_item),
+                ultima_importacao=?
+            WHERE id=?
+        """,(nova_rec, novo_saldo, status_item, nf, qtd_recebida, fornecedor or "", agora, item_sc_id))
 
-    obs_mov = f"NF: {nf}" if nf else "Recebimento SC"
-    ok,msg = registrar_movimentacao(
-        item_id=sc_item["item_id"], tipo="entrada", quantidade=qtd_recebida,
-        centro_custo=centro_custo, solicitante=solicitante, emitente=emitente,
-        observacao=obs_mov, sc_item_id=item_sc_id, data_hora=data_mov
-    )
-    if not ok:
-        return False,msg
+        # (3) Atualiza fornecedor da solicitacao
+        conn.execute("""
+            UPDATE solicitacoes_compra
+            SET fornecedor=COALESCE(NULLIF(?, ''), fornecedor)
+            WHERE id=?
+        """,(fornecedor or "", sc_id))
 
-    conn2 = get_connection()
-    pend = conn2.execute("""
-        SELECT COUNT(*) AS n FROM itens_sc
-        WHERE sc_id=? AND COALESCE(saldo_residual, quantidade_solicitada-quantidade_recebida) > 0
-    """,(sc_id,)).fetchone()["n"]
-    status_novo = "Recebido" if pend == 0 else "Parcial"
-    conn2.execute("UPDATE solicitacoes_compra SET status=? WHERE id=?",(status_novo, sc_id))
-    conn2.commit()
-    _recalcular_lead_time_real(conn2, sc_item["item_id"])
-    conn2.close()
-    return True, f"Recebimento registrado. SC {'fechada' if pend == 0 else 'parcial'}."
+        # (4)+(5) Entrada de estoque INLINE na mesma transacao. Nao usamos
+        # registrar_movimentacao porque ela abre conexao propria e da commit, o
+        # que fragmentaria a transacao e quebraria a atomicidade (DT-2).
+        r_est = conn.execute(
+            "SELECT estoque_atual FROM inventario WHERE id=?", (item_id,)
+        ).fetchone()
+        if not r_est:
+            return False, "Item nao encontrado no inventario."
+        novo_estoque = (r_est["estoque_atual"] or 0) + qtd_recebida
+        obs_mov = f"NF: {nf}" if nf else "Recebimento SC"
+        conn.execute("""
+            INSERT INTO movimentacoes
+                (item_id,tipo,quantidade,saldo_apos,data_hora,
+                 centro_custo,setor,solicitante,emitente,observacao,sc_item_id,requisicao_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """,(item_id,"entrada",qtd_recebida,novo_estoque,data_mov,
+            centro_custo,"",solicitante,emitente,obs_mov,item_sc_id,None))
+        conn.execute(
+            "UPDATE inventario SET estoque_atual=?,data_atualizacao=? WHERE id=?",
+            (novo_estoque, agora, item_id)
+        )
+
+        # (6) Recalcula previsao de ruptura INLINE (mesma logica de
+        # _recalcular_ruptura_by_pn, porem sem commit proprio, para nao fragmentar
+        # a transacao). Entrada nao recalcula consumo medio (igual registrar_movimentacao).
+        r_rup = conn.execute(
+            "SELECT estoque_atual,consumo_medio_diario,lead_time_dias FROM inventario WHERE id=?",
+            (item_id,)
+        ).fetchone()
+        consumo = r_rup["consumo_medio_diario"] or 0
+        prev_ruptura = (r_rup["estoque_atual"] / consumo) if consumo > 0 else PREVISAO_RUPTURA_SEM_RISCO
+        seguranca = consumo * (r_rup["lead_time_dias"] or 0) * FATOR_ESTOQUE_SEGURANCA
+        conn.execute(
+            "UPDATE inventario SET previsao_ruptura_dias=?,estoque_seguranca=?,data_atualizacao=? WHERE id=?",
+            (prev_ruptura, seguranca, agora, item_id)
+        )
+
+        # (7) Atualiza status da SC
+        pend = conn.execute("""
+            SELECT COUNT(*) AS n FROM itens_sc
+            WHERE sc_id=? AND COALESCE(saldo_residual, quantidade_solicitada-quantidade_recebida) > 0
+        """,(sc_id,)).fetchone()["n"]
+        status_novo = "Recebido" if pend == 0 else "Parcial"
+        conn.execute("UPDATE solicitacoes_compra SET status=? WHERE id=?",(status_novo, sc_id))
+
+        # (8) Recalcula lead time real (usa a MESMA conn; nao da commit/close)
+        _recalcular_lead_time_real(conn, item_id)
+
+        # (9) Commit unico: tudo ou nada
+        conn.commit()
+        return True, f"Recebimento registrado. SC {'fechada' if pend == 0 else 'parcial'}."
+    except Exception as e:
+        conn.rollback()
+        return False, f"Erro ao registrar recebimento: {e}"
+    finally:
+        conn.close()
 
 def listar_scs(apenas_abertas=True):
     conn = get_connection()
@@ -1298,7 +1248,7 @@ def obter_dados_dashboard(limit_abc=10):
     try:
         abc_rows = conn.execute(abc_query, (periodo_inicio, periodo_fim, limit_abc)).fetchall()
     except Exception as e:
-        print(f"Erro na query ABC: {e}")
+        logger.exception("Erro na query ABC: %s", e)
         abc_rows = []
 
     # --- 3. KPIS ATUAIS (SNAPSHOT) ---
@@ -1309,13 +1259,14 @@ def obter_dados_dashboard(limit_abc=10):
         est = r["estoque_atual"] or 0
         mn  = r["estoque_minimo"] or 0
         
-        # Regra v2.1: Status baseado no estoque FÍSICO
-        if est <= 0: 
+        # DT-4: classificacao exclusivamente via regra oficial
+        status = calcular_status_inventario(est, mn, 0)
+        if "COMPRAR" in status:
             comprar += 1
-        elif est > mn: 
-            ok += 1
-        else: 
+        elif "ATENÇÃO" in status:
             atencao += 1
+        else:
+            ok += 1
             
         if r["data_inventario"]: 
             inv_ok += 1
@@ -1366,7 +1317,6 @@ def atualizar_localizacao_e_inventariar(item_id, novo_local, nova_caixa):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def exportar_inventario_df():
-    import pandas as pd
     itens = listar_inventario()
     if not itens:
         return pd.DataFrame()
@@ -1420,7 +1370,6 @@ def exportar_inventario_df():
     return df
 
 def exportar_movimentacoes_df(item_id=None, tipos_selecionados=None):
-    import pandas as pd
     # Busca todas as movimentações (sem o limite da tela para o relatório ser completo)
     movs = listar_movimentacoes(item_id=item_id, limit=5000)
     
@@ -1504,7 +1453,7 @@ def _recalcular_lead_time_real(conn, item_id):
                          (novo_lead_time, hoje.strftime("%Y-%m-%d %H:%M:%S"), item_id))
             
     except Exception as e:
-        print(f"Erro ao recalcular lead time: {e}")
+        logger.exception("Erro ao recalcular lead time: %s", e)
 
 def atualizar_item_inventario(item_id, dados_atualizados):
     """
@@ -1679,66 +1628,3 @@ def obter_analitico_rupturas(days=90):
         
     return pd.DataFrame(data) if data else pd.DataFrame(columns=["part_number", "nome_item", "qtd_rupturas", "ultima_ocorrencia"])
 
-def listar_requisicoes_pendentes():
-    """Retorna requisições que possuem ao menos 1 item não totalmente atendido."""
-    conn = get_connection()
-    rows = conn.execute("""
-        SELECT r.*, COUNT(ir.id) as total_itens
-        FROM requisicoes r
-        JOIN itens_requisicao ir ON ir.requisicao_id = r.id
-        WHERE ir.quantidade_atendida < ir.quantidade_solicitada
-        GROUP BY r.id
-        ORDER BY r.data_hora DESC
-    """).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-def processar_entrega_requisicao(req_id, itens_entregues):
-    """
-    Atualiza quantidade_atendida e realiza baixa física no estoque.
-    itens_entregues: [{"item_id": int, "qtd_entregue": float}, ...]
-    """
-    conn = get_connection()
-    try:
-        req_info = dict(conn.execute("SELECT * FROM requisicoes WHERE id=?", (req_id,)).fetchone())
-        agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # Busca estoque atual para validação
-        estoque_map = {
-            i["id"]: i["estoque_atual"] 
-            for i in conn.execute("SELECT id, estoque_atual FROM inventario").fetchall()
-        }
-
-        for entrega in itens_entregues:
-            item_id = entrega["item_id"]
-            qtd_ent = float(entrega["qtd_entregue"])
-            
-            if qtd_ent <= 0: continue
-            
-            # Validação de segurança
-            if estoque_map.get(item_id, 0) < qtd_ent:
-                return False, f"Estoque insuficiente para item {item_id}."
-
-            # Atualiza o registro de atendimento (soma em caso de parcial)
-            conn.execute("""
-                UPDATE itens_requisicao 
-                SET quantidade_atendida = quantidade_atendida + ?
-                WHERE requisicao_id = ? AND item_id = ?
-            """, (qtd_ent, req_id, item_id))
-
-            # Baixa física oficial
-            registrar_movimentacao(
-                item_id=item_id, tipo="saida", quantidade=qtd_ent,
-                centro_custo=req_info["centro_custo"], solicitante=req_info["emitente"],
-                emitente="Almoxarifado", setor=req_info["setor"],
-                observacao=f"Entrega REQ-{req_info['numero_requisicao']}",
-                requisicao_id=req_id, data_hora=agora
-            )
-
-        conn.commit()
-        return True, f"Entrega processada para REQ-{req_info['numero_requisicao']}"
-    except Exception as e:
-        conn.rollback()
-        return False, str(e)
-    finally:
-        conn.close()

@@ -5,12 +5,17 @@ import json, io, os, sys, time
 from streamlit_option_menu import option_menu
 from datetime import date, datetime
 from services.styles import inject_custom_css
+from services.logging_config import setup_logging
+from services.constants import (
+    PREVISAO_RUPTURA_SEM_RISCO, ORDENACAO_RUPTURA_INFINITO,
+    AGING_ALERTA_DIAS, AGING_CRITICO_DIAS,
+)
 
 sys.path.insert(0, os.path.dirname(__file__))
 from database import criar_banco
 from services.db_functions import (
-    buscar_item_por_id, listar_inventario, salvar_item, marcar_inventariado, desmarcar_inventariado,
-    atualizar_parametros_calculo, registrar_movimentacao, listar_movimentacoes,
+    buscar_item_por_id, listar_inventario, salvar_item, desmarcar_inventariado,
+    registrar_movimentacao, listar_movimentacoes,
     criar_sc, atualizar_sc, registrar_recebimento_sc, listar_scs,
     listar_itens_sc, buscar_scs_por_item, exportar_inventario_df,
     listar_valores, adicionar_valor_lista, remover_valor_lista,
@@ -21,6 +26,7 @@ from services.db_functions import (
     obter_analitico_rupturas, exportar_movimentacoes_df
 )
 
+setup_logging()
 criar_banco()
 
 st.set_page_config(page_title="MRO Inventus Power 2.0.1", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
@@ -37,14 +43,14 @@ STATUS_SC    = ["Aguardando Aprovação","Em Cotação","Pedido Emitido",
 def fmt(s):
     if not s: return "—"
     try: return datetime.strptime(s,"%Y-%m-%d %H:%M:%S").strftime("%d/%m/%Y %H:%M")
-    except:
+    except (ValueError, TypeError):
         try: return datetime.strptime(s,"%Y-%m-%d").strftime("%d/%m/%Y")
-        except: return s
+        except (ValueError, TypeError): return s
 
 def fmt_date_input(s):
     if not s: return date.today()
     try: return datetime.strptime(s,"%Y-%m-%d").date()
-    except: return date.today()
+    except (ValueError, TypeError): return date.today()
 
 def itens_select():
     return {f"{i['part_number']} — {i['nome_item']}": i for i in listar_inventario()}
@@ -58,7 +64,6 @@ def sel_material(label, key, placeholder=" "):
     return sel, item, opcoes
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
-from streamlit_option_menu import option_menu
 
 with st.sidebar:
     # 1. Cabeçalho com Logo/Título
@@ -69,8 +74,7 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     # 2. Navegação (Option Menu)
-    from streamlit_option_menu import option_menu
-    
+
     opcoes_limpas = ["Dashboard", "Inventário", "Gerenciar Itens", "Movimentações", "Requisição", "Compras (SC)", "Configurações"]
     
     escolha_limpa = option_menu(
@@ -217,31 +221,8 @@ if pagina == "📊 Dashboard":
         periodo_str = f"{primeiro_dia_mes_anterior.strftime('%d/%m')} a {ultimo_dia_mes_anterior.strftime('%d/%m')}"
         st.caption(f"Referência: Consumo realizado entre {periodo_str}")
 
-        query_abc = """
-            SELECT i.part_number, i.nome_item, SUM(m.quantidade) as total_saida
-            FROM movimentacoes m
-            JOIN inventario i ON m.item_id = i.id
-            WHERE m.tipo = 'saida' 
-              AND m.requisicao_id IS NOT NULL
-              AND m.data_hora >= ?
-              AND m.data_hora <= ? || ' 23:59:59'
-            GROUP BY i.id 
-            ORDER BY total_saida DESC 
-            LIMIT 10
-        """
-        
-        import sqlite3
-        conn_dash = sqlite3.connect("mro.db")
-        try:
-            df_abc = pd.read_sql_query(query_abc, conn_dash, params=(
-                primeiro_dia_mes_anterior.strftime("%Y-%m-%d"),
-                ultimo_dia_mes_anterior.strftime("%Y-%m-%d")
-            ))
-        except Exception as e:
-            df_abc = pd.DataFrame()
-            st.error(f"Erro ao carregar dados ABC: {e}")
-        finally:
-            conn_dash.close()
+        # DT-3: Curva ABC obtida via camada de servico (sem acesso SQLite na UI)
+        df_abc = pd.DataFrame(obter_dados_dashboard()["abc"])
 
         if not df_abc.empty:
             import plotly.graph_objects as go
@@ -1103,12 +1084,12 @@ elif pagina == "🧾 Compras (SC)":
                     
                     # ✅ CORREÇÃO: Usar a previsão de ruptura REAL do inventário
                     # Em vez de calcular (Estoque + Pendente) / Consumo, usamos o campo já existente
-                    dias_ruptura_real = inv.get('previsao_ruptura_dias', 999) if inv else 999
+                    dias_ruptura_real = inv.get('previsao_ruptura_dias', PREVISAO_RUPTURA_SEM_RISCO) if inv else PREVISAO_RUPTURA_SEM_RISCO
                     if dias_ruptura_real is None:
-                        dias_ruptura_real = 999
+                        dias_ruptura_real = PREVISAO_RUPTURA_SEM_RISCO
                     
                     # Formatação para exibição na tabela
-                    if dias_ruptura_real >= 999:
+                    if dias_ruptura_real >= PREVISAO_RUPTURA_SEM_RISCO:
                         rupt_display = "∞"
                     else:
                         rupt_display = f"{dias_ruptura_real:.1f}"
@@ -1140,11 +1121,11 @@ elif pagina == "🧾 Compras (SC)":
 
                     # Cálculo de Aging (Dias desde abertura)
                     dias = item.get('dias_atendimento', 0) 
-                    dias_v = f"🔴 {dias}d" if dias > 15 else (f"🟡 {dias}d" if dias > 7 else f"🟢 {dias}d")
+                    dias_v = f"🔴 {dias}d" if dias > AGING_CRITICO_DIAS else (f"🟡 {dias}d" if dias > AGING_ALERTA_DIAS else f"🟢 {dias}d")
                     
                     # 📊 CHAVES DE ORDENAÇÃO
                     # Agora ordenamos pela ruptura REAL do inventário
-                    sort_ruptura = dias_ruptura_real if dias_ruptura_real < 999 else 9999
+                    sort_ruptura = dias_ruptura_real if dias_ruptura_real < PREVISAO_RUPTURA_SEM_RISCO else ORDENACAO_RUPTURA_INFINITO
                     crit_rank = 1 if 'Parada de Linha' in importancias else (2 if 'Importante' in importancias else 3)
                     
                     dados.append({

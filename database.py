@@ -1,7 +1,9 @@
 import sqlite3
 import os
+import logging
 
 DB_PATH = "mro.db"
+logger = logging.getLogger(__name__)
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH, timeout=5.0)
@@ -211,7 +213,7 @@ def criar_banco():
     for col, tipo in novas_cols_sc.items():
         if col not in cols_sc:
             conn.execute(f"ALTER TABLE solicitacoes_compra ADD COLUMN {col} {tipo}")
-            print(f"  -> Migracao: {col} em solicitacoes_compra adicionada.")
+            logger.info("  -> Migracao: %s em solicitacoes_compra adicionada.", col)
 
     cols_isc = {r[1] for r in conn.execute("PRAGMA table_info(itens_sc)")}
     novas_cols_isc = {
@@ -230,33 +232,42 @@ def criar_banco():
     for col, tipo in novas_cols_isc.items():
         if col not in cols_isc:
             conn.execute(f"ALTER TABLE itens_sc ADD COLUMN {col} {tipo}")
-            print(f"  -> Migracao: {col} em itens_sc adicionada.")
+            logger.info("  -> Migracao: %s em itens_sc adicionada.", col)
+
+    # Indices de performance (v2.0.2 / DT-9): FKs nao geram indice automatico no
+    # SQLite. part_number ja possui indice via UNIQUE (sqlite_autoindex_inventario_1),
+    # portanto idx_inv_pn nao e recriado (seria redundante).
+    c.execute("CREATE INDEX IF NOT EXISTS idx_mov_item    ON movimentacoes(item_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_mov_data    ON movimentacoes(data_hora)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_itens_sc_sc ON itens_sc(sc_id)")
 
     conn.commit()
     _migrar(conn)
     conn.execute("PRAGMA optimize;")
     conn.close()
-    print("Banco de dados criado/verificado com sucesso. Versão 2.0.2")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.0.2")
 
 
 def _migrar(conn):
     cols_inv = {r[1] for r in conn.execute("PRAGMA table_info(inventario)")}
     if "data_inventario" not in cols_inv:
         conn.execute("ALTER TABLE inventario ADD COLUMN data_inventario TEXT")
-        print("  ↳ Migração: data_inventario adicionada.")
+        logger.info("  ↳ Migração: data_inventario adicionada.")
 
     cols_mov = {r[1] for r in conn.execute("PRAGMA table_info(movimentacoes)")}
     if "requisicao_id" not in cols_mov:
         conn.execute("ALTER TABLE movimentacoes ADD COLUMN requisicao_id INTEGER")
-        print("  ↳ Migração: requisicao_id em movimentacoes adicionada.")
+        logger.info("  ↳ Migração: requisicao_id em movimentacoes adicionada.")
 
     cols_isc = {r[1] for r in conn.execute("PRAGMA table_info(itens_sc)")}
     if "numero_po" not in cols_isc:
         conn.execute("ALTER TABLE itens_sc ADD COLUMN numero_po TEXT")
-        print("  ↳ Migração: numero_po em itens_sc adicionada.")
+        logger.info("  ↳ Migração: numero_po em itens_sc adicionada.")
 
     conn.commit()
 
 
 if __name__ == "__main__":
+    from services.logging_config import setup_logging
+    setup_logging()
     criar_banco()
