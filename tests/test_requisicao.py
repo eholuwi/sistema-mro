@@ -28,3 +28,43 @@ def test_estoque_insuficiente_faz_rollback(db, make_item):
                                  False, [], False, "", itens)
     assert ok is False
     assert F.buscar_item_por_id(item_id)["estoque_atual"] == 3  # rollback preservou
+
+
+# --- Fase 5 (T-01): ampliacao de cobertura ---
+
+def test_requisicao_sem_itens_rejeita(db):
+    ok, msg = F.criar_requisicao("S", "E", CC, "Gestor", "N",
+                                 False, [], False, "", [])
+    assert ok is False
+
+
+def test_requisicao_multiplos_itens_baixa_cada_um(db, make_item):
+    a = make_item("PN-MR-A", estoque=100)
+    b = make_item("PN-MR-B", estoque=50)
+    itens = [
+        {"item_id": a, "part_number": "PN-MR-A",
+         "quantidade_solicitada": 10, "quantidade_atendida": 10},
+        {"item_id": b, "part_number": "PN-MR-B",
+         "quantidade_solicitada": 5, "quantidade_atendida": 5},
+    ]
+    ok, num = F.criar_requisicao("Manut", "Joao", CC, "Gestor", "Chefe",
+                                 False, [], False, "", itens)
+    assert ok, num
+    assert F.buscar_item_por_id(a)["estoque_atual"] == 90
+    assert F.buscar_item_por_id(b)["estoque_atual"] == 45
+
+
+def test_requisicao_rollback_atomico_entre_itens(db, make_item):
+    a = make_item("PN-MR-C", estoque=100)
+    b = make_item("PN-MR-D", estoque=1)  # saldo insuficiente -> aborta tudo
+    itens = [
+        {"item_id": a, "part_number": "PN-MR-C",
+         "quantidade_solicitada": 10, "quantidade_atendida": 10},
+        {"item_id": b, "part_number": "PN-MR-D",
+         "quantidade_solicitada": 5, "quantidade_atendida": 5},
+    ]
+    ok, msg = F.criar_requisicao("Manut", "Joao", CC, "Gestor", "Chefe",
+                                 False, [], False, "", itens)
+    assert ok is False
+    # rollback: o item A (processado antes da falha) nao pode ter sido baixado
+    assert F.buscar_item_por_id(a)["estoque_atual"] == 100

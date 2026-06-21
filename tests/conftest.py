@@ -47,6 +47,33 @@ def make_item(db):
 
 
 @pytest.fixture
+def make_sc(make_item):
+    """Cria uma SC com itens via criar_sc e devolve o sc_id (Fase 5 / T-01).
+
+    Reutiliza make_item para garantir item valido (FK itens_sc.item_id ->
+    inventario.id). Pre-requisito para testar atualizar_sc, que exige uma SC
+    existente.
+    """
+    from services import db_functions as F
+    import database
+
+    def _make(numero_sc="SC-100", data_abertura="2026-01-01",
+              part_number="PN-SC", quantidade_solicitada=10, item_id=None):
+        if item_id is None:
+            item_id = make_item(part_number=part_number)
+        itens = [{"item_id": item_id, "quantidade_solicitada": quantidade_solicitada}]
+        ok, msg = F.criar_sc(numero_sc, data_abertura, itens)
+        assert ok, msg
+        conn = database.get_connection()
+        row = conn.execute("SELECT id FROM solicitacoes_compra WHERE numero_sc=?",
+                           (numero_sc,)).fetchone()
+        conn.close()
+        return row["id"]
+
+    return _make
+
+
+@pytest.fixture
 def xlsx_factory():
     """Gera um buffer .xlsx em memoria para o importador Protheus.
 
