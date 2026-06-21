@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import logging
+from contextlib import contextmanager
 
 DB_PATH = "mro.db"
 logger = logging.getLogger(__name__)
@@ -11,6 +12,33 @@ def get_connection():
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     return conn
+
+@contextmanager
+def transaction(conn=None):
+    """Context manager de conexao/transacao (Fase 4.2A / DT-7).
+
+    conn=None  -> abre conexao propria; commit ao sair sem erro; rollback em
+                  excecao; close sempre (via finally). Propaga a excecao.
+    conn!=None -> yield da conexao recebida sem tocar em commit/rollback/close.
+                  O chamador externo gerencia o ciclo de vida.
+
+    Substitui o padrao close_conn dos helpers e o try/finally manual das
+    funcoes de leitura. Uso em escrita: with transaction() as conn: ...
+    Uso em helper: with transaction(conn_externa) as c: ...
+    """
+    if conn is not None:
+        yield conn
+        return
+    c = get_connection()
+    try:
+        yield c
+        c.commit()
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
+
 
 def criar_banco():
     conn = get_connection()
