@@ -8,7 +8,7 @@ from services.styles import inject_custom_css
 from services.logging_config import setup_logging
 from services.constants import (
     PREVISAO_RUPTURA_SEM_RISCO, ORDENACAO_RUPTURA_INFINITO,
-    AGING_ALERTA_DIAS, AGING_CRITICO_DIAS,
+    AGING_ALERTA_DIAS, AGING_CRITICO_DIAS, RUPTURA_CRISE_DIAS,
 )
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -1065,7 +1065,7 @@ elif pagina == "🧾 Compras (SC)":
         with c_filt1:
             f_busca = st.text_input("🔍 Buscar PN, Nº SC ou Fornecedor", placeholder="Ex: SC-2026, 123456, SKF...", key="busca_monitor_sc")
         with c_filt2:
-            f_crise = st.checkbox("🚨 Focar apenas em Ruptura < 15 dias", value=False, key="filtro_ruptura_sc")
+            f_crise = st.checkbox(f"🚨 Focar apenas em Ruptura < {RUPTURA_CRISE_DIAS} dias", value=False, key="filtro_ruptura_sc")
 
         scs = listar_scs(apenas_abertas=True)
         if not scs:
@@ -1154,7 +1154,7 @@ elif pagina == "🧾 Compras (SC)":
             else:
                 # UX: Filtro client-side
                 if f_crise:
-                    df = df[df["_sort_ruptura"] < 15]
+                    df = df[df["_sort_ruptura"] < RUPTURA_CRISE_DIAS]
                 if f_busca:
                     b = f_busca.lower()
                     df = df[

@@ -13,6 +13,7 @@ FATOR_ESTOQUE_SEGURANCA = 1.5  # estoque_seguranca = consumo * lead_time * 1.5
 JANELA_CONSUMO_DIAS = 30            # janela do consumo medio diario (dias)
 PREVISAO_RUPTURA_SEM_RISCO = 999   # dias; sentinela "sem ruptura prevista"
 ORDENACAO_RUPTURA_INFINITO = 9999  # sentinela de ordenacao (ruptura "infinita")
+RUPTURA_CRISE_DIAS = 15            # limite do filtro "focar em ruptura < N dias"
 
 # --- Aging de SC (dias desde a abertura) ---
 AGING_ALERTA_DIAS = 7    # > 7 dias  -> alerta  (amarelo)
