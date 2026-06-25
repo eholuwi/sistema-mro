@@ -163,7 +163,13 @@ def listar_inventario():
 
         # Compatibilidade com código legado
         item["status_display"] = item["status_material"]
-        item["estoque_maximo"] = (item.get("estoque_minimo") or 0) * FATOR_ESTOQUE_MAXIMO
+        # Máximo: usa o valor apurado (ex.: base do Neidson) quando > 0;
+        # senão mantém o fallback histórico (mínimo * fator).
+        maximo_armazenado = item.get("estoque_maximo") or 0
+        item["estoque_maximo"] = (
+            maximo_armazenado if maximo_armazenado > 0
+            else (item.get("estoque_minimo") or 0) * FATOR_ESTOQUE_MAXIMO
+        )
         resultado.append(item)
 
     return resultado
@@ -859,6 +865,156 @@ def importar_solicitacoes_protheus(arquivo_excel, nome_arquivo="Solicitacoes.xls
     except Exception as e:
         return False, {"erro": str(e)}
 
+
+def _ler_planilha_com_header(arquivo_excel, marcadores=("PN", "Part Number", "Partnumber", "Produto")):
+    """Lê a 1ª aba detectando a linha de cabeçalho real.
+
+    Algumas exportações trazem uma linha de título (ex.: '358itens') antes do
+    cabeçalho. Procura nas primeiras linhas a que contém um dos marcadores (PN/Part
+    Number) e a usa como cabeçalho. Levanta ValueError se não encontrar.
+    """
+    # Reposiciona o ponteiro (uploads do Streamlit podem ser lidos mais de uma vez).
+    try:
+        arquivo_excel.seek(0)
+    except (AttributeError, ValueError):
+        pass
+    bruto = pd.read_excel(arquivo_excel, header=None)
+    if bruto.empty:
+        return bruto
+    marcadores_norm = {_normalizar_txt(m) for m in marcadores}
+    header_idx = None
+    for i in range(min(len(bruto), 15)):
+        celulas = {_normalizar_txt(v) for v in bruto.iloc[i].tolist()}
+        if celulas & marcadores_norm:
+            header_idx = i
+            break
+    if header_idx is None:
+        raise ValueError("Cabeçalho com a coluna 'PN' não foi encontrado nas primeiras linhas da planilha.")
+    df = bruto.iloc[header_idx + 1:].copy()
+    df.columns = [str(c).strip() if c is not None else "" for c in bruto.iloc[header_idx].tolist()]
+    return df.reset_index(drop=True)
+
+
+def _parse_lead_time_dias(valor):
+    """Extrai um inteiro de dias de valores como '20 dias', '20', 20, 20.0."""
+    if valor is None:
+        return None
+    if isinstance(valor, (int, float)):
+        try:
+            if pd.isna(valor):
+                return None
+        except Exception:
+            pass
+        return int(valor)
+    m = re.search(r"\d+", str(valor))
+    return int(m.group()) if m else None
+
+
+def importar_inventario_neidson(arquivo_excel, nome_arquivo="Inventario.xlsx", dry_run=False):
+    """Atualiza Tipo/Categoria, Mínimo, Máximo e Lead Time dos itens existentes com
+    a base apurada pelo Sr. Neidson (Item 1 / v2.1.0).
+
+    Regras:
+    - Casa por part_number; **só atualiza** os 4 campos apurados (não toca estoque
+      atual, nome, descrição etc.).
+    - PNs não encontrados na base são **apenas relatados** (não cria itens novos).
+    - Idempotente: rodar 2x produz o mesmo resultado.
+    - dry_run=True apenas simula (nenhuma gravação), para pré-visualização na UI.
+    - Em execução real, grava auditoria em `log_importacoes`.
+    """
+    try:
+        df = _ler_planilha_com_header(arquivo_excel)
+    except Exception as e:
+        return False, {"erro": f"Falha ao ler a planilha: {e}"}
+    if df.empty:
+        return False, {"erro": "A planilha está vazia."}
+
+    colunas = {
+        "pn": _coluna(df, ["PN", "Part Number", "Partnumber", "Produto"]),
+        "categoria": _coluna(df, ["Tipo / Categoria", "Tipo/Categoria", "Tipo", "Categoria"]),
+        "minimo": _coluna(df, ["Mínimo (30 dias)", "Minimo (30 dias)", "Mínimo", "Minimo"]),
+        "maximo": _coluna(df, ["Máximo ( 60 dias)", "Máximo (60 dias)", "Maximo (60 dias)", "Máximo", "Maximo"]),
+        "lead_time": _coluna(df, ["LEADTIME TOTAL", "Lead Time Total", "Leadtime", "Lead Time"]),
+    }
+    if not colunas["pn"]:
+        return False, {"erro": "Coluna de Part Number (PN) não encontrada na planilha."}
+    if not any(colunas[c] for c in ("categoria", "minimo", "maximo", "lead_time")):
+        return False, {"erro": "Nenhuma coluna de dados (Tipo, Mínimo, Máximo, Lead Time) encontrada."}
+
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    stats = {
+        "linhas_lidas": int(len(df)),
+        "atualizados": 0,
+        "ignorados": 0,
+        "pns_nao_encontrados": [],
+        "pns_duplicados_planilha": [],
+        "dry_run": bool(dry_run),
+    }
+    vistos = set()
+
+    try:
+        with transaction() as conn:
+            for _, row in df.iterrows():
+                pn = str(_valor(row, colunas["pn"], "") or "").strip()
+                if not pn:
+                    stats["ignorados"] += 1
+                    continue
+                if pn in vistos:
+                    stats["pns_duplicados_planilha"].append(pn)
+                vistos.add(pn)
+
+                item = conn.execute(
+                    "SELECT id FROM inventario WHERE part_number=?", (pn,)
+                ).fetchone()
+                if not item:
+                    stats["ignorados"] += 1
+                    stats["pns_nao_encontrados"].append(pn)
+                    continue
+
+                sets, vals = [], []
+                if colunas["categoria"]:
+                    cat = _valor(row, colunas["categoria"], None)
+                    cat = str(cat).strip() if cat is not None and str(cat).strip() else None
+                    if cat:
+                        sets.append("tipo_material=?"); vals.append(cat)
+                if colunas["minimo"]:
+                    sets.append("estoque_minimo=?"); vals.append(_to_float(_valor(row, colunas["minimo"], None)))
+                if colunas["maximo"]:
+                    sets.append("estoque_maximo=?"); vals.append(_to_float(_valor(row, colunas["maximo"], None)))
+                if colunas["lead_time"]:
+                    lt = _parse_lead_time_dias(_valor(row, colunas["lead_time"], None))
+                    if lt is not None:
+                        sets.append("lead_time_dias=?"); vals.append(lt)
+
+                if not sets:
+                    stats["ignorados"] += 1
+                    continue
+
+                if not dry_run:
+                    sets.append("data_atualizacao=?"); vals.append(agora)
+                    vals.append(item["id"])
+                    conn.execute(f"UPDATE inventario SET {', '.join(sets)} WHERE id=?", vals)
+                    _recalcular_ruptura_by_id(conn, item["id"])
+                stats["atualizados"] += 1
+
+            if not dry_run:
+                detalhe = json.dumps({
+                    "pns_nao_encontrados": stats["pns_nao_encontrados"],
+                    "pns_duplicados_planilha": sorted(set(stats["pns_duplicados_planilha"])),
+                }, ensure_ascii=False)
+                conn.execute(
+                    """INSERT INTO log_importacoes
+                        (tipo, arquivo, data_hora, total_planilha, atualizados, ignorados, detalhe_json)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    ("inventario_neidson", nome_arquivo, agora, stats["linhas_lidas"],
+                     stats["atualizados"], stats["ignorados"], detalhe),
+                )
+        stats["pns_duplicados_planilha"] = sorted(set(stats["pns_duplicados_planilha"]))
+        return True, stats
+    except Exception as e:
+        return False, {"erro": str(e)}
+
+
 def listar_itens_sc(sc_id):
     with transaction() as conn:
         rows = conn.execute("""
@@ -1301,10 +1457,12 @@ def atualizar_item_inventario(item_id, dados_atualizados):
                 return False, "Item não encontrado."
             fields = []
             values = []
+            # part_number NÃO entra aqui: alterações de PN passam por alterar_part_number(),
+            # que valida unicidade e registra histórico (Item 2 / v2.1.0).
             allowed_fields = [
-                "part_number", "nome_item", "descricao", "unidade", "tipo_material", "importancia",
-                "estoque_minimo", "lead_time_dias", "local_armazenagem", "caixa_identificacao",
-                "consumo_medio_diario", "setor_responsavel"
+                "nome_item", "descricao", "unidade", "tipo_material", "importancia",
+                "estoque_minimo", "estoque_maximo", "lead_time_dias", "local_armazenagem",
+                "caixa_identificacao", "consumo_medio_diario", "setor_responsavel"
             ]
             for key in allowed_fields:
                 if key in dados_atualizados:
@@ -1319,6 +1477,151 @@ def atualizar_item_inventario(item_id, dados_atualizados):
         return True, "Item atualizado com sucesso!"
     except Exception as e:
         return False, str(e)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ALTERAÇÃO DE PART NUMBER (Item 2 / v2.1.0)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def alterar_part_number(item_id, novo_pn, motivo="", usuario=None):
+    """Altera o Part Number de um item preservando TODO o histórico.
+
+    Movimentações, SCs e requisições são ligadas por item_id (não pelo texto do PN),
+    portanto a troca não perde rastreabilidade. A relação PN antigo↔novo fica
+    registrada em part_numbers_historico, e o PN antigo continua localizável via
+    buscar_item_por_pn().
+    """
+    novo_pn = (novo_pn or "").strip()
+    if not novo_pn:
+        return False, "Informe o novo Part Number."
+    try:
+        with transaction() as conn:
+            atual = conn.execute(
+                "SELECT part_number FROM inventario WHERE id=?", (item_id,)
+            ).fetchone()
+            if not atual:
+                return False, "Item não encontrado."
+            pn_antigo = atual["part_number"]
+            if novo_pn == pn_antigo:
+                return False, "O novo Part Number é igual ao atual."
+            conflito = conn.execute(
+                "SELECT id FROM inventario WHERE part_number=? AND id<>?", (novo_pn, item_id)
+            ).fetchone()
+            if conflito:
+                return False, f"O Part Number '{novo_pn}' já pertence a outro item."
+            agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                "UPDATE inventario SET part_number=?, data_atualizacao=? WHERE id=?",
+                (novo_pn, agora, item_id)
+            )
+            conn.execute(
+                """INSERT INTO part_numbers_historico
+                       (item_id, pn_antigo, pn_novo, data_hora, usuario, motivo)
+                   VALUES (?,?,?,?,?,?)""",
+                (item_id, pn_antigo, novo_pn, agora, (usuario or None), (motivo or None))
+            )
+            _recalcular_ruptura_by_pn(conn, novo_pn)
+        return True, f"Part Number alterado de '{pn_antigo}' para '{novo_pn}'."
+    except sqlite3.IntegrityError:
+        return False, f"O Part Number '{novo_pn}' já existe."
+    except Exception as e:
+        return False, str(e)
+
+
+def listar_historico_part_number(item_id=None):
+    """Histórico de alterações de PN (mais recentes primeiro). Se item_id=None,
+    retorna de todos os itens, com o PN atual e nome para exibição."""
+    with transaction() as conn:
+        if item_id:
+            rows = conn.execute(
+                "SELECT * FROM part_numbers_historico WHERE item_id=? ORDER BY data_hora DESC",
+                (item_id,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT h.*, i.part_number AS pn_atual, i.nome_item
+                   FROM part_numbers_historico h
+                   LEFT JOIN inventario i ON i.id = h.item_id
+                   ORDER BY h.data_hora DESC"""
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def buscar_item_por_pn(termo):
+    """Localiza um item pelo PN atual OU por um PN antigo (histórico). Retorna dict ou None."""
+    termo = (termo or "").strip()
+    if not termo:
+        return None
+    with transaction() as conn:
+        r = conn.execute("SELECT * FROM inventario WHERE part_number=?", (termo,)).fetchone()
+        if r:
+            return dict(r)
+        h = conn.execute(
+            "SELECT item_id FROM part_numbers_historico WHERE pn_antigo=? ORDER BY data_hora DESC LIMIT 1",
+            (termo,)
+        ).fetchone()
+        if h:
+            r = conn.execute("SELECT * FROM inventario WHERE id=?", (h["item_id"],)).fetchone()
+            return dict(r) if r else None
+    return None
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FEEDBACK / SUGESTÕES (Item 3 / v2.1.0)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def registrar_feedback(tipo, titulo, descricao="", autor=None, pagina_origem=None, prioridade=None):
+    tipo = (tipo or "").strip()
+    titulo = (titulo or "").strip()
+    if not tipo:
+        return False, "Selecione o tipo de feedback."
+    if not titulo:
+        return False, "Informe um título para o feedback."
+    try:
+        with transaction() as conn:
+            conn.execute(
+                """INSERT INTO feedbacks
+                       (data_hora, tipo, titulo, descricao, autor, pagina_origem, status, prioridade)
+                   VALUES (?,?,?,?,?,?, 'Novo', ?)""",
+                (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), tipo, titulo,
+                 (descricao or None), (autor or None), (pagina_origem or None), (prioridade or None))
+            )
+        return True, "Feedback registrado. Obrigado pela contribuição!"
+    except Exception as e:
+        return False, str(e)
+
+
+def listar_feedbacks(tipo=None, status=None, limit=500):
+    clausulas, params = [], []
+    if tipo and tipo != "Todos":
+        clausulas.append("tipo=?"); params.append(tipo)
+    if status and status != "Todos":
+        clausulas.append("status=?"); params.append(status)
+    where = ("WHERE " + " AND ".join(clausulas)) if clausulas else ""
+    params.append(limit)
+    with transaction() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM feedbacks {where} ORDER BY data_hora DESC LIMIT ?", params
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def atualizar_feedback(feedback_id, status=None, prioridade=None, resposta=None):
+    campos, vals = [], []
+    if status is not None:
+        campos.append("status=?"); vals.append(status)
+    if prioridade is not None:
+        campos.append("prioridade=?"); vals.append(prioridade)
+    if resposta is not None:
+        campos.append("resposta=?"); vals.append(resposta)
+    if not campos:
+        return False, "Nada para atualizar."
+    vals.append(feedback_id)
+    try:
+        with transaction() as conn:
+            conn.execute(f"UPDATE feedbacks SET {', '.join(campos)} WHERE id=?", vals)
+        return True, "Feedback atualizado."
+    except Exception as e:
+        return False, str(e)
+
 
 def obter_analitico_movimentacoes(periodo='mensal'):
     """

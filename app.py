@@ -23,22 +23,33 @@ from services.db_functions import (
     importar_solicitacoes_protheus, listar_recebimentos_sc,
     atualizar_localizacao_e_inventariar, atualizar_item_inventario,
     obter_analitico_movimentacoes, obter_analitico_divergencias,
-    obter_analitico_rupturas, exportar_movimentacoes_df
+    obter_analitico_rupturas, exportar_movimentacoes_df,
+    importar_inventario_neidson, alterar_part_number,
+    listar_historico_part_number, buscar_item_por_pn,
+    registrar_feedback, listar_feedbacks, atualizar_feedback,
 )
 
 setup_logging()
 criar_banco()
 
-st.set_page_config(page_title="MRO Inventus Power 2.0.1", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 2.1.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
 
 inject_custom_css()
 
 IMPORTANCIAS = ["Parada de Linha","Importante","Admin"]
-TIPOS        = ["Spare Parts","Consumivel","Expediente","Uniforme","Improdutivo"]
+# tipo_material agora é livre (v2.1.0); a lista abaixo são apenas sugestões e inclui
+# as categorias apuradas pela base do Sr. Neidson. Campos pré-selecionam o valor atual.
+TIPOS        = ["Spare Parts","Consumivel","Expediente","Uniforme","Improdutivo",
+                "Químico","ESD","Vestimenta ESD","Corte","Ponta","Limpeza Stencil",
+                "Impressão","Embalagem"]
 SETORES      = ["Improdutivo","Engenharia de SMT","LED DRIVER","MANUTENÇÃO","PRODUÇÃO","QUALIDADE","ALMOXARIFADO","ADMINISTRATIVO","SESMT"]
 UNIDADES     = ["UN","CX","GL","RL","PCT","LT","RM"]
 STATUS_SC    = ["Aguardando Aprovação","Em Cotação","Pedido Emitido",
                 "Aguardando Entrega","Parcial","Recebido","Cancelado"]
+TIPOS_FEEDBACK = ["Sugestão de melhoria","Nova funcionalidade","Melhoria de design",
+                  "Melhoria de UI","Melhoria de UX","Relato de bug","Relato de glitch",
+                  "Problema operacional","Outra observação"]
+STATUS_FEEDBACK = ["Novo","Em análise","Planejado","Em andamento","Concluído","Recusado"]
 
 def fmt(s):
     if not s: return "—"
@@ -63,24 +74,32 @@ def sel_material(label, key, placeholder=" "):
     item = opcoes.get(sel) if sel != placeholder else None
     return sel, item, opcoes
 
+def opcoes_com_atual(base, atual):
+    """Garante que o valor atual (ex.: tipo livre vindo da base do Neidson) apareça
+    na lista de opções, evitando que o selectbox troque silenciosamente o valor."""
+    opcoes = list(base)
+    if atual and atual not in opcoes:
+        opcoes = [atual] + opcoes
+    return opcoes
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 2.0.1</span> 
+        <span style="font-size: 1.8rem;">MRO Inventus 2.1.0</span>
     </div>
     """, unsafe_allow_html=True)
 
     # 2. Navegação (Option Menu)
 
-    opcoes_limpas = ["Dashboard", "Inventário", "Gerenciar Itens", "Movimentações", "Requisição", "Compras (SC)", "Configurações"]
-    
+    opcoes_limpas = ["Dashboard", "Inventário", "Gerenciar Itens", "Movimentações", "Requisição", "Compras (SC)", "Feedback", "Configurações"]
+
     escolha_limpa = option_menu(
         menu_title=None,
         options=opcoes_limpas,
-        icons=["bar-chart-fill", "box-seam", "plus-circle", "arrow-repeat", "clipboard-check", "receipt", "gear"],
+        icons=["bar-chart-fill", "box-seam", "plus-circle", "arrow-repeat", "clipboard-check", "receipt", "chat-dots", "gear"],
         menu_icon="cast",
         default_index=0,
         styles={
@@ -97,6 +116,7 @@ with st.sidebar:
              f"➕ {escolha_limpa}" if escolha_limpa == "Gerenciar Itens" else \
              f"🔄 {escolha_limpa}" if escolha_limpa == "Movimentações" else \
              f"🧾 {escolha_limpa}" if escolha_limpa == "Compras (SC)" else \
+             f"💬 {escolha_limpa}" if escolha_limpa == "Feedback" else \
              f"⚙️ {escolha_limpa}"
 
     st.markdown("---")
@@ -544,7 +564,7 @@ elif pagina == "➕ Gerenciar Itens":
                 nome_novo = st.text_input("Nome do Item *", placeholder="Ex: Parafuso Sextavado M8")
                 desc_novo = st.text_area("Descrição", placeholder="Informações adicionais sobre o item", height=80)
                 un_novo = st.selectbox("Unidade", UNIDADES, index=0)
-                tipo_novo = st.selectbox("Tipo", TIPOS, index=0)
+                tipo_novo = st.selectbox("Tipo / Categoria", TIPOS, index=0)
             
             with c2:
                 imp_novo = st.selectbox("Importância", IMPORTANCIAS, index=0)
@@ -599,20 +619,24 @@ elif pagina == "➕ Gerenciar Itens":
                 st.markdown("---") 
                 
                 c1, c2, c3 = st.columns(3)
+                tipos_opts = opcoes_com_atual(TIPOS, item_sel.get('tipo_material'))
+                locais_opts = listar_valores("local") or ["Geral"]
                 with c1:
                     ed_un = st.selectbox("Unidade", UNIDADES, index=UNIDADES.index(item_sel['unidade']) if item_sel['unidade'] in UNIDADES else 0, key="ed_un")
-                    ed_tipo = st.selectbox("Tipo", TIPOS, index=TIPOS.index(item_sel['tipo_material']) if item_sel['tipo_material'] in TIPOS else 0, key="ed_tipo")
+                    ed_tipo = st.selectbox("Tipo / Categoria", tipos_opts, index=tipos_opts.index(item_sel['tipo_material']) if item_sel.get('tipo_material') in tipos_opts else 0, key="ed_tipo")
                     ed_imp = st.selectbox("Importância", IMPORTANCIAS, index=IMPORTANCIAS.index(item_sel['importancia']) if item_sel['importancia'] in IMPORTANCIAS else 0, key="ed_imp")
-                
+
                 with c2:
-                    ed_loc = st.selectbox("Localidade", listar_valores("local") or ["Geral"], 
-                                          index=(listar_valores("local") or ["Geral"]).index(item_sel.get('local_armazenagem', 'Geral')) if item_sel.get('local_armazenagem') in (listar_valores("local") or ["Geral"]) else 0, key="ed_loc")
-                    ed_caixa = st.selectbox("Caixa/ID", listar_valores("local") or ["Geral"], 
-                                            index=(listar_valores("local") or ["Geral"]).index(item_sel.get('caixa_identificacao', 'Geral')) if item_sel.get('caixa_identificacao') in (listar_valores("local") or ["Geral"]) else 0, key="ed_caixa")
-                    ed_lead = st.number_input("Lead Time (Dias)", min_value=1, value=item_sel.get('lead_time_dias', 20), key="ed_lead")
+                    ed_loc = st.selectbox("Localidade", locais_opts,
+                                          index=locais_opts.index(item_sel.get('local_armazenagem', 'Geral')) if item_sel.get('local_armazenagem') in locais_opts else 0, key="ed_loc")
+                    ed_caixa = st.selectbox("Caixa/ID", locais_opts,
+                                            index=locais_opts.index(item_sel.get('caixa_identificacao', 'Geral')) if item_sel.get('caixa_identificacao') in locais_opts else 0, key="ed_caixa")
+                    ed_lead = st.number_input("Lead Time (Dias)", min_value=0, value=int(item_sel.get('lead_time_dias') or 0), key="ed_lead")
 
                 with c3:
-                    ed_min = st.number_input("Estoque Mínimo", min_value=0.0, value=float(item_sel.get('estoque_minimo', 0)), key="ed_min")
+                    ed_min = st.number_input("Estoque Mínimo (30 dias)", min_value=0.0, value=float(item_sel.get('estoque_minimo') or 0), key="ed_min")
+                    ed_max = st.number_input("Estoque Máximo (60 dias)", min_value=0.0, value=float(item_sel.get('estoque_maximo') or 0), key="ed_max",
+                                             help="0 = usa o cálculo automático (Mínimo × 2).")
                     # Nota: Estoque atual NÃO deve ser editado aqui, apenas via Movimentação/Inventário
                     st.markdown(f"**Estoque Atual:** `{item_sel['estoque_atual']}` (Alterar em *Inventário*)")
                     st.markdown(f"**Status:** `{item_sel['status_material']}`")
@@ -626,7 +650,8 @@ elif pagina == "➕ Gerenciar Itens":
                         "local_armazenagem": ed_loc,
                         "caixa_identificacao": ed_caixa,
                         "lead_time_dias": ed_lead,
-                        "estoque_minimo": ed_min
+                        "estoque_minimo": ed_min,
+                        "estoque_maximo": ed_max,
                     }
                     ok, msg = atualizar_item_inventario(item_sel['id'], dados_edicao)
                     if ok:
@@ -635,6 +660,39 @@ elif pagina == "➕ Gerenciar Itens":
                         st.rerun()
                     else:
                         st.error(msg)
+
+                # ── Alteração de Part Number (Item 2 / v2.1.0) ───────────────
+                st.markdown("---")
+                st.markdown("##### 🔁 Alterar Part Number")
+                st.caption("Use quando o PN for corrigido no Protheus. O histórico (movimentações, "
+                           "SCs e requisições) é preservado e o PN antigo continua pesquisável.")
+                cpn1, cpn2 = st.columns([1, 1])
+                novo_pn = cpn1.text_input("Novo Part Number", key="pn_novo", placeholder=item_sel['part_number'])
+                motivo_pn = cpn2.text_input("Motivo da alteração", key="pn_motivo", placeholder="Ex: padronização Protheus")
+                confirma_pn = st.checkbox("Confirmo a alteração do Part Number", key="pn_confirma")
+                if st.button("🔁 Alterar Part Number", key="btn_alterar_pn", width="stretch"):
+                    if not confirma_pn:
+                        st.warning("Marque a confirmação para prosseguir.")
+                    else:
+                        ok, msg = alterar_part_number(item_sel['id'], novo_pn, motivo=motivo_pn, usuario="Luis Oliveira")
+                        if ok:
+                            st.success(msg)
+                            time.sleep(1.2)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+                hist_pn = listar_historico_part_number(item_sel['id'])
+                if hist_pn:
+                    with st.expander(f"📜 Histórico de Part Numbers ({len(hist_pn)})"):
+                        st.dataframe(
+                            pd.DataFrame([{
+                                "Data": fmt(h["data_hora"]), "PN Antigo": h["pn_antigo"],
+                                "PN Novo": h["pn_novo"], "Motivo": h.get("motivo") or "—",
+                                "Usuário": h.get("usuario") or "—",
+                            } for h in hist_pn]),
+                            width="stretch", hide_index=True
+                        )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MOVIMENTAÇÕES
@@ -1527,11 +1585,138 @@ elif pagina == "🧾 Compras (SC)":
                 st.info("ℹ️ Nenhum recebimento vinculado a SC encontrado no histórico.")
 
 # ══════════════════════════════════════════════════════════════════════════════
+# FEEDBACK / SUGESTÕES (Item 3 / v2.1.0)
+# ══════════════════════════════════════════════════════════════════════════════
+elif pagina == "💬 Feedback":
+    st.title("💬 Sugestões e Feedback")
+    st.caption("Ajude a evoluir o Sistema MRO: registre sugestões, problemas e ideias.")
+
+    tab_enviar, tab_gerenciar = st.tabs(["✍️ Enviar Feedback", "🗂️ Backlog (Gestão)"])
+
+    with tab_enviar:
+        with st.container(border=True):
+            with st.form("form_feedback", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                fb_tipo = c1.selectbox("Tipo *", TIPOS_FEEDBACK, index=0)
+                fb_autor = c2.text_input("Seu nome (opcional)", placeholder="Ex: Luis Oliveira")
+                fb_titulo = st.text_input("Título *", placeholder="Resuma em uma frase")
+                fb_desc = st.text_area("Descrição", height=120,
+                                       placeholder="Descreva a sugestão, o problema ou a ideia em detalhes...")
+                fb_pagina = st.selectbox("Página/área relacionada (opcional)",
+                                         ["—", "Dashboard", "Inventário", "Gerenciar Itens",
+                                          "Movimentações", "Requisição", "Compras (SC)",
+                                          "Configurações", "Geral"], index=0)
+                enviado = st.form_submit_button("📨 Enviar Feedback", type="primary", width="stretch")
+                if enviado:
+                    ok, msg = registrar_feedback(
+                        fb_tipo, fb_titulo, fb_desc,
+                        autor=(fb_autor or None),
+                        pagina_origem=(None if fb_pagina == "—" else fb_pagina),
+                    )
+                    if ok:
+                        st.success(msg)
+                    else:
+                        st.error(msg)
+
+    with tab_gerenciar:
+        f1, f2 = st.columns(2)
+        filtro_tipo = f1.selectbox("Filtrar por tipo", ["Todos"] + TIPOS_FEEDBACK, index=0, key="fb_f_tipo")
+        filtro_status = f2.selectbox("Filtrar por status", ["Todos"] + STATUS_FEEDBACK, index=0, key="fb_f_status")
+        feedbacks = listar_feedbacks(tipo=filtro_tipo, status=filtro_status)
+
+        if not feedbacks:
+            st.info("Nenhum feedback encontrado com os filtros atuais.")
+        else:
+            df_fb = pd.DataFrame([{
+                "Data": fmt(f["data_hora"]), "Tipo": f["tipo"], "Título": f["titulo"],
+                "Status": f["status"], "Prioridade": f.get("prioridade") or "—",
+                "Autor": f.get("autor") or "—", "Página": f.get("pagina_origem") or "—",
+                "Descrição": f.get("descricao") or "",
+            } for f in feedbacks])
+            st.download_button("⬇️ Exportar backlog (CSV)",
+                               df_fb.to_csv(index=False).encode("utf-8-sig"),
+                               file_name="feedback_backlog.csv", mime="text/csv")
+            st.dataframe(df_fb, width="stretch", hide_index=True)
+
+            st.divider()
+            st.markdown("##### Atualizar um feedback")
+            mapa_fb = {f"#{f['id']} — [{f['tipo']}] {f['titulo']}": f for f in feedbacks}
+            escolha_fb = st.selectbox("Selecione", list(mapa_fb.keys()), key="fb_sel")
+            fb = mapa_fb[escolha_fb]
+            u1, u2 = st.columns(2)
+            novo_status = u1.selectbox("Status", STATUS_FEEDBACK,
+                                       index=STATUS_FEEDBACK.index(fb["status"]) if fb["status"] in STATUS_FEEDBACK else 0,
+                                       key="fb_up_status")
+            nova_prio = u2.selectbox("Prioridade", ["—", "Baixa", "Média", "Alta", "Crítica"],
+                                     index=(["—", "Baixa", "Média", "Alta", "Crítica"].index(fb["prioridade"])
+                                            if fb.get("prioridade") in ["Baixa", "Média", "Alta", "Crítica"] else 0),
+                                     key="fb_up_prio")
+            resposta = st.text_area("Resposta / nota interna", value=fb.get("resposta") or "", key="fb_up_resp")
+            if st.button("💾 Salvar atualização", type="primary", key="fb_up_btn"):
+                ok, msg = atualizar_feedback(
+                    fb["id"], status=novo_status,
+                    prioridade=(None if nova_prio == "—" else nova_prio),
+                    resposta=resposta,
+                )
+                if ok:
+                    st.success(msg)
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+# ══════════════════════════════════════════════════════════════════════════════
 # CONFIGURAÇÕES
 # ══════════════════════════════════════════════════════════════════════════════
 elif pagina == "⚙️ Configurações":
     st.title("⚙️ Configurações do Sistema")
     st.caption("Gestão de Listas Mestras e Parâmetros Globais.")
+
+    # ── Importação da base do Neidson — Tipo, Mínimo, Máximo, Lead Time (Item 1) ──
+    with st.container(border=True):
+        st.subheader("📥 Importar Base (Tipo/Categoria, Mínimo, Máximo, Lead Time)")
+        st.caption("Atualiza itens **existentes** (casados pelo PN) com os dados apurados pelo "
+                   "Sr. Neidson. PNs não encontrados são apenas relatados — nenhum item é criado. "
+                   "Um backup do banco é criado automaticamente antes de aplicar.")
+        arq_neidson = st.file_uploader("Planilha (.xlsx)", type=["xlsx"], key="upl_neidson")
+        if arq_neidson is not None:
+            if st.button("🔍 Pré-visualizar (simulação)", key="btn_prev_neidson"):
+                ok_p, res_p = importar_inventario_neidson(arq_neidson, arq_neidson.name, dry_run=True)
+                st.session_state["prev_neidson"] = (ok_p, res_p, arq_neidson.name)
+
+            prev = st.session_state.get("prev_neidson")
+            if prev:
+                ok_p, res_p, nome_p = prev
+                if not ok_p:
+                    st.error(res_p.get("erro", "Não foi possível ler a planilha."))
+                else:
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("Linhas lidas", res_p["linhas_lidas"])
+                    m2.metric("Serão atualizados", res_p["atualizados"])
+                    m3.metric("Ignorados (PN não encontrado)", res_p["ignorados"])
+                    if res_p["pns_nao_encontrados"]:
+                        with st.expander(f"Ver {len(res_p['pns_nao_encontrados'])} PNs não encontrados"):
+                            df_ne = pd.DataFrame({"PN não encontrado": res_p["pns_nao_encontrados"]})
+                            st.dataframe(df_ne, width="stretch", hide_index=True)
+                            st.download_button("⬇️ Baixar lista (CSV)",
+                                               df_ne.to_csv(index=False).encode("utf-8-sig"),
+                                               file_name="pns_nao_encontrados.csv", mime="text/csv",
+                                               key="dl_ne")
+                    if res_p["pns_duplicados_planilha"]:
+                        st.warning("PNs duplicados na planilha (mantém a última ocorrência): "
+                                   + ", ".join(res_p["pns_duplicados_planilha"][:20]))
+                    st.warning("Confira os números acima e clique em **Aplicar** para gravar.")
+                    if st.button("✅ Aplicar atualização", type="primary", key="btn_apply_neidson"):
+                        ok_a, res_a = importar_inventario_neidson(arq_neidson, nome_p, dry_run=False)
+                        if ok_a:
+                            st.success(f"Importação concluída — atualizados: {res_a['atualizados']} | "
+                                       f"ignorados: {res_a['ignorados']}.")
+                            st.session_state.pop("prev_neidson", None)
+                            time.sleep(1.5)
+                            st.rerun()
+                        else:
+                            st.error(res_a.get("erro", "Falha na importação."))
+        st.markdown("<br>", unsafe_allow_html=True)
 
     # Definição das categorias de listas
     LISTAS_CONFIG = {
