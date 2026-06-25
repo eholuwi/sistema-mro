@@ -1,243 +1,78 @@
-# MRO Inventus Power v2.0.0
+# MRO Inventus Power — Sistema Atualizado
 
-## Sistema Inteligente de Gestão MRO, Compras e Rastreabilidade Operacional
+Aplicação Streamlit para gestão de materiais MRO, compras e inventário operacional.
 
-O **MRO Inventus Power** é uma plataforma desenvolvida para centralizar a gestão de materiais de manutenção, reparo e operação (MRO), eliminando dependência de planilhas paralelas e trazendo inteligência operacional para estoque, inventário e compras.
+## Visão geral
 
-A versão **2.0.0** representa a evolução do sistema para uma arquitetura orientada à tomada de decisão, com foco em:
+O código atual está em `2.0.2/sistema-mro/`.
+A aplicação utiliza Streamlit para interface e SQLite para persistência local.
 
-* prevenção de ruptura
-* rastreabilidade operacional
-* gestão inteligente de SCs
-* controle de inventário
-* integração logística
-* governança de dados
+## Arquivos principais
 
----
+- `app.py` — interface Streamlit, navegação e páginas do aplicativo.
+- `database.py` — criação do banco SQLite, migrações, seeds e índices.
+- `services/db_functions.py` — regras de negócio, operações de inventário, SC, requisições e movimentações.
+- `services/constants.py` — constantes de domínio.
+- `services/logging_config.py` — configuração de logging.
+- `services/styles.py` — injeção de estilo visual.
+- `tests/` — casos de teste com `pytest`.
 
-# 🚀 Principais Objetivos
+## Como executar
 
-* Evitar paradas de linha por falta de material
-* Centralizar o fluxo de compras e inventário
-* Automatizar cálculos operacionais
-* Garantir rastreabilidade completa
-* Reduzir erros humanos e inconsistências
-* Transformar dados operacionais em inteligência logística
+1. Navegue até `2.0.2/sistema-mro/`.
+2. Crie e ative o ambiente virtual.
+3. Instale dependências com:
 
----
+```powershell
+pip install -r requirements.txt
+```
 
-# 🧠 Principais Recursos
+4. Execute a aplicação com:
 
-## 📊 Dashboard Inteligente
+```powershell
+streamlit run app.py
+```
 
-O Dashboard opera como uma central de decisão operacional.
+## Banco de dados local
 
-### Recursos:
+- O arquivo SQLite `mro.db` é criado automaticamente na mesma pasta.
+- `database.py` habilita `PRAGMA journal_mode = WAL` para melhor comportamento de escrita/leitura.
+- A migração de esquema é feita de forma não-destrutiva com `PRAGMA table_info` e `ALTER TABLE ADD COLUMN`.
 
-* KPIs de estoque
-* Itens críticos
-* Cobertura real de estoque
-* SCs com ação pendente
-* Pendências de inventário
-* Histórico operacional
-* Analytics de ruptura
+## Páginas da aplicação
 
-### Cobertura Real
+- Dashboard
+- Inventário
+- Gerenciar Itens (inclui edição e alteração de Part Number com histórico)
+- Movimentações
+- Requisição
+- Compras (SC)
+- Feedback (sugestões e backlog)
+- Configurações (inclui importação da base: Tipo, Mínimo, Máximo, Lead Time)
 
-O sistema calcula automaticamente:
+## Observações
+
+- Versão atual: `2.1.0` (cabeçalho e sidebar atualizados). Ver `changelog/2.1.0.md`.
+- A arquitetura atual é monolítica; a lógica de negócio está concentrada em `services/db_functions.py` e parte dela permanece em `app.py`.
+- A pasta `.agents/` e `.claude/` são artefatos de ferramenta/IDE e não fazem parte do fluxo de execução do sistema.
+
+## Estrutura do projeto
 
 ```text
-(Estoque Atual + Estoque em Trânsito) / Consumo Diário
+2.0.2/sistema-mro/
+  ├── app.py
+  ├── database.py
+  ├── requirements.txt
+  ├── requirements-dev.txt
+  ├── pytest.ini
+  ├── services/
+  │   ├── constants.py
+  │   ├── db_functions.py
+  │   ├── logging_config.py
+  │   └── styles.py
+  └── tests/
 ```
 
-Com base no Lead Time, o sistema identifica:
-
-* 🔴 risco de ruptura
-* 🟡 atenção operacional
-* 🟢 estoque seguro
-
----
-
-# 🧾 Gestão Inteligente de Compras (SC)
-
-A versão 2.0 introduz uma separação completa entre:
-
-* saúde do estoque
-* fluxo administrativo da compra
-
-## Status Material
-
-Representa a condição física do estoque:
-
-* 🟢 OK
-* 🟡 ATENÇÃO
-* 🔴 COMPRAR
-
-## Status SC
-
-Representa o andamento da compra:
-
-* 📢 Aprovação
-* ⚠️ Cotação
-* 🚚 Aguardando Entrega
-* ✅ Concluída
-
----
-
-## 📦 Estoque em Trânsito
-
-O sistema calcula automaticamente:
-
-* saldo residual
-* recebimentos parciais
-* materiais ainda pendentes
-
-Isso evita:
-
-* compras duplicadas
-* excesso de estoque
-* falso alerta de ruptura
-
----
-
-# 🔄 Inventário & Rastreabilidade
-
-## Controle de Localização
-
-Cada item pode possuir:
-
-* Local
-* Caixa/ID
-* Histórico de movimentação
-
-## Registro Inteligente
-
-Toda alteração de localização gera histórico automático:
-
-```text
-20 UN ARM 12 → MRO 20
-```
-
----
-
-## Integridade de Dados
-
-Movimentações de localização sem alteração de quantidade:
-
-* não afetam curva ABC
-* não afetam consumo médio
-* não distorcem analytics
-
----
-
-# 📈 Inteligência Operacional
-
-## Previsão de Ruptura
-
-Cálculo automático:
-
-```text
-estoque_atual / consumo_diario
-```
-
-Permite prever quantos dias restam até ruptura.
-
----
-
-## Priorização Automática
-
-O sistema identifica palavras críticas durante importações:
-
-* parada
-* urgente
-* crítica
-* linha
-
-E eleva automaticamente o item para:
-
-```text
-🔴 Parada de Linha
-```
-
----
-
-# 🔗 Integração com ERP (Protheus)
-
-O módulo de importação realiza:
-
-* normalização de textos
-* remoção de acentos
-* padronização de nomenclatura
-* prevenção de itens duplicados
-
----
-
-# ⚙️ Arquitetura Técnica
-
-## Stack Tecnológica
-
-| Camada         | Tecnologia            |
-| -------------- | --------------------- |
-| Backend        | Python 3.8+           |
-| Interface      | Streamlit             |
-| Banco de Dados | SQLite                |
-| Visualização   | Plotly                |
-| Navegação      | streamlit-option-menu |
-
----
-
-## Performance & Robustez
-
-### SQLite WAL Mode
-
-```sql
-PRAGMA journal_mode = WAL;
-```
-
-Permite:
-
-* múltiplas leituras simultâneas
-* redução de bloqueio de escrita
-* maior estabilidade multiusuário
-
----
-
-## Integridade Referencial
-
-```sql
-PRAGMA foreign_keys = ON;
-```
-
-Evita:
-
-* registros órfãos
-* inconsistência de movimentações
-* falhas de relacionamento
-
----
-
-# 📂 Estrutura do Projeto
-
-```text
-├── app.py
-├── database.py
-├── services/
-│   └── db_functions.py
-├── requirements.txt
-├── mro.db
-```
-
-## Arquivos Principais
-
-### `app.py`
-
-Responsável pela interface, navegação e renderização.
-
-### `database.py`
-
-Gerencia:
-
-* conexão SQLite
 * schema
 * migrações
 * pragmas
