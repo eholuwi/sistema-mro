@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import logging
+from datetime import datetime
 from contextlib import contextmanager
 
 DB_PATH = "mro.db"
@@ -229,6 +230,52 @@ def criar_banco():
         )
     """)
 
+    # ── Fase 1 / v2.1.0 — novas tabelas (criação não-destrutiva) ──────────────
+
+    # Item 1: auditoria de cargas em lote (ex.: base do Neidson)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS log_importacoes (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            tipo            TEXT NOT NULL,
+            arquivo         TEXT,
+            data_hora       TEXT DEFAULT CURRENT_TIMESTAMP,
+            total_planilha  INTEGER DEFAULT 0,
+            atualizados     INTEGER DEFAULT 0,
+            ignorados       INTEGER DEFAULT 0,
+            detalhe_json    TEXT
+        )
+    """)
+
+    # Item 2: histórico de alteração de Part Number (rastreabilidade PN antigo↔novo)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS part_numbers_historico (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id     INTEGER NOT NULL,
+            pn_antigo   TEXT NOT NULL,
+            pn_novo     TEXT NOT NULL,
+            data_hora   TEXT DEFAULT CURRENT_TIMESTAMP,
+            usuario     TEXT,
+            motivo      TEXT,
+            FOREIGN KEY (item_id) REFERENCES inventario(id) ON DELETE CASCADE
+        )
+    """)
+
+    # Item 3: formulário de sugestões/feedback dos usuários
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS feedbacks (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            data_hora      TEXT DEFAULT CURRENT_TIMESTAMP,
+            tipo           TEXT NOT NULL,
+            titulo         TEXT NOT NULL,
+            descricao      TEXT,
+            autor          TEXT,
+            pagina_origem  TEXT,
+            status         TEXT DEFAULT 'Novo',
+            prioridade     TEXT,
+            resposta       TEXT
+        )
+    """)
+
     cols_sc = {r[1] for r in conn.execute("PRAGMA table_info(solicitacoes_compra)")}
     novas_cols_sc = {
         "solicitante": "TEXT",
@@ -268,12 +315,16 @@ def criar_banco():
     c.execute("CREATE INDEX IF NOT EXISTS idx_mov_item    ON movimentacoes(item_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_mov_data    ON movimentacoes(data_hora)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_itens_sc_sc ON itens_sc(sc_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_pnhist_item ON part_numbers_historico(item_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_pnhist_antigo ON part_numbers_historico(pn_antigo)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedbacks(status)")
 
     conn.commit()
     _migrar(conn)
+    _migrar_inventario_tipo_livre(conn)
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.0.2")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.1.0")
 
 
 def _migrar(conn):
@@ -293,6 +344,118 @@ def _migrar(conn):
         logger.info("  ↳ Migração: numero_po em itens_sc adicionada.")
 
     conn.commit()
+
+
+def _backup_db(sufixo="pre-migracao"):
+    """Copia mro.db para um arquivo .bak com timestamp antes de migração destrutiva.
+    Faz checkpoint do WAL para garantir que o arquivo principal esteja atualizado.
+    Não falha a migração se o backup não puder ser feito (apenas loga)."""
+    import shutil
+    try:
+        if not os.path.exists(DB_PATH):
+            return None
+        cp = sqlite3.connect(DB_PATH, timeout=5.0)
+        cp.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        cp.close()
+        carimbo = datetime.now().strftime("%Y%m%d-%H%M%S")
+        destino = f"{DB_PATH}.bak-{carimbo}-{sufixo}"
+        shutil.copy2(DB_PATH, destino)
+        logger.info("  ↳ Backup do banco criado: %s", destino)
+        return destino
+    except Exception as e:
+        logger.warning("  ↳ Não foi possível criar backup automático: %s", e)
+        return None
+
+
+def _migrar_inventario_tipo_livre(conn):
+    """Migração v2.1.0 (Item 1): libera tipo_material (remove CHECK) e adiciona
+    estoque_maximo. Como SQLite não remove CHECK via ALTER, faz rebuild seguro da
+    tabela (procedimento oficial de 12 passos), preservando ids e FKs por item_id.
+
+    Guarda: só executa se o CHECK em tipo_material ainda existir. Idempotente.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='inventario'"
+    ).fetchone()
+    if not row or not row[0]:
+        return
+    sql_atual = row[0]
+    # Se o CHECK de tipo_material não está mais presente, a migração já rodou.
+    if "tipo_material" not in sql_atual or "CHECK(tipo_material" not in sql_atual.replace(" ", "").replace("CHECK (", "CHECK("):
+        # Garante apenas que estoque_maximo exista (caso de schema já sem CHECK).
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(inventario)")}
+        if "estoque_maximo" not in cols:
+            conn.execute("ALTER TABLE inventario ADD COLUMN estoque_maximo REAL DEFAULT 0")
+            conn.commit()
+            logger.info("  ↳ Migração: estoque_maximo adicionada em inventario.")
+        return
+
+    logger.info("  ↳ Migração v2.1.0: rebuild de inventario (tipo_material livre + estoque_maximo)...")
+    _backup_db("inventario-rebuild")
+
+    # Colunas preservadas (mesma ordem do schema original), copiadas 1:1.
+    cols_orig = [
+        "id", "part_number", "nome_item", "descricao", "unidade", "importancia",
+        "tipo_material", "setor_responsavel", "local_armazenagem", "caixa_identificacao",
+        "estoque_atual", "estoque_minimo", "estoque_seguranca", "consumo_medio_diario",
+        "lead_time_dias", "previsao_ruptura_dias", "ultima_sc_id", "data_inventario",
+        "data_criacao", "data_atualizacao",
+    ]
+    lista_cols = ", ".join(cols_orig)
+
+    conn.commit()                       # garante que não há transação aberta
+    iso_anterior = conn.isolation_level
+    conn.isolation_level = None         # autocommit: permite toggle de foreign_keys
+    try:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN")
+        conn.execute("""
+            CREATE TABLE inventario_new (
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                part_number           TEXT UNIQUE NOT NULL,
+                nome_item             TEXT NOT NULL,
+                descricao             TEXT,
+                unidade               TEXT CHECK(unidade IN ('GL','UN','CX','RL','PCT','LT','RM')),
+                importancia           TEXT CHECK(importancia IN ('Parada de Linha','Importante','Admin')),
+                tipo_material         TEXT,
+                setor_responsavel     TEXT CHECK(setor_responsavel IN ('Improdutivo','Engenharia de SMT','LED DRIVER','MANUTENÇÃO','PRODUÇÃO','QUALIDADE','ALMOXARIFADO','ADMINISTRATIVO','SESMT')),
+                local_armazenagem     TEXT,
+                caixa_identificacao   TEXT,
+                estoque_atual         REAL DEFAULT 0,
+                estoque_minimo        REAL DEFAULT 0,
+                estoque_maximo        REAL DEFAULT 0,
+                estoque_seguranca     REAL DEFAULT 0,
+                consumo_medio_diario  REAL DEFAULT 0,
+                lead_time_dias        INTEGER DEFAULT 0,
+                previsao_ruptura_dias REAL DEFAULT 999,
+                ultima_sc_id          INTEGER,
+                data_inventario       TEXT,
+                data_criacao          TEXT DEFAULT CURRENT_TIMESTAMP,
+                data_atualizacao      TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (ultima_sc_id) REFERENCES solicitacoes_compra(id)
+            )
+        """)
+        conn.execute(
+            f"INSERT INTO inventario_new ({lista_cols}) SELECT {lista_cols} FROM inventario"
+        )
+        conn.execute("DROP TABLE inventario")
+        conn.execute("ALTER TABLE inventario_new RENAME TO inventario")
+        problemas = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if problemas:
+            conn.execute("ROLLBACK")
+            raise RuntimeError(f"foreign_key_check falhou no rebuild de inventario: {problemas}")
+        conn.execute("COMMIT")
+        conn.execute("PRAGMA foreign_keys=ON")
+        logger.info("  ↳ Rebuild de inventario concluído com sucesso (FKs íntegras).")
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        conn.execute("PRAGMA foreign_keys=ON")
+        raise
+    finally:
+        conn.isolation_level = iso_anterior
 
 
 if __name__ == "__main__":

@@ -1,7 +1,9 @@
 # Database
 mro.db
+mro.db.bak-*
 *.db-journal
 *.db-wal
+*.db-shm
 
 # Python
 __pycache__/
