@@ -28,7 +28,9 @@ def test_exportar_movimentacoes_vazio(db):
 
 
 def test_exportar_movimentacoes_com_dados(db, make_item):
-    item_id = make_item("PN-EXP2", estoque=100)
+    # v2.2.0: item criado com estoque inicial gera 1 movimentação de "Saldo inicial"
+    # (integridade do ledger). Aqui partimos de estoque 0 para isolar o movimento explícito.
+    item_id = make_item("PN-EXP2", estoque=0)
     F.registrar_movimentacao(item_id, "entrada", 50, CC, "Joao", "Joao")
     df = F.exportar_movimentacoes_df()
     assert len(df) == 1
@@ -37,7 +39,7 @@ def test_exportar_movimentacoes_com_dados(db, make_item):
 
 
 def test_exportar_movimentacoes_filtro_que_casa(db, make_item):
-    item_id = make_item("PN-EXP3", estoque=100)
+    item_id = make_item("PN-EXP3", estoque=0)
     F.registrar_movimentacao(item_id, "entrada", 50, CC, "Joao", "Joao")
     df = F.exportar_movimentacoes_df(item_id=item_id, tipos_selecionados=["entrada"])
     assert len(df) == 1

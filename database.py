@@ -1,11 +1,24 @@
 import sqlite3
 import os
+import re
+import unicodedata
 import logging
 from datetime import datetime
 from contextlib import contextmanager
 
 DB_PATH = "mro.db"
 logger = logging.getLogger(__name__)
+
+
+def _normalizar_nome(valor):
+    """Normalização de nome idêntica a services.db_functions._normalizar_txt
+    (NFKD, remove acentos, minúsculo, colapsa espaços). Duplicada aqui de forma
+    intencional para que database.py não dependa de services (evita import cíclico)."""
+    if valor is None:
+        return ""
+    texto = unicodedata.normalize("NFKD", str(valor).strip())
+    texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", texto).lower()
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH, timeout=5.0)
@@ -276,6 +289,98 @@ def criar_banco():
         )
     """)
 
+    # ── v2.2.0 — Ingestão & Fundação de Dados (criação não-destrutiva) ─────────
+
+    # Histórico de preços por item (alimentado por SCM/SC7 do Relatório de SCs).
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS precos_historico (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id        INTEGER NOT NULL,
+            data           TEXT,
+            preco_unitario REAL,
+            moeda          TEXT,
+            fornecedor     TEXT,
+            numero_sc      TEXT,
+            numero_po      TEXT,
+            origem         TEXT,
+            data_registro  TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (item_id) REFERENCES inventario(id) ON DELETE CASCADE
+        )
+    """)
+
+    # Cadastro mestre de fornecedores (aba FORNECEDORES / Protheus SA1).
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS fornecedores (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo            TEXT NOT NULL,
+            loja              TEXT,
+            razao_social      TEXT,
+            nome_fantasia     TEXT,
+            cnpj              TEXT,
+            email             TEXT,
+            telefone          TEXT,
+            contato           TEXT,
+            cond_pagto        TEXT,
+            ativo             INTEGER DEFAULT 1,
+            ultima_importacao TEXT,
+            UNIQUE(codigo, loja)
+        )
+    """)
+
+    # Relação material↔fornecedor (último preço/lead time observados → "melhor fornecedor").
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS fornecedor_item (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id            INTEGER NOT NULL,
+            fornecedor_codigo  TEXT,
+            fornecedor_loja    TEXT,
+            fornecedor_nome    TEXT,
+            ultimo_preco       REAL,
+            ultimo_lead_time   INTEGER,
+            ultima_data        TEXT,
+            FOREIGN KEY (item_id) REFERENCES inventario(id) ON DELETE CASCADE,
+            UNIQUE(item_id, fornecedor_codigo, fornecedor_loja)
+        )
+    """)
+
+    # Solicitantes MRO (dinâmico, da aba SCM USERS). Substitui a constante fixa
+    # SOLICITANTES_MRO: quem tem incluir_mro=1 é considerado no escopo MRO.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS solicitantes_mro (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome         TEXT NOT NULL,
+            nome_norm    TEXT NOT NULL UNIQUE,
+            departamento TEXT,
+            gerente      TEXT,
+            aprovador    TEXT,
+            status       TEXT,
+            incluir_mro  INTEGER DEFAULT 0,
+            data_registro TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Foto diária do saldo por item → base p/ estoque médio, giro, tempo em estoque
+    # e evolução do valor imobilizado (decisão rev.3 do blueprint).
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS estoque_snapshots (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id       INTEGER NOT NULL,
+            data          TEXT NOT NULL,
+            estoque_atual REAL,
+            valor_estoque REAL,
+            FOREIGN KEY (item_id) REFERENCES inventario(id) ON DELETE CASCADE,
+            UNIQUE(item_id, data)
+        )
+    """)
+
+    # Seed dos solicitantes MRO atuais (mesmos 3 da antiga constante SOLICITANTES_MRO).
+    for _nome in ("Jasiva Lopes", "Luis Gabriel Arruda de Oliveira", "Sidinei Correa Alfon"):
+        _norm = _normalizar_nome(_nome)
+        c.execute(
+            "INSERT OR IGNORE INTO solicitantes_mro (nome, nome_norm, incluir_mro) VALUES (?,?,1)",
+            (_nome, _norm),
+        )
+
     cols_sc = {r[1] for r in conn.execute("PRAGMA table_info(solicitacoes_compra)")}
     novas_cols_sc = {
         "solicitante": "TEXT",
@@ -303,6 +408,10 @@ def criar_banco():
         "ruptura": "INTEGER DEFAULT 0",
         "divergencia_compra": "INTEGER DEFAULT 0",
         "ultima_importacao": "TEXT",
+        # v2.2.0 — pilar financeiro (captura de preço do Relatório de SCs / SC7)
+        "preco_unitario": "REAL DEFAULT 0",
+        "valor_total": "REAL DEFAULT 0",
+        "moeda": "TEXT",
     }
     for col, tipo in novas_cols_isc.items():
         if col not in cols_isc:
@@ -318,13 +427,37 @@ def criar_banco():
     c.execute("CREATE INDEX IF NOT EXISTS idx_pnhist_item ON part_numbers_historico(item_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_pnhist_antigo ON part_numbers_historico(pn_antigo)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedbacks(status)")
+    # v2.2.0 — índices de apoio à ingestão rica e às novas telas
+    c.execute("CREATE INDEX IF NOT EXISTS idx_itens_sc_item ON itens_sc(item_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sc_status     ON solicitacoes_compra(status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_precos_item   ON precos_historico(item_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_forn_cod_loja ON fornecedores(codigo, loja)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_snap_item_data ON estoque_snapshots(item_id, data)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_forn_item     ON fornecedor_item(item_id)")
 
     conn.commit()
     _migrar(conn)
     _migrar_inventario_tipo_livre(conn)
+
+    # v2.2.0 — novas colunas de inventario. Executado APÓS o rebuild de
+    # _migrar_inventario_tipo_livre (que recria a tabela com um conjunto fixo de
+    # colunas); do contrário estas colunas seriam descartadas no rebuild.
+    # preco_referencia/data_preco_ref: valoração; estoque_seguranca_calculado:
+    # sugestão (o estoque_seguranca passa a ser parâmetro MANUAL do gestor).
+    cols_inv0 = {r[1] for r in conn.execute("PRAGMA table_info(inventario)")}
+    for col, tipo in {
+        "preco_referencia": "REAL DEFAULT 0",
+        "data_preco_ref": "TEXT",
+        "estoque_seguranca_calculado": "REAL DEFAULT 0",
+    }.items():
+        if col not in cols_inv0:
+            conn.execute(f"ALTER TABLE inventario ADD COLUMN {col} {tipo}")
+            logger.info("  -> Migracao: %s em inventario adicionada.", col)
+    conn.commit()
+
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.1.0")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.2.0")
 
 
 def _migrar(conn):

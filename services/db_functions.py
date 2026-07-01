@@ -5,6 +5,7 @@ from database import transaction
 from services.constants import (
     MARGEM_ATENCAO, FATOR_ESTOQUE_MAXIMO, FATOR_ESTOQUE_SEGURANCA,
     JANELA_CONSUMO_DIAS, PREVISAO_RUPTURA_SEM_RISCO,
+    SNAPSHOT_RETENCAO_DIAS, RELATORIO_SCS_ABAS, decodificar_moeda,
 )
 import pandas as pd
 
@@ -21,6 +22,24 @@ SOLICITANTES_MRO = {
 }
 
 PALAVRAS_CRITICAS = ("parada", "critico", "critica", "urgente", "linha")
+
+
+def _solicitantes_mro_norm(conn):
+    """Conjunto de nomes normalizados no escopo MRO.
+
+    v2.2.0: passa a ler da tabela `solicitantes_mro` (incluir_mro=1), tornando o
+    filtro dinâmico. Faz fallback para a constante SOLICITANTES_MRO se a tabela
+    ainda não existir ou estiver vazia (compatibilidade)."""
+    try:
+        rows = conn.execute(
+            "SELECT nome_norm FROM solicitantes_mro WHERE incluir_mro=1"
+        ).fetchall()
+        nomes = {r[0] for r in rows if r[0]}
+        if nomes:
+            return nomes
+    except Exception:
+        pass
+    return set(SOLICITANTES_MRO)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -115,8 +134,9 @@ def listar_inventario():
         COALESCE((
             SELECT SUM(COALESCE(isc.saldo_residual, 0))
             FROM itens_sc isc
-            WHERE isc.sc_id = i.ultima_sc_id
-            AND isc.item_id = i.id
+            JOIN solicitacoes_compra s2 ON s2.id = isc.sc_id
+            WHERE isc.item_id = i.id
+            AND s2.status NOT IN ('Recebido','Cancelado')
         ), 0) AS estoque_em_transito
         FROM inventario i
         LEFT JOIN solicitacoes_compra sc ON sc.id = i.ultima_sc_id
@@ -179,13 +199,33 @@ def buscar_item_por_id(item_id):
         r = conn.execute("SELECT * FROM inventario WHERE id=?",(item_id,)).fetchone()
     return dict(r) if r else None
 
+def _mov_inline(conn, item_id, tipo, quantidade, saldo_apos, observacao, agora,
+                centro_custo="EDIÇÃO", responsavel="Sistema"):
+    """Insere uma movimentação usando a conexão/transação CORRENTE (sem abrir
+    outra). v2.2.0: mantém o ledger contínuo (saldo_apos) quando o saldo muda
+    fora de registrar_movimentacao — ex.: saldo inicial no cadastro. Evita as
+    'quebras' de continuidade observadas no histórico."""
+    conn.execute("""
+        INSERT INTO movimentacoes
+            (item_id,tipo,quantidade,saldo_apos,data_hora,
+             centro_custo,setor,solicitante,emitente,observacao)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+    """,(item_id,tipo,quantidade,saldo_apos,agora,
+         centro_custo,"",responsavel,responsavel,observacao))
+
+
 def salvar_item(part_number, nome_item, descricao, unidade, importancia,
                 tipo_material, setor, local, caixa,
                 estoque_atual, estoque_minimo, lead_time, item_id=None):
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
+        estoque_atual = float(estoque_atual or 0)
         with transaction() as conn:
             if item_id:
+                antigo = conn.execute(
+                    "SELECT estoque_atual FROM inventario WHERE id=?", (item_id,)
+                ).fetchone()
+                estoque_antigo = float(antigo["estoque_atual"] or 0) if antigo else 0.0
                 conn.execute("""
                     UPDATE inventario SET
                         part_number=?,nome_item=?,descricao=?,unidade=?,
@@ -196,8 +236,14 @@ def salvar_item(part_number, nome_item, descricao, unidade, importancia,
                 """,(part_number,nome_item,descricao,unidade,importancia,
                      tipo_material,setor,local,caixa,
                      estoque_atual,estoque_minimo,lead_time,agora,item_id))
+                # Integridade do ledger: se o saldo mudou pela edição, registra o
+                # delta como movimentação (evita alterar o saldo de forma "silenciosa").
+                delta = estoque_atual - estoque_antigo
+                if abs(delta) > 1e-9:
+                    _mov_inline(conn, item_id, "entrada" if delta > 0 else "saida",
+                                abs(delta), estoque_atual, "Ajuste via edição de item", agora)
             else:
-                conn.execute("""
+                cur = conn.execute("""
                     INSERT INTO inventario
                         (part_number,nome_item,descricao,unidade,importancia,
                          tipo_material,setor_responsavel,local_armazenagem,
@@ -205,6 +251,11 @@ def salvar_item(part_number, nome_item, descricao, unidade, importancia,
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                 """,(part_number,nome_item,descricao,unidade,importancia,
                      tipo_material,setor,local,caixa,estoque_atual,estoque_minimo,lead_time))
+                novo_id = cur.lastrowid
+                # Saldo inicial vira "entrada" → origem do ledger para snapshots/giro.
+                if estoque_atual > 0:
+                    _mov_inline(conn, novo_id, "entrada", estoque_atual, estoque_atual,
+                                "Saldo inicial (cadastro)", agora)
             _recalcular_ruptura_by_pn(conn, part_number)
         return True,"Item salvo com sucesso."
     except sqlite3.IntegrityError:
@@ -235,10 +286,13 @@ def _recalcular_ruptura_by_pn(conn, part_number):
             return
         consumo = r["consumo_medio_diario"] or 0
         ruptura = (r["estoque_atual"]/consumo) if consumo > 0 else PREVISAO_RUPTURA_SEM_RISCO
-        seguranca = consumo*(r["lead_time_dias"] or 0)*FATOR_ESTOQUE_SEGURANCA
+        # v2.2.0: estoque_seguranca virou parâmetro MANUAL do gestor (entre mín e
+        # máx) e NÃO é mais sobrescrito aqui. Gravamos apenas a SUGESTÃO calculada
+        # (consumo × lead_time × 1,5) em estoque_seguranca_calculado.
+        seguranca_calc = consumo*(r["lead_time_dias"] or 0)*FATOR_ESTOQUE_SEGURANCA
         c.execute("""
-            UPDATE inventario SET previsao_ruptura_dias=?,estoque_seguranca=?,data_atualizacao=? WHERE id=?
-        """,(ruptura,seguranca,datetime.now().strftime("%Y-%m-%d %H:%M:%S"),r["id"]))
+            UPDATE inventario SET previsao_ruptura_dias=?,estoque_seguranca_calculado=?,data_atualizacao=? WHERE id=?
+        """,(ruptura,seguranca_calc,datetime.now().strftime("%Y-%m-%d %H:%M:%S"),r["id"]))
 
 def _recalcular_ruptura_by_id(conn, item_id):
     with transaction(conn) as c:
@@ -703,9 +757,10 @@ def importar_solicitacoes_protheus(arquivo_excel, nome_arquivo="Solicitacoes.xls
 
     try:
         with transaction() as conn:
+            solic_mro = _solicitantes_mro_norm(conn)
             for idx, row in df.iterrows():
                 solicitante = str(_valor(row, colunas["solicitante"], "")).strip()
-                if _normalizar_txt(solicitante) not in SOLICITANTES_MRO:
+                if _normalizar_txt(solicitante) not in solic_mro:
                     stats["linhas_ignoradas"] += 1
                     if len(ignorados) < 10:
                         ignorados.append({"linha": int(idx) + 2, "motivo": "Solicitante fora do escopo", "solicitante": solicitante})
@@ -1333,7 +1388,7 @@ def exportar_inventario_df():
         "estoque_minimo": "Mínimo",
         "estoque_maximo": "Máximo",
         "estoque_seguranca": "Segurança",
-        "estoque_em_transito": "Em Trânsito",
+        "estoque_em_transito": "Guarda-Chuva",
         "consumo_medio_diario": "Consumo/Dia",
         "lead_time_dias": "Lead Time(d)",
         "previsao_ruptura_dias": "Ruptura(d)",
@@ -1462,7 +1517,9 @@ def atualizar_item_inventario(item_id, dados_atualizados):
             allowed_fields = [
                 "nome_item", "descricao", "unidade", "tipo_material", "importancia",
                 "estoque_minimo", "estoque_maximo", "lead_time_dias", "local_armazenagem",
-                "caixa_identificacao", "consumo_medio_diario", "setor_responsavel"
+                "caixa_identificacao", "consumo_medio_diario", "setor_responsavel",
+                # v2.2.0 — estoque de segurança agora é MANUAL (parâmetro do gestor)
+                "estoque_seguranca",
             ]
             for key in allowed_fields:
                 if key in dados_atualizados:
@@ -1730,4 +1787,488 @@ def obter_analitico_rupturas(days=90):
         })
         
     return pd.DataFrame(data) if data else pd.DataFrame(columns=["part_number", "nome_item", "qtd_rupturas", "ultima_ocorrencia"])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v2.2.0 — GUARDA-CHUVA & SNAPSHOTS DE ESTOQUE
+# ══════════════════════════════════════════════════════════════════════════════
+
+def calcular_guarda_chuva(item_id, conn=None):
+    """Guarda-Chuva (termo do comprador Miguel): quantidade já negociada que ainda
+    falta ser entregue = Σ saldo_residual dos itens em SCs ABERTAS do material.
+
+    v2.2.0: soma TODAS as SCs abertas do item (a versão anterior considerava só a
+    última SC via ultima_sc_id, subestimando o valor)."""
+    with transaction(conn) as c:
+        r = c.execute("""
+            SELECT COALESCE(SUM(COALESCE(isc.saldo_residual, 0)), 0) AS gc
+            FROM itens_sc isc
+            JOIN solicitacoes_compra s ON s.id = isc.sc_id
+            WHERE isc.item_id = ?
+              AND s.status NOT IN ('Recebido', 'Cancelado')
+        """, (item_id,)).fetchone()
+    return float(r["gc"] or 0)
+
+
+def tirar_snapshot_estoque(conn=None, data=None):
+    """Grava uma 'foto' diária do saldo de cada item (idempotente por dia).
+
+    valor_estoque = estoque_atual × preco_referencia. Base para estoque médio,
+    giro, tempo em estoque e evolução do valor imobilizado (v2.2.1+). Sem
+    scheduler: chamado na 1ª abertura do app no dia e ao fim do import.
+    Retorna o nº de fotos criadas (0 se já havia foto de hoje)."""
+    dia = data or datetime.now().strftime("%Y-%m-%d")
+    criados = 0
+    with transaction(conn) as c:
+        ja = c.execute(
+            "SELECT 1 FROM estoque_snapshots WHERE data=? LIMIT 1", (dia,)
+        ).fetchone()
+        if ja:
+            return 0
+        rows = c.execute(
+            "SELECT id, estoque_atual, preco_referencia FROM inventario"
+        ).fetchall()
+        for r in rows:
+            est = float(r["estoque_atual"] or 0)
+            preco = float(r["preco_referencia"] or 0)
+            c.execute("""
+                INSERT OR IGNORE INTO estoque_snapshots
+                    (item_id, data, estoque_atual, valor_estoque)
+                VALUES (?,?,?,?)
+            """, (r["id"], dia, est, est * preco))
+            criados += 1
+        # Retenção: descarta fotos além da janela configurada.
+        c.execute(
+            "DELETE FROM estoque_snapshots WHERE data < date('now', ?)",
+            (f"-{SNAPSHOT_RETENCAO_DIAS} days",),
+        )
+    return criados
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v2.2.0 — INGESTÃO DO "RELATÓRIO DE SCs" (multi-aba)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _codigo_txt(valor):
+    """Normaliza códigos numéricos vindos do Excel (ex.: 1.0 -> '1', '14901.0' ->
+    '14901'); mantém textos como estão. Retorna '' para vazio/NaN."""
+    if valor is None:
+        return ""
+    try:
+        if pd.isna(valor):
+            return ""
+    except Exception:
+        pass
+    if isinstance(valor, float) and valor.is_integer():
+        return str(int(valor))
+    s = str(valor).strip()
+    if s.endswith(".0") and s[:-2].isdigit():
+        s = s[:-2]
+    return s
+
+
+def _log_importacao(conn, tipo, arquivo, total, atualizados, ignorados, detalhe):
+    conn.execute("""
+        INSERT INTO log_importacoes
+            (tipo, arquivo, total_planilha, atualizados, ignorados, detalhe_json)
+        VALUES (?,?,?,?,?,?)
+    """, (tipo, arquivo, int(total), int(atualizados), int(ignorados),
+          json.dumps(detalhe, ensure_ascii=False)))
+
+
+def _sheet_df(xls, nome, header):
+    try:
+        return xls.parse(nome, header=header)
+    except Exception as e:
+        logger.warning("Falha ao ler aba %s: %s", nome, e)
+        return None
+
+
+def importar_relatorio_scs(arquivo_excel, nome_arquivo="Relatorio de SCs.xlsx"):
+    """Roteador de ingestão do 'Relatório de SCs' (planilha diária dos compradores).
+
+    Lê cada aba conhecida (SCM/SC7/FORNECEDORES/SCM USERS) com o cabeçalho correto
+    e chama o ingestor dedicado. Upsert + histórico preservado (a planilha é
+    cumulativa, então nada é apagado). Faz backup automático antes e tira o
+    snapshot diário ao final. Retorna (ok, {aba: stats, ...})."""
+    try:
+        xls = pd.ExcelFile(arquivo_excel)
+    except Exception as e:
+        return False, {"erro": f"Não foi possível abrir a planilha: {e}"}
+
+    try:
+        from database import _backup_db
+        _backup_db("relatorio-scs")
+    except Exception:
+        pass
+
+    disponiveis = set(xls.sheet_names)
+    resultados = {}
+    ingestores = {
+        "SCM": ingerir_scm,
+        "SC7": ingerir_sc7_precos,
+        "FORNECEDORES": ingerir_fornecedores,
+        "SCM USERS": ingerir_scm_users,
+    }
+    for aba, func in ingestores.items():
+        if aba in disponiveis:
+            df = _sheet_df(xls, aba, RELATORIO_SCS_ABAS.get(aba, 0))
+            resultados[aba] = func(df, nome_arquivo)
+        else:
+            resultados[aba] = {"erro": "Aba ausente na planilha."}
+
+    try:
+        resultados["_snapshot_criados"] = tirar_snapshot_estoque()
+    except Exception as e:
+        logger.warning("Falha ao tirar snapshot pós-import: %s", e)
+
+    ok = any(isinstance(v, dict) and not v.get("erro") for v in resultados.values())
+    return ok, resultados
+
+
+def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
+    """Ingestor da aba SCM: upsert de SCs/itens_sc + captura de preço.
+    Reusa o filtro de solicitantes (dinâmico) e a semântica do importador Protheus,
+    mas com o mapeamento de colunas da aba SCM e as colunas de preço."""
+    if df is None or df.empty:
+        return {"erro": "Aba SCM vazia ou ausente."}
+    colunas = {
+        "numero_sc":        _coluna(df, ["SC", "Numero da Solicitacao", "Número da Solicitação"]),
+        "descricao_sc":     _coluna(df, ["Descrição da Solicitação", "Descricao da Solicitacao"]),
+        "status":           _coluna(df, ["Status"]),
+        "justificativa":    _coluna(df, ["Justificativa/Projeto", "Justificativa", "Projeto"]),
+        "solicitante":      _coluna(df, ["Solicitante"]),
+        "produto":          _coluna(df, ["Produto", "Partnumber", "Part Number"]),
+        "descricao_item":   _coluna(df, ["Descrição", "Descricao", "Descricao Detalhada", "Nome do item"]),
+        "quantidade":       _coluna(df, ["Qty", "Quantidade"]),          # Qty = qtd da SC (aba SCM)
+        "data_necessidade": _coluna(df, ["Data Necessidade"]),
+        "emissao":          _coluna(df, ["Emissão", "Emissao"]),
+        "aprovacao":        _coluna(df, ["Aprovação", "Aprovacao", "Data de aprovação"]),
+        "pedido":           _coluna(df, ["Pedido", "Numero PC", "Número PC"]),
+        "qtd_pedido":       _coluna(df, ["Quantidade"]),                 # Quantidade = qtd do PO (aba SCM)
+        "qtd_entregue":     _coluna(df, ["Qtd.Entregue", "Qtd Entregue"]),
+        "fornecedor":       _coluna(df, ["Nome Fantasia"]),
+        "previsao_nfe":     _coluna(df, ["Previsão NFe", "Previsao NFe"]),
+        "documento":        _coluna(df, ["Documento"]),
+        "preco_unitario":   _coluna(df, ["Prc Unitario", "Preco Unitario", "Preço Unitário"]),
+        "valor_total":      _coluna(df, ["Vlr.Total", "Valor Total", "Vlr Total"]),
+        "moeda":            _coluna(df, ["Moeda"]),
+    }
+    faltantes = [n for n in ("numero_sc", "solicitante", "produto", "quantidade") if not colunas[n]]
+    if faltantes:
+        return {"erro": f"Colunas obrigatórias ausentes na aba SCM: {', '.join(faltantes)}"}
+
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    hoje = datetime.now().date()
+    stats = {"linhas_lidas": int(len(df)), "linhas_importadas": 0, "linhas_ignoradas": 0,
+             "scs_criadas": 0, "scs_atualizadas": 0, "precos_capturados": 0,
+             "rupturas": 0, "divergencias": 0, "criticos": 0}
+    ignorados = []
+    try:
+        with transaction() as conn:
+            solic_mro = _solicitantes_mro_norm(conn)
+            for idx, row in df.iterrows():
+                solicitante = str(_valor(row, colunas["solicitante"], "") or "").strip()
+                if _normalizar_txt(solicitante) not in solic_mro:
+                    stats["linhas_ignoradas"] += 1
+                    if len(ignorados) < 10:
+                        ignorados.append({"linha": int(idx) + 2, "motivo": "Solicitante fora do escopo", "solicitante": solicitante})
+                    continue
+
+                numero_sc = _codigo_txt(_valor(row, colunas["numero_sc"], ""))
+                part_number = str(_valor(row, colunas["produto"], "") or "").strip()
+                status_protheus = str(_valor(row, colunas["status"], "") or "").strip()
+
+                if _normalizar_txt(status_protheus) in ("rascunho", "rejeitado"):
+                    stats["linhas_ignoradas"] += 1
+                    continue
+                if _normalizar_txt(part_number) == "generico":
+                    stats["linhas_ignoradas"] += 1
+                    continue
+                if not numero_sc or not part_number:
+                    stats["linhas_ignoradas"] += 1
+                    continue
+
+                item = conn.execute(
+                    "SELECT id, importancia FROM inventario WHERE part_number=?", (part_number,)
+                ).fetchone()
+                if not item:
+                    stats["linhas_ignoradas"] += 1
+                    if len(ignorados) < 10:
+                        ignorados.append({"linha": int(idx) + 2, "motivo": "Item não cadastrado no MRO DB", "produto": part_number})
+                    continue
+                item_id = item["id"]
+
+                descricao_item = str(_valor(row, colunas["descricao_item"], part_number) or "").strip()
+                justificativa = str(_valor(row, colunas["justificativa"], "") or "").strip()
+                qtd_sc = _to_float(_valor(row, colunas["quantidade"], 0))
+                qtd_entregue = _to_float(_valor(row, colunas["qtd_entregue"], 0))
+                qtd_pedido = _to_float(_valor(row, colunas["qtd_pedido"], 0))
+                qtd_negociada = qtd_pedido or qtd_sc
+                saldo_residual = max(qtd_negociada - qtd_entregue, 0)
+                prioridade_critica = _tem_prioridade_critica(justificativa)
+                data_necessidade = _to_date_str(_valor(row, colunas["data_necessidade"], None))
+                ruptura = bool(data_necessidade and saldo_residual > 0 and datetime.strptime(data_necessidade, "%Y-%m-%d").date() < hoje)
+                divergencia = bool(qtd_pedido and abs(qtd_sc - qtd_pedido) > 0.0001)
+                status_item = "Recebido" if saldo_residual <= 0 else ("Parcial" if qtd_entregue > 0 else "Aberto")
+                status = _status_sc_importado(status_protheus, saldo_residual)
+                numero_po = str(_valor(row, colunas["pedido"], "") or "").strip()
+                fornecedor = str(_valor(row, colunas["fornecedor"], "") or "").strip()
+                data_prev = _to_date_str(_valor(row, colunas["previsao_nfe"], None))
+                data_abertura = _to_date_str(_valor(row, colunas["emissao"], None)) or hoje.strftime("%Y-%m-%d")
+                data_aprovacao = _to_date_str(_valor(row, colunas["aprovacao"], None))
+                descricao_sc = str(_valor(row, colunas["descricao_sc"], "") or "").strip()
+                documento = str(_valor(row, colunas["documento"], "") or "").strip() or None
+                preco_unit = _to_float(_valor(row, colunas["preco_unitario"], 0))
+                valor_total = _to_float(_valor(row, colunas["valor_total"], 0))
+                moeda_str = decodificar_moeda(_valor(row, colunas["moeda"], None))
+
+                if prioridade_critica and item["importancia"] != "Parada de Linha":
+                    conn.execute("UPDATE inventario SET importancia=?, data_atualizacao=? WHERE id=?",
+                                 ("Parada de Linha", agora, item_id))
+
+                sc = conn.execute("SELECT id FROM solicitacoes_compra WHERE numero_sc=?", (numero_sc,)).fetchone()
+                if sc:
+                    sc_id = sc["id"]
+                    conn.execute("""
+                        UPDATE solicitacoes_compra SET
+                            data_abertura=?, data_aprovacao=?, numero_po=?, fornecedor=?,
+                            data_prev_entrega=?, status=?, observacoes=?, solicitante=?,
+                            descricao_solicitacao=?, status_protheus=?, prioridade_critica=?,
+                            origem_importacao=?, data_importacao=?
+                        WHERE id=?
+                    """, (data_abertura, data_aprovacao, numero_po or None, fornecedor or None,
+                          data_prev, status, justificativa, solicitante, descricao_sc,
+                          status_protheus, 1 if prioridade_critica else 0, nome_arquivo, agora, sc_id))
+                    stats["scs_atualizadas"] += 1
+                else:
+                    cur = conn.execute("""
+                        INSERT INTO solicitacoes_compra
+                            (numero_sc,data_abertura,data_aprovacao,numero_po,fornecedor,
+                             data_prev_entrega,status,observacoes,solicitante,
+                             descricao_solicitacao,status_protheus,prioridade_critica,
+                             origem_importacao,data_importacao)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """, (numero_sc, data_abertura, data_aprovacao, numero_po or None, fornecedor or None,
+                          data_prev, status, justificativa, solicitante, descricao_sc,
+                          status_protheus, 1 if prioridade_critica else 0, nome_arquivo, agora))
+                    sc_id = cur.lastrowid
+                    stats["scs_criadas"] += 1
+
+                dados_item = (
+                    numero_po or None, qtd_sc, qtd_entregue, data_necessidade, justificativa,
+                    descricao_item, qtd_negociada, fornecedor or None, data_prev, documento,
+                    0, saldo_residual, status_item, 1 if ruptura else 0, 1 if divergencia else 0,
+                    agora, preco_unit, valor_total, moeda_str,
+                )
+                item_sc = conn.execute("SELECT id FROM itens_sc WHERE sc_id=? AND item_id=?", (sc_id, item_id)).fetchone()
+                if item_sc:
+                    conn.execute("""
+                        UPDATE itens_sc SET
+                            numero_po=?, quantidade_solicitada=?, quantidade_recebida=?,
+                            data_necessidade=?, observacao_item=?, descricao_detalhada=?,
+                            quantidade_pedido=?, fornecedor_item=?, data_prev_nfe=?, documento_nf=?,
+                            quantidade_nfe=?, saldo_residual=?, status_item=?, ruptura=?,
+                            divergencia_compra=?, ultima_importacao=?, preco_unitario=?,
+                            valor_total=?, moeda=?
+                        WHERE id=?
+                    """, (*dados_item, item_sc["id"]))
+                else:
+                    conn.execute("""
+                        INSERT INTO itens_sc
+                            (sc_id,item_id,numero_po,quantidade_solicitada,quantidade_recebida,
+                             data_necessidade,observacao_item,descricao_detalhada,quantidade_pedido,
+                             fornecedor_item,data_prev_nfe,documento_nf,quantidade_nfe,saldo_residual,
+                             status_item,ruptura,divergencia_compra,ultima_importacao,preco_unitario,
+                             valor_total,moeda)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """, (sc_id, item_id, *dados_item))
+
+                conn.execute("UPDATE inventario SET ultima_sc_id=? WHERE id=?", (sc_id, item_id))
+
+                if preco_unit > 0:
+                    conn.execute("UPDATE inventario SET preco_referencia=?, data_preco_ref=? WHERE id=?",
+                                 (preco_unit, data_abertura or agora, item_id))
+                    if numero_po:
+                        existe = conn.execute(
+                            "SELECT id FROM precos_historico WHERE item_id=? AND numero_po=? AND origem='SCM'",
+                            (item_id, numero_po)
+                        ).fetchone()
+                        if not existe:
+                            conn.execute("""
+                                INSERT INTO precos_historico
+                                    (item_id,data,preco_unitario,moeda,fornecedor,numero_sc,numero_po,origem)
+                                VALUES (?,?,?,?,?,?,?,?)
+                            """, (item_id, data_abertura, preco_unit, moeda_str, fornecedor or None, numero_sc, numero_po, "SCM"))
+                            stats["precos_capturados"] += 1
+
+                stats["linhas_importadas"] += 1
+                stats["rupturas"] += 1 if ruptura else 0
+                stats["divergencias"] += 1 if divergencia else 0
+                stats["criticos"] += 1 if prioridade_critica else 0
+
+            _log_importacao(conn, "relatorio_scm", nome_arquivo, stats["linhas_lidas"],
+                            stats["linhas_importadas"], stats["linhas_ignoradas"],
+                            {"ignorados_amostra": ignorados})
+        stats["ignorados_amostra"] = ignorados
+        return stats
+    except Exception as e:
+        return {"erro": str(e)}
+
+
+def ingerir_sc7_precos(df, nome_arquivo="Relatorio de SCs.xlsx"):
+    """Ingestor da aba SC7 (Pedidos de Compra / Protheus SC7): alimenta o histórico
+    de preços por item. Fonte limpa (dados crus do ERP). Só grava PNs já cadastrados."""
+    if df is None or df.empty:
+        return {"erro": "Aba SC7 vazia ou ausente."}
+    col = {
+        "produto":    _coluna(df, ["Produto"]),
+        "pedido":     _coluna(df, ["Pedido"]),
+        "dt_emissao": _coluna(df, ["DT Emissao", "DT Emissão", "Emissao", "Emissão"]),
+        "preco":      _coluna(df, ["Prc Unitario", "Preco Unitario", "Preço Unitário"]),
+        "moeda":      _coluna(df, ["Moeda"]),
+        "obs":        _coluna(df, ["Observacoes", "Observações"]),
+    }
+    if not col["produto"] or not col["preco"]:
+        return {"erro": "Colunas essenciais ausentes na aba SC7 (Produto/Prc Unitario)."}
+    stats = {"linhas_lidas": int(len(df)), "precos_inseridos": 0, "ignorados": 0}
+    try:
+        with transaction() as conn:
+            pn_map = {r["part_number"]: r["id"] for r in
+                      conn.execute("SELECT id, part_number FROM inventario").fetchall()}
+            for idx, row in df.iterrows():
+                pn = str(_valor(row, col["produto"], "") or "").strip()
+                if not pn or pn not in pn_map:
+                    stats["ignorados"] += 1
+                    continue
+                preco = _to_float(_valor(row, col["preco"], 0))
+                if preco <= 0:
+                    stats["ignorados"] += 1
+                    continue
+                item_id = pn_map[pn]
+                pedido = str(_valor(row, col["pedido"], "") or "").strip()
+                data = _to_date_str(_valor(row, col["dt_emissao"], None))
+                moeda_str = decodificar_moeda(_valor(row, col["moeda"], None))
+                obs = str(_valor(row, col["obs"], "") or "")
+                m = re.search(r"SC:\s*(\d+)", obs)
+                numero_sc = m.group(1) if m else None
+
+                existe = conn.execute(
+                    "SELECT id FROM precos_historico WHERE item_id=? AND COALESCE(numero_po,'')=? AND origem='SC7' AND preco_unitario=?",
+                    (item_id, pedido, preco)
+                ).fetchone()
+                if existe:
+                    stats["ignorados"] += 1
+                    continue
+                conn.execute("""
+                    INSERT INTO precos_historico
+                        (item_id,data,preco_unitario,moeda,fornecedor,numero_sc,numero_po,origem)
+                    VALUES (?,?,?,?,?,?,?,?)
+                """, (item_id, data, preco, moeda_str, None, numero_sc, pedido or None, "SC7"))
+                stats["precos_inseridos"] += 1
+            _log_importacao(conn, "relatorio_sc7", nome_arquivo, stats["linhas_lidas"],
+                            stats["precos_inseridos"], stats["ignorados"], {})
+        return stats
+    except Exception as e:
+        return {"erro": str(e)}
+
+
+def ingerir_fornecedores(df, nome_arquivo="Relatorio de SCs.xlsx"):
+    """Ingestor da aba FORNECEDORES (Protheus SA1): upsert do cadastro mestre
+    (chave Codigo+Loja), incluindo e-mail para cotação."""
+    if df is None or df.empty:
+        return {"erro": "Aba FORNECEDORES vazia ou ausente."}
+    col = {
+        "codigo":   _coluna(df, ["Codigo", "Código"]),
+        "loja":     _coluna(df, ["Loja"]),
+        "razao":    _coluna(df, ["Razao Social", "Razão Social"]),
+        "fantasia": _coluna(df, ["N Fantasia", "Nome Fantasia"]),
+        "cnpj":     _coluna(df, ["CNPJ/CPF", "CNPJ"]),
+        "email":    _coluna(df, ["E-Mail", "Email", "E-mail"]),
+        "telefone": _coluna(df, ["Telefone"]),
+        "contato":  _coluna(df, ["Contato"]),
+        "cond":     _coluna(df, ["Cond. Pagto", "Cond Pagto"]),
+    }
+    if not col["codigo"]:
+        return {"erro": "Coluna 'Codigo' ausente na aba FORNECEDORES."}
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    stats = {"linhas_lidas": int(len(df)), "upserted": 0, "com_email": 0, "ignorados": 0}
+    try:
+        with transaction() as conn:
+            for _, row in df.iterrows():
+                codigo = _codigo_txt(_valor(row, col["codigo"], ""))
+                if not codigo or codigo == "0":
+                    stats["ignorados"] += 1
+                    continue
+                loja = _codigo_txt(_valor(row, col["loja"], "")) or "1"
+                razao = str(_valor(row, col["razao"], "") or "").strip()
+                fantasia = str(_valor(row, col["fantasia"], "") or "").strip()
+                cnpj = str(_valor(row, col["cnpj"], "") or "").strip()
+                email = str(_valor(row, col["email"], "") or "").strip()
+                telefone = str(_valor(row, col["telefone"], "") or "").strip()
+                contato = str(_valor(row, col["contato"], "") or "").strip()
+                cond = str(_valor(row, col["cond"], "") or "").strip()
+                conn.execute("""
+                    INSERT INTO fornecedores
+                        (codigo,loja,razao_social,nome_fantasia,cnpj,email,telefone,contato,cond_pagto,ativo,ultima_importacao)
+                    VALUES (?,?,?,?,?,?,?,?,?,1,?)
+                    ON CONFLICT(codigo,loja) DO UPDATE SET
+                        razao_social=excluded.razao_social, nome_fantasia=excluded.nome_fantasia,
+                        cnpj=excluded.cnpj, email=excluded.email, telefone=excluded.telefone,
+                        contato=excluded.contato, cond_pagto=excluded.cond_pagto,
+                        ultima_importacao=excluded.ultima_importacao
+                """, (codigo, loja, razao, fantasia, cnpj, email, telefone, contato, cond, agora))
+                stats["upserted"] += 1
+                if email and "@" in email:
+                    stats["com_email"] += 1
+            _log_importacao(conn, "relatorio_fornecedores", nome_arquivo, stats["linhas_lidas"],
+                            stats["upserted"], stats["ignorados"], {"com_email": stats["com_email"]})
+        return stats
+    except Exception as e:
+        return {"erro": str(e)}
+
+
+def ingerir_scm_users(df, nome_arquivo="Relatorio de SCs.xlsx"):
+    """Ingestor da aba SCM USERS: upsert de solicitantes (departamento/gerente/
+    aprovador/status). NÃO marca incluir_mro automaticamente — o escopo MRO
+    permanece controlado (preserva os já marcados, ex.: os 3 do seed)."""
+    if df is None or df.empty:
+        return {"erro": "Aba SCM USERS vazia ou ausente."}
+    col = {
+        "solicitante":  _coluna(df, ["SOLICITANTE", "Solicitante"]),
+        "departamento": _coluna(df, ["DEPARTAMENTO", "Departamento"]),
+        "gerente":      _coluna(df, ["GERENTE IME", "Gerente"]),
+        "aprovador":    _coluna(df, ["APROVADOR SCM", "Aprovador"]),
+        "status":       _coluna(df, ["STATUS", "Status"]),
+    }
+    if not col["solicitante"]:
+        return {"erro": "Coluna 'SOLICITANTE' ausente na aba SCM USERS."}
+    stats = {"linhas_lidas": int(len(df)), "upserted": 0, "ignorados": 0}
+    try:
+        with transaction() as conn:
+            for _, row in df.iterrows():
+                nome = str(_valor(row, col["solicitante"], "") or "").strip()
+                norm = _normalizar_txt(nome)
+                if not norm:
+                    stats["ignorados"] += 1
+                    continue
+                dep = str(_valor(row, col["departamento"], "") or "").strip()
+                ger = str(_valor(row, col["gerente"], "") or "").strip()
+                apr = str(_valor(row, col["aprovador"], "") or "").strip()
+                stt = str(_valor(row, col["status"], "") or "").strip()
+                conn.execute("""
+                    INSERT INTO solicitantes_mro
+                        (nome,nome_norm,departamento,gerente,aprovador,status,incluir_mro)
+                    VALUES (?,?,?,?,?,?,0)
+                    ON CONFLICT(nome_norm) DO UPDATE SET
+                        nome=excluded.nome, departamento=excluded.departamento,
+                        gerente=excluded.gerente, aprovador=excluded.aprovador,
+                        status=excluded.status
+                """, (nome, norm, dep, ger, apr, stt))
+                stats["upserted"] += 1
+            _log_importacao(conn, "relatorio_scm_users", nome_arquivo, stats["linhas_lidas"],
+                            stats["upserted"], stats["ignorados"], {})
+        return stats
+    except Exception as e:
+        return {"erro": str(e)}
 

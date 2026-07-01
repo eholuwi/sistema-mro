@@ -27,12 +27,20 @@ from services.db_functions import (
     importar_inventario_neidson, alterar_part_number,
     listar_historico_part_number, buscar_item_por_pn,
     registrar_feedback, listar_feedbacks, atualizar_feedback,
+    importar_relatorio_scs, tirar_snapshot_estoque,
 )
 
 setup_logging()
 criar_banco()
 
-st.set_page_config(page_title="MRO Inventus Power 2.1.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
+# v2.2.0 — foto diária do estoque (idempotente por dia; sem scheduler externo).
+# Só executa a primeira vez que o app abre no dia; nas demais é praticamente no-op.
+try:
+    tirar_snapshot_estoque()
+except Exception:
+    pass
+
+st.set_page_config(page_title="MRO Inventus Power 2.2.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
 
 inject_custom_css()
 
@@ -88,7 +96,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 2.1.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 2.2.0</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -637,6 +645,10 @@ elif pagina == "➕ Gerenciar Itens":
                     ed_min = st.number_input("Estoque Mínimo (30 dias)", min_value=0.0, value=float(item_sel.get('estoque_minimo') or 0), key="ed_min")
                     ed_max = st.number_input("Estoque Máximo (60 dias)", min_value=0.0, value=float(item_sel.get('estoque_maximo') or 0), key="ed_max",
                                              help="0 = usa o cálculo automático (Mínimo × 2).")
+                    _seg_calc = float(item_sel.get('estoque_seguranca_calculado') or 0)
+                    ed_seg = st.number_input("Estoque de Segurança", min_value=0.0, value=float(item_sel.get('estoque_seguranca') or 0), key="ed_seg",
+                                             help=f"Parâmetro manual do gestor (entre Mínimo e Máximo). "
+                                                  f"Sugestão calculada (consumo×lead time×1,5): {_seg_calc:.1f}.")
                     # Nota: Estoque atual NÃO deve ser editado aqui, apenas via Movimentação/Inventário
                     st.markdown(f"**Estoque Atual:** `{item_sel['estoque_atual']}` (Alterar em *Inventário*)")
                     st.markdown(f"**Status:** `{item_sel['status_material']}`")
@@ -652,6 +664,7 @@ elif pagina == "➕ Gerenciar Itens":
                         "lead_time_dias": ed_lead,
                         "estoque_minimo": ed_min,
                         "estoque_maximo": ed_max,
+                        "estoque_seguranca": ed_seg,
                     }
                     ok, msg = atualizar_item_inventario(item_sel['id'], dados_edicao)
                     if ok:
@@ -1109,7 +1122,7 @@ elif pagina == "🧾 Compras (SC)":
     
     # Estrutura de abas mantida conforme solicitado
     aba_mon, aba_nova_sc, aba_rec, aba_ed, aba_h, aba_import = st.tabs([
-    "📡 Monitor", "➕ Nova SC", "📦 Receber Material", "🔄 Atualizar Status", "📜 Histórico", "📥 Importar Protheus"
+    "📡 Monitor", "➕ Nova SC", "📦 Receber Material", "🔄 Atualizar Status", "📜 Histórico", "📥 Importar Relatório de SCs"
     ])
     # ══════════════════════════════════════════════════════════════════════════════
     # 📡 MONITOR DE COMPRAS 
@@ -1261,34 +1274,65 @@ elif pagina == "🧾 Compras (SC)":
     # ═══════════════════════════════════════════════════════════════════════════════
     with aba_import:
         with st.container(border=True):
-            st.markdown("### 📥 Importar Planilha Solicitações SCM")
-            st.caption("Processa automaticamente os solicitantes MRO. Atualiza SCs, itens e calcula saldos/rupturas.")
-            arquivo = st.file_uploader("Arquivo Excel (.xlsx / .xls)", type=["xlsx", "xls"], key="upload_protheus_sc")
+            st.markdown("### 📥 Importar Relatório de SCs")
+            st.caption("Upload da planilha diária dos compradores. Roteia por aba: **SCM** (SCs + preço), "
+                       "**SC7** (histórico de preços), **FORNECEDORES** (cadastro + e-mails) e **SCM USERS** "
+                       "(solicitantes). Upsert com histórico preservado; backup automático antes de gravar.")
+            arquivo = st.file_uploader("Arquivo Excel (.xlsx / .xls)", type=["xlsx", "xls"], key="upload_relatorio_scs")
 
             if arquivo:
-                if st.button("🔄 Processar Importação", width="stretch", type="primary"):
-                    with st.spinner("Processando dados do Protheus..."):
-                        ok, resultado = importar_solicitacoes_protheus(arquivo, arquivo.name)
+                if st.button("🔄 Processar Relatório de SCs", width="stretch", type="primary"):
+                    with st.spinner("Processando abas do Relatório de SCs..."):
+                        ok, resultado = importar_relatorio_scs(arquivo, arquivo.name)
                     if ok:
-                        # UX: Métricas de feedback em grid para leitura instantânea
-                        m1, m2, m3, m4 = st.columns(4)
-                        m1.metric("📥 Linhas Importadas", resultado["linhas_importadas"])
-                        m2.metric("🚫 Ignoradas", resultado["linhas_ignoradas"])
-                        m3.metric("🔴 Rupturas", resultado["rupturas"])
-                        m4.metric("⚠️ Divergências", resultado["divergencias"])
-                        
-                        m5, m6, m7, m8 = st.columns(4)
-                        m5.metric("📄 SCs Criadas", resultado["scs_criadas"])
-                        m6.metric("🔄 SCs Atualizadas", resultado["scs_atualizadas"])
-                        m7.metric("📦 Itens Criados", resultado["itens_criados"])
-                        m8.metric("🔥 Críticos", resultado["criticos"])
+                        scm = resultado.get("SCM", {}) or {}
+                        if isinstance(scm, dict) and not scm.get("erro"):
+                            st.markdown("**📄 SCM — Solicitações + Preço**")
+                            m1, m2, m3, m4 = st.columns(4)
+                            m1.metric("📥 Importadas", scm.get("linhas_importadas", 0))
+                            m2.metric("🚫 Ignoradas", scm.get("linhas_ignoradas", 0))
+                            m3.metric("💲 Preços", scm.get("precos_capturados", 0))
+                            m4.metric("🔴 Rupturas", scm.get("rupturas", 0))
+                            m5, m6, m7, m8 = st.columns(4)
+                            m5.metric("📄 SCs Criadas", scm.get("scs_criadas", 0))
+                            m6.metric("🔄 SCs Atualizadas", scm.get("scs_atualizadas", 0))
+                            m7.metric("⚠️ Divergências", scm.get("divergencias", 0))
+                            m8.metric("🔥 Críticos", scm.get("criticos", 0))
 
-                        if resultado.get("ignorados_amostra"):
-                            st.warning("⚠️ Amostra de linhas ignoradas:")
-                            st.dataframe(pd.DataFrame(resultado["ignorados_amostra"]), width="stretch", hide_index=True)
-                        st.success("✅ Importação concluída com sucesso! O Monitor já reflete os novos dados.")
+                        st.markdown("**🔗 Demais fontes**")
+                        sc7 = resultado.get("SC7", {}) or {}
+                        forn = resultado.get("FORNECEDORES", {}) or {}
+                        usr = resultado.get("SCM USERS", {}) or {}
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("💲 Preços SC7", sc7.get("precos_inseridos", 0) if isinstance(sc7, dict) else 0)
+                        c2.metric("🏢 Fornecedores", f"{forn.get('upserted', 0)}" if isinstance(forn, dict) else "—",
+                                  help=f"Com e-mail: {forn.get('com_email', 0)}" if isinstance(forn, dict) else None)
+                        c3.metric("👥 Solicitantes", usr.get("upserted", 0) if isinstance(usr, dict) else 0)
+
+                        erros = {aba: r.get("erro") for aba, r in resultado.items()
+                                 if isinstance(r, dict) and r.get("erro")}
+                        if erros:
+                            st.warning("Abas com aviso: " + " · ".join(f"**{a}**: {e}" for a, e in erros.items()))
+                        if isinstance(scm, dict) and scm.get("ignorados_amostra"):
+                            with st.expander("Amostra de linhas ignoradas (SCM)"):
+                                st.dataframe(pd.DataFrame(scm["ignorados_amostra"]), width="stretch", hide_index=True)
+                        st.success(f"✅ Importação concluída. Foto de estoque do dia: "
+                                   f"{resultado.get('_snapshot_criados', 0)} itens.")
                     else:
-                        st.error(f"❌ Falha ao importar: {resultado.get('erro', 'Erro desconhecido')}")
+                        erros = {aba: r.get("erro") for aba, r in resultado.items()
+                                 if isinstance(r, dict) and r.get("erro")}
+                        st.error("❌ Falha ao importar. " +
+                                 ("; ".join(f"{a}: {e}" for a, e in erros.items()) if erros else str(resultado)))
+
+            with st.expander("↩️ Importação antiga (export cru do SCM — fallback)"):
+                arq_old = st.file_uploader("Arquivo Excel (export cru)", type=["xlsx", "xls"], key="upload_protheus_legacy")
+                if arq_old and st.button("Processar (fallback)", key="btn_import_legacy"):
+                    with st.spinner("Processando..."):
+                        ok_o, res_o = importar_solicitacoes_protheus(arq_old, arq_old.name)
+                    if ok_o:
+                        st.success(f"Importado: {res_o.get('linhas_importadas', 0)} linhas.")
+                    else:
+                        st.error(f"Falha: {res_o.get('erro', 'erro')}")
     # ══════════════════════════════════════════════════════════════════════════════
     #   ➕ NOVA SC (Formulário em Grid + Agrupamento Lógico)
     # ══════════════════════════════════════════════════════════════════════════════
