@@ -20,6 +20,15 @@ AGING_ALERTA_DIAS = 7    # > 7 dias  -> alerta  (amarelo)
 AGING_CRITICO_DIAS = 15  # > 15 dias -> critico (vermelho)
 
 # ══════════════════════════════════════════════════════════════════════════════
+# v2.2.1 — Cálculos & Transparência
+# ══════════════════════════════════════════════════════════════════════════════
+
+JANELAS_CONSUMO = (30, 60, 90)   # janelas (dias) do consumo médio diário
+TENDENCIA_LIMIAR_PCT = 15        # |Δ%| > 15 -> "Alta"/"Queda"; senão "Estável"
+GIRO_JANELA_DIAS = 90            # janela padrão do giro / estoque médio
+LEAD_TIME_MAX_DIAS = 365         # cap de outlier no cálculo de Lead Time (SC7/recebimento)
+
+# ══════════════════════════════════════════════════════════════════════════════
 # v2.2.0 — Ingestão do Relatório de SCs / Pilar Financeiro / Snapshots
 # ══════════════════════════════════════════════════════════════════════════════
 

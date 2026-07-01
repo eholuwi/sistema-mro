@@ -28,6 +28,7 @@ from services.db_functions import (
     listar_historico_part_number, buscar_item_por_pn,
     registrar_feedback, listar_feedbacks, atualizar_feedback,
     importar_relatorio_scs, tirar_snapshot_estoque,
+    obter_maturidade_dados, calcular_giro,
 )
 
 setup_logging()
@@ -40,7 +41,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 2.2.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 2.2.1", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
 
 inject_custom_css()
 
@@ -96,7 +97,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 2.2.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 2.2.1</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -674,6 +675,28 @@ elif pagina == "➕ Gerenciar Itens":
                     else:
                         st.error(msg)
 
+                # ── Lead Time: cadastrado vs calculado (sugestão) — v2.2.1 ──────
+                _lt_calc = item_sel.get('lead_time_calculado')
+                if _lt_calc is not None:
+                    _lt_cad = int(item_sel.get('lead_time_dias') or 0)
+                    _amostras = int(item_sel.get('lead_time_calculado_amostras') or 0)
+                    _origem = item_sel.get('lead_time_calculado_origem') or "—"
+                    st.markdown("---")
+                    lc1, lc2 = st.columns([2, 1])
+                    lc1.info(
+                        f"⏱️ **Lead Time** — cadastrado (Neidson): **{_lt_cad}d** · "
+                        f"calculado: **{_lt_calc}d** ({_amostras} amostras, origem {_origem}). "
+                        f"O calculado é apenas uma sugestão; a base cadastrada não é alterada automaticamente."
+                    )
+                    if int(_lt_calc) != _lt_cad and lc2.button("Usar calculado", key="btn_usar_lt_calc", width="stretch"):
+                        ok, msg = atualizar_item_inventario(item_sel['id'], {"lead_time_dias": int(_lt_calc)})
+                        if ok:
+                            st.success(f"Lead time atualizado para {int(_lt_calc)}d.")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
                 # ── Alteração de Part Number (Item 2 / v2.1.0) ───────────────
                 st.markdown("---")
                 st.markdown("##### 🔁 Alterar Part Number")
@@ -838,7 +861,57 @@ elif pagina == "🔄 Movimentações":
     # === TAB 3: ANALYTICS COMPLETO (VOLUME + DIVERGÊNCIAS + RUPTURA) ===
     with tab_dash:
         st.subheader("📊 Analytics Operacional Completo")
-        
+
+        # v2.2.1 — Rótulo de maturidade do histórico (transparência)
+        _mat = obter_maturidade_dados()
+        if _mat["dias"] > 0:
+            st.caption(
+                f"📅 Indicadores de série (consumo, tendência, giro) baseados em "
+                f"**{_mat['dias']} dias** de histórico — desde "
+                f"{fmt(_mat['data_inicio']) if _mat['data_inicio'] else '—'} · "
+                f"{_mat['n_snapshots']} fotos de estoque. A confiança aumenta conforme "
+                f"os dados acumulam."
+            )
+
+        # v2.2.1 — Inteligência de Estoque: Cobertura · Tendência · Giro
+        with st.container(border=True):
+            st.markdown("#### 🧠 Inteligência de Estoque (Cobertura · Tendência · Giro)")
+            try:
+                df_series = exportar_inventario_df()
+            except Exception as e:
+                df_series = pd.DataFrame()
+                st.error(f"Erro ao calcular indicadores: {e}")
+            if df_series.empty:
+                st.caption("Sem dados suficientes.")
+            else:
+                ca, cb, cc = st.columns(3)
+                with ca:
+                    st.markdown("**📈 Tendência de consumo**")
+                    if "Tendência" in df_series.columns:
+                        vc = df_series["Tendência"].value_counts()
+                        st.metric("🔺 Em alta", int(vc.get("Alta", 0)),
+                                  help="Consumo dos últimos 30d mais de 15% acima dos 30d anteriores.")
+                        st.metric("🔻 Em queda", int(vc.get("Queda", 0)))
+                        st.metric("➖ Estável", int(vc.get("Estável", 0)))
+                with cb:
+                    st.markdown("**🛡️ Menor cobertura (dias)**")
+                    st.caption("(estoque + guarda-chuva) ÷ consumo diário")
+                    if "Cobertura(d)" in df_series.columns:
+                        low = (df_series[df_series["Cobertura(d)"] < 900]
+                               .nsmallest(8, "Cobertura(d)")[["PN", "Cobertura(d)"]])
+                        st.dataframe(low, hide_index=True, width="stretch", height=250)
+                with cc:
+                    st.markdown("**🔁 Itens parados (giro 0 c/ estoque)**")
+                    st.caption("Capital imobilizado sem saída no período.")
+                    if "Giro(anual)" in df_series.columns:
+                        parados = df_series[(df_series["Giro(anual)"] == 0) &
+                                            (df_series["Estoque Atual"] > 0)]
+                        st.caption(f"Total: {len(parados)} itens")
+                        st.dataframe(parados[["PN", "Estoque Atual"]].head(8),
+                                     hide_index=True, width="stretch", height=210)
+
+        st.markdown("---")
+
         # --- LINHA 1: VOLUME E DIVERGÊNCIAS (Lado a Lado) ---
         c_vol, c_div = st.columns(2)
 

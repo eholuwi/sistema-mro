@@ -65,7 +65,7 @@ def test_atomicidade_rollback_em_falha(db, sc_aberta, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("falha simulada no meio da transacao de recebimento")
 
-    monkeypatch.setattr(F, "_recalcular_lead_time_real", boom)
+    monkeypatch.setattr(F, "_recalcular_lead_time_calculado", boom)
     ok, msg = F.registrar_recebimento_sc(sc_id, item_sc_id, 4, CC,
                                          "Alm", "Alm", "Forn", "2026-01-10", "NF")
     assert ok is False  # falha reportada via rollback, nao propagada ao chamador

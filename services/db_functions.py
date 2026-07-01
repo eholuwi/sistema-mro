@@ -6,6 +6,7 @@ from services.constants import (
     MARGEM_ATENCAO, FATOR_ESTOQUE_MAXIMO, FATOR_ESTOQUE_SEGURANCA,
     JANELA_CONSUMO_DIAS, PREVISAO_RUPTURA_SEM_RISCO,
     SNAPSHOT_RETENCAO_DIAS, RELATORIO_SCS_ABAS, decodificar_moeda,
+    JANELAS_CONSUMO, TENDENCIA_LIMIAR_PCT, GIRO_JANELA_DIAS, LEAD_TIME_MAX_DIAS,
 )
 import pandas as pd
 
@@ -77,6 +78,18 @@ def calcular_status_inventario(estoque_atual, estoque_minimo, estoque_em_transit
     
     # ESTOQUE CONFORTÁVEL
     return "🟢 OK"
+
+def calcular_cobertura(estoque_atual, guarda_chuva, consumo_diario):
+    """Dias de cobertura = (estoque + guarda-chuva) / consumo diário.
+
+    v2.2.1: torna explícito quantos dias o estoque (mais o que já vem chegando)
+    dura no ritmo atual. Sem consumo, retorna a sentinela de "sem risco"."""
+    consumo = consumo_diario or 0
+    if consumo <= 0:
+        return PREVISAO_RUPTURA_SEM_RISCO
+    disponivel = (estoque_atual or 0) + (guarda_chuva or 0)
+    return round(disponivel / consumo, 1)
+
 
 def calcular_status_sc(data_aprovacao, numero_po, fornecedor, tem_pendente):
     if not tem_pendente:
@@ -157,6 +170,13 @@ def listar_inventario():
             item.get("estoque_atual", 0) or 0,
             item.get("estoque_minimo", 0) or 0,
             item.get("estoque_em_transito", 0) or 0
+        )
+
+        # v2.2.1: dias de cobertura explícito (estoque + guarda-chuva) / consumo.
+        item["dias_cobertura"] = calcular_cobertura(
+            item.get("estoque_atual", 0) or 0,
+            item.get("estoque_em_transito", 0) or 0,
+            item.get("consumo_medio_diario", 0) or 0,
         )
 
         # 2. Status da SC (Lógica Refinada v2.3)
@@ -349,14 +369,54 @@ sc_item_id=None, requisicao_id=None, data_hora=None):
     except Exception as e:
         return False, str(e)
 
+def _consumo_janela(c, item_id, ini_dias, fim_dias=0):
+    """Consumo médio diário (saídas) na janela [now-ini_dias, now-fim_dias).
+    fim_dias=0 → janela recente terminando hoje; fim_dias>0 → janela anterior."""
+    r = c.execute(
+        """SELECT COALESCE(SUM(quantidade),0) AS total FROM movimentacoes
+           WHERE item_id=? AND tipo='saida'
+             AND data_hora >= datetime('now', ?)
+             AND data_hora <  datetime('now', ?)""",
+        (item_id, f"-{ini_dias} days", f"-{fim_dias} days"),
+    ).fetchone()
+    dias = max(ini_dias - fim_dias, 1)
+    return (r["total"] or 0) / dias
+
+
 def _recalcular_consumo(conn, item_id):
+    """Recalcula o consumo médio diário em várias janelas (30/60/90) e a tendência.
+
+    v2.2.1: `consumo_medio_diario` continua sendo a janela primária (30d). Tendência
+    compara o consumo dos últimos 30d com o dos 30d anteriores (dias 31–60)."""
     with transaction(conn) as c:
-        r = c.execute(f"""
-            SELECT COALESCE(SUM(quantidade),0) AS total FROM movimentacoes
-            WHERE item_id=? AND tipo='saida' AND data_hora >= datetime('now','-{JANELA_CONSUMO_DIAS} days')
-        """, (item_id,)).fetchone()
-        consumo_diario = (r["total"]/JANELA_CONSUMO_DIAS) if r else 0
-        c.execute("UPDATE inventario SET consumo_medio_diario=? WHERE id=?", (consumo_diario, item_id))
+        janelas = {}
+        for j in JANELAS_CONSUMO:
+            janelas[j] = _consumo_janela(c, item_id, j)
+        consumo_30 = janelas.get(30, _consumo_janela(c, item_id, JANELA_CONSUMO_DIAS))
+        consumo_prev_30 = _consumo_janela(c, item_id, 60, 30)  # dias 31–60
+
+        if consumo_prev_30 > 0:
+            tendencia_pct = (consumo_30 - consumo_prev_30) / consumo_prev_30 * 100.0
+        elif consumo_30 > 0:
+            tendencia_pct = 100.0   # sem base anterior, mas passou a consumir
+        else:
+            tendencia_pct = 0.0
+
+        if tendencia_pct > TENDENCIA_LIMIAR_PCT:
+            tendencia_label = "Alta"
+        elif tendencia_pct < -TENDENCIA_LIMIAR_PCT:
+            tendencia_label = "Queda"
+        else:
+            tendencia_label = "Estável"
+
+        c.execute(
+            """UPDATE inventario SET
+                 consumo_medio_diario=?, consumo_30d=?, consumo_60d=?, consumo_90d=?,
+                 tendencia_pct=?, tendencia_label=?
+               WHERE id=?""",
+            (consumo_30, janelas.get(30, consumo_30), janelas.get(60, 0.0),
+             janelas.get(90, 0.0), round(tendencia_pct, 1), tendencia_label, item_id),
+        )
 
 def listar_movimentacoes(item_id=None, limit=200):
     with transaction() as conn:
@@ -1194,8 +1254,9 @@ fornecedor, data_recebimento, obs_nf=""):
             status_novo = "Recebido" if pend == 0 else "Parcial"
             conn.execute("UPDATE solicitacoes_compra SET status=? WHERE id=?",(status_novo, sc_id))
 
-            # (8) Recalcula lead time real (mesma conn, sem commit/close)
-            _recalcular_lead_time_real(conn, item_id)
+            # (8) Recalcula o Lead Time CALCULADO como sugestão (não sobrescreve o
+            #     cadastrado / base do Neidson). v2.2.1.
+            _recalcular_lead_time_calculado(conn, item_id)
 
         return True, f"Recebimento registrado. SC {'fechada' if pend == 0 else 'parcial'}."
     except Exception as e:
@@ -1359,14 +1420,25 @@ def exportar_inventario_df():
     itens = listar_inventario()
     if not itens:
         return pd.DataFrame()
-    
-    # v2.0.2: Atualização da estrutura de exportação
+
+    # v2.2.1: enriquece com giro / tempo em estoque (calculado sob demanda a partir
+    # dos snapshots). Uma conexão compartilhada evita 1 transação por item.
+    with transaction() as conn:
+        for it in itens:
+            g = calcular_giro(it["id"], conn=conn)
+            it["giro_anual"] = g["giro_anual"]
+            it["tempo_medio_dias"] = g["tempo_medio_dias"]
+
+    # v2.0.2 / v2.2.1: estrutura de exportação
     colunas = [
         "part_number", "nome_item", "descricao", "unidade", "importancia",
-        "tipo_material", "local_armazenagem", 
+        "tipo_material", "local_armazenagem",
         "estoque_atual", "estoque_minimo", "estoque_maximo", "estoque_seguranca",
-        "estoque_em_transito",
-        "consumo_medio_diario", "lead_time_dias", "previsao_ruptura_dias",
+        "estoque_em_transito", "dias_cobertura",
+        "consumo_medio_diario", "consumo_30d", "consumo_60d", "consumo_90d",
+        "tendencia_label", "tendencia_pct",
+        "lead_time_dias", "lead_time_calculado", "lead_time_calculado_origem",
+        "giro_anual", "tempo_medio_dias", "previsao_ruptura_dias",
         "sc_numero", "status_material", "status_sc",
         "data_inventario",
         "caixa_identificacao" # Campo reutilizado para Obs Operacional
@@ -1389,8 +1461,18 @@ def exportar_inventario_df():
         "estoque_maximo": "Máximo",
         "estoque_seguranca": "Segurança",
         "estoque_em_transito": "Guarda-Chuva",
+        "dias_cobertura": "Cobertura(d)",
         "consumo_medio_diario": "Consumo/Dia",
+        "consumo_30d": "Consumo 30d",
+        "consumo_60d": "Consumo 60d",
+        "consumo_90d": "Consumo 90d",
+        "tendencia_label": "Tendência",
+        "tendencia_pct": "Tendência %",
         "lead_time_dias": "Lead Time(d)",
+        "lead_time_calculado": "Lead Time Calc(d)",
+        "lead_time_calculado_origem": "LT Calc Origem",
+        "giro_anual": "Giro(anual)",
+        "tempo_medio_dias": "Tempo Estoque(d)",
         "previsao_ruptura_dias": "Ruptura(d)",
         "sc_numero": "Última SC",
         "status_material": "Status Material",
@@ -1436,68 +1518,64 @@ def exportar_movimentacoes_df(item_id=None, tipos_selecionados=None):
     
     return df
 
-def _recalcular_lead_time_real(conn, item_id):
-    """
-    Calcula o Lead Time Médio Real baseado no histórico de SCs recebidas.
-    Atualiza o campo lead_time_dias no inventario.
-    """
+def _mediana(valores):
+    """Mediana de uma lista de números (robusta a outliers)."""
+    if not valores:
+        return None
+    vs = sorted(valores)
+    n = len(vs)
+    m = n // 2
+    return vs[m] if n % 2 else (vs[m - 1] + vs[m]) / 2.0
+
+
+def _gravar_lead_time_calculado(conn, item_id, deltas, origem):
+    """Grava o Lead Time CALCULADO (mediana dos deltas em dias) como SUGESTÃO.
+
+    v2.2.1: NUNCA toca `lead_time_dias` (base do Neidson permanece intacta). Filtra
+    para 1 ≤ delta ≤ LEAD_TIME_MAX_DIAS (delta 0 = mesmo dia não é lead time útil e
+    poluiria a mediana). Só grava se houver amostras válidas."""
+    validos = [d for d in deltas if d is not None and 1 <= d <= LEAD_TIME_MAX_DIAS]
+    if not validos:
+        return
+    calc = int(round(_mediana(validos)))
+    conn.execute(
+        """UPDATE inventario SET
+             lead_time_calculado=?, lead_time_calculado_amostras=?, lead_time_calculado_origem=?
+           WHERE id=?""",
+        (calc, len(validos), origem, item_id),
+    )
+
+
+def _recalcular_lead_time_calculado(conn, item_id):
+    """Lead Time real por RECEBIMENTO: mediana de (1ª entrada vinculada à SC −
+    data_abertura da SC), por item. Grava em `lead_time_calculado` (sugestão).
+
+    Substitui a antiga `_recalcular_lead_time_real`, que sobrescrevia
+    `lead_time_dias` (violando a base do Neidson)."""
     try:
-        # Busca SCs onde o item foi recebido (Status 'Recebido' ou 'Parcial')
         rows = conn.execute("""
-            SELECT sc.data_abertura, isc.quantidade_recebida
+            SELECT sc.data_abertura AS abertura,
+                   MIN(m.data_hora) AS chegada
             FROM itens_sc isc
             JOIN solicitacoes_compra sc ON sc.id = isc.sc_id
-            WHERE isc.item_id = ? 
-            AND sc.status IN ('Recebido', 'Parcial')
-            AND sc.data_abertura IS NOT NULL
+            JOIN movimentacoes m ON m.sc_item_id = isc.id AND m.tipo = 'entrada'
+            WHERE isc.item_id = ? AND sc.data_abertura IS NOT NULL
+            GROUP BY isc.id
         """, (item_id,)).fetchall()
 
-        if not rows:
-            return # Sem histórico de recebimento, mantém o atual
-
-        total_dias = 0
-        count = 0
-        hoje = datetime.now()
-
+        deltas = []
         for row in rows:
             try:
-                dt_abertura = datetime.strptime(row['data_abertura'], "%Y-%m-%d %H:%M:%S")
-                # Para simplificar, usamos a data atual como referência de "chegada" se não tivermos a data exata da NF no banco
-                # Idealmente, teríamos uma tabela de NFs, mas usando a data de atualização da SC ou data atual é um bom proxy
-                # Se quiser ser mais preciso, precisaria armazenar 'data_recebimento_nf' na tabela itens_sc ou movimentacoes.
-                # Vamos usar a data da última movimentação de entrada vinculada a essa SC como data de chegada real.
-                
-                mov = conn.execute("""
-                    SELECT MAX(data_hora) as dt_chegada FROM movimentacoes 
-                    WHERE sc_item_id = ? AND tipo = 'entrada'
-                """, (row[0] if False else None,)).fetchone() # Simplificação: Vamos usar a data de abertura + um offset ou buscar na mov
-                
-                # Abordagem Robusta: Buscar a data da primeira entrada de estoque vinculada a esta SC/Item
-                dt_chegada_row = conn.execute("""
-                    SELECT MIN(data_hora) as dt_chegada FROM movimentacoes m
-                    JOIN itens_sc isc ON isc.id = m.sc_item_id
-                    WHERE isc.item_id = ? AND isc.sc_id = (
-                        SELECT id FROM solicitacoes_compra WHERE data_abertura = ?
-                    ) AND m.tipo = 'entrada'
-                """, (item_id, row['data_abertura'])).fetchone()
-
-                if dt_chegada_row and dt_chegada_row['dt_chegada']:
-                    dt_chegada = datetime.strptime(dt_chegada_row['dt_chegada'], "%Y-%m-%d %H:%M:%S")
-                    delta = (dt_chegada - dt_abertura).days
-                    if delta > 0: # Ignorar dados inconsistentes
-                        total_dias += delta
-                        count += 1
+                ab = pd.to_datetime(row["abertura"], errors="coerce")
+                ch = pd.to_datetime(row["chegada"], errors="coerce")
+                if pd.isna(ab) or pd.isna(ch):
+                    continue
+                deltas.append((ch - ab).days)
             except Exception:
                 continue
-
-        if count > 0:
-            novo_lead_time = int(round(total_dias / count))
-            # Atualiza apenas se houver mudança significativa ou se for a primeira vez
-            conn.execute("UPDATE inventario SET lead_time_dias = ?, data_atualizacao = ? WHERE id = ?",
-                         (novo_lead_time, hoje.strftime("%Y-%m-%d %H:%M:%S"), item_id))
-            
+        _gravar_lead_time_calculado(conn, item_id, deltas, "Recebimento")
     except Exception as e:
-        logger.exception("Erro ao recalcular lead time: %s", e)
+        logger.exception("Erro ao recalcular lead time (recebimento): %s", e)
 
 def atualizar_item_inventario(item_id, dados_atualizados):
     """
@@ -1845,6 +1923,70 @@ def tirar_snapshot_estoque(conn=None, data=None):
     return criados
 
 
+def calcular_giro(item_id, dias=GIRO_JANELA_DIAS, conn=None):
+    """Giro de estoque e tempo médio em estoque de um item.
+
+    estoque_medio = média das fotos diárias (estoque_snapshots) na janela; fallback
+    para o estoque atual se houver menos de 2 fotos. giro_anual = (saídas no período /
+    estoque_medio) × (365/dias). tempo_medio_dias = 365/giro. Retorna também
+    n_snapshots (maturidade). v2.2.1."""
+    with transaction(conn) as c:
+        snap = c.execute(
+            """SELECT AVG(estoque_atual) AS media, COUNT(*) AS n
+               FROM estoque_snapshots
+               WHERE item_id=? AND data >= date('now', ?)""",
+            (item_id, f"-{dias} days"),
+        ).fetchone()
+        n_snap = snap["n"] or 0
+        if n_snap >= 2 and snap["media"] and snap["media"] > 0:
+            estoque_medio = float(snap["media"])
+        else:
+            r = c.execute("SELECT estoque_atual FROM inventario WHERE id=?", (item_id,)).fetchone()
+            estoque_medio = float(r["estoque_atual"] or 0) if r else 0.0
+
+        saida = c.execute(
+            """SELECT COALESCE(SUM(quantidade),0) AS total FROM movimentacoes
+               WHERE item_id=? AND tipo='saida' AND data_hora >= datetime('now', ?)""",
+            (item_id, f"-{dias} days"),
+        ).fetchone()
+        consumo_periodo = float(saida["total"] or 0)
+
+    if estoque_medio > 0 and consumo_periodo > 0:
+        giro_anual = (consumo_periodo / estoque_medio) * (365.0 / dias)
+        tempo_medio = 365.0 / giro_anual if giro_anual > 0 else None
+    else:
+        giro_anual = 0.0
+        tempo_medio = None
+
+    return {
+        "giro_anual": round(giro_anual, 2),
+        "tempo_medio_dias": round(tempo_medio, 1) if tempo_medio is not None else None,
+        "estoque_medio": round(estoque_medio, 2),
+        "consumo_periodo": round(consumo_periodo, 2),
+        "n_snapshots": n_snap,
+        "janela_dias": dias,
+    }
+
+
+def obter_maturidade_dados(conn=None):
+    """Maturidade do histórico para rotular indicadores de série.
+
+    Retorna dias de histórico (desde a 1ª movimentação), a data de início e a
+    contagem de fotos de estoque. v2.2.1 (transparência)."""
+    with transaction(conn) as c:
+        r = c.execute("SELECT MIN(data_hora) AS ini FROM movimentacoes").fetchone()
+        n_snap = c.execute("SELECT COUNT(*) AS n FROM estoque_snapshots").fetchone()["n"]
+    ini = r["ini"] if r else None
+    dias = 0
+    data_inicio = None
+    if ini:
+        dt = pd.to_datetime(ini, errors="coerce")
+        if not pd.isna(dt):
+            dias = max((datetime.now() - dt.to_pydatetime()).days, 0)
+            data_inicio = dt.strftime("%Y-%m-%d")
+    return {"dias": dias, "data_inicio": data_inicio, "n_snapshots": n_snap or 0}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # v2.2.0 — INGESTÃO DO "RELATÓRIO DE SCs" (multi-aba)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2125,13 +2267,17 @@ def ingerir_sc7_precos(df, nome_arquivo="Relatorio de SCs.xlsx"):
         "produto":    _coluna(df, ["Produto"]),
         "pedido":     _coluna(df, ["Pedido"]),
         "dt_emissao": _coluna(df, ["DT Emissao", "DT Emissão", "Emissao", "Emissão"]),
+        "dt_entrega": _coluna(df, ["Dt. Entrega", "Dt Entrega", "Data Entrega", "Entrega"]),
+        "qtd_entregue": _coluna(df, ["Qtd.Entregue", "Qtd Entregue"]),
         "preco":      _coluna(df, ["Prc Unitario", "Preco Unitario", "Preço Unitário"]),
         "moeda":      _coluna(df, ["Moeda"]),
         "obs":        _coluna(df, ["Observacoes", "Observações"]),
     }
     if not col["produto"] or not col["preco"]:
         return {"erro": "Colunas essenciais ausentes na aba SC7 (Produto/Prc Unitario)."}
-    stats = {"linhas_lidas": int(len(df)), "precos_inseridos": 0, "ignorados": 0}
+    stats = {"linhas_lidas": int(len(df)), "precos_inseridos": 0, "ignorados": 0,
+             "lead_times_calculados": 0}
+    lead_deltas = {}  # item_id -> [delta_dias, ...] (backfill de Lead Time via SC7)
     try:
         with transaction() as conn:
             pn_map = {r["part_number"]: r["id"] for r in
@@ -2141,11 +2287,23 @@ def ingerir_sc7_precos(df, nome_arquivo="Relatorio de SCs.xlsx"):
                 if not pn or pn not in pn_map:
                     stats["ignorados"] += 1
                     continue
+                item_id = pn_map[pn]
+
+                # Backfill de Lead Time (independe de preço): Dt.Entrega − DT Emissao,
+                # quando houve entrega. Filtro de outlier em _gravar_lead_time_calculado.
+                qtd_entregue = _to_float(_valor(row, col["qtd_entregue"], 0))
+                if col["dt_entrega"] and qtd_entregue > 0:
+                    # Datas do SC7 vêm como datetime do Excel ou ISO (YYYY-MM-DD);
+                    # não usar dayfirst (quebraria o parse ISO).
+                    emi = pd.to_datetime(_valor(row, col["dt_emissao"], None), errors="coerce")
+                    ent = pd.to_datetime(_valor(row, col["dt_entrega"], None), errors="coerce")
+                    if not pd.isna(emi) and not pd.isna(ent):
+                        lead_deltas.setdefault(item_id, []).append((ent - emi).days)
+
                 preco = _to_float(_valor(row, col["preco"], 0))
                 if preco <= 0:
                     stats["ignorados"] += 1
                     continue
-                item_id = pn_map[pn]
                 pedido = str(_valor(row, col["pedido"], "") or "").strip()
                 data = _to_date_str(_valor(row, col["dt_emissao"], None))
                 moeda_str = decodificar_moeda(_valor(row, col["moeda"], None))
@@ -2158,7 +2316,6 @@ def ingerir_sc7_precos(df, nome_arquivo="Relatorio de SCs.xlsx"):
                     (item_id, pedido, preco)
                 ).fetchone()
                 if existe:
-                    stats["ignorados"] += 1
                     continue
                 conn.execute("""
                     INSERT INTO precos_historico
@@ -2166,8 +2323,18 @@ def ingerir_sc7_precos(df, nome_arquivo="Relatorio de SCs.xlsx"):
                     VALUES (?,?,?,?,?,?,?,?)
                 """, (item_id, data, preco, moeda_str, None, numero_sc, pedido or None, "SC7"))
                 stats["precos_inseridos"] += 1
+
+            # Grava o Lead Time calculado (mediana) por item a partir do backfill SC7.
+            for item_id, deltas in lead_deltas.items():
+                validos = [d for d in deltas if 1 <= d <= LEAD_TIME_MAX_DIAS]
+                if not validos:
+                    continue
+                _gravar_lead_time_calculado(conn, item_id, validos, "SC7")
+                stats["lead_times_calculados"] += 1
+
             _log_importacao(conn, "relatorio_sc7", nome_arquivo, stats["linhas_lidas"],
-                            stats["precos_inseridos"], stats["ignorados"], {})
+                            stats["precos_inseridos"], stats["ignorados"],
+                            {"lead_times_calculados": stats["lead_times_calculados"]})
         return stats
     except Exception as e:
         return {"erro": str(e)}

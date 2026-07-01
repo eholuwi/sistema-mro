@@ -449,6 +449,16 @@ def criar_banco():
         "preco_referencia": "REAL DEFAULT 0",
         "data_preco_ref": "TEXT",
         "estoque_seguranca_calculado": "REAL DEFAULT 0",
+        # v2.2.1 — cálculos de série (consumo multi-janela, tendência) e Lead Time
+        # calculado como SUGESTÃO (não sobrescreve lead_time_dias / base do Neidson).
+        "consumo_30d": "REAL DEFAULT 0",
+        "consumo_60d": "REAL DEFAULT 0",
+        "consumo_90d": "REAL DEFAULT 0",
+        "tendencia_pct": "REAL",
+        "tendencia_label": "TEXT",
+        "lead_time_calculado": "INTEGER",
+        "lead_time_calculado_amostras": "INTEGER DEFAULT 0",
+        "lead_time_calculado_origem": "TEXT",
     }.items():
         if col not in cols_inv0:
             conn.execute(f"ALTER TABLE inventario ADD COLUMN {col} {tipo}")
@@ -457,7 +467,7 @@ def criar_banco():
 
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.2.0")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.2.1")
 
 
 def _migrar(conn):
