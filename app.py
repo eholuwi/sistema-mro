@@ -29,6 +29,8 @@ from services.db_functions import (
     registrar_feedback, listar_feedbacks, atualizar_feedback,
     importar_relatorio_scs, tirar_snapshot_estoque,
     obter_maturidade_dados, calcular_giro,
+    obter_valor_imobilizado, obter_evolucao_valor_imobilizado,
+    obter_evolucao_preco, obter_abc_valor,
 )
 
 setup_logging()
@@ -41,7 +43,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 2.2.1", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 2.3.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
 
 inject_custom_css()
 
@@ -97,7 +99,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 2.2.1</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 2.3.0</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -909,6 +911,127 @@ elif pagina == "🔄 Movimentações":
                         st.caption(f"Total: {len(parados)} itens")
                         st.dataframe(parados[["PN", "Estoque Atual"]].head(8),
                                      hide_index=True, width="stretch", height=210)
+
+        st.markdown("---")
+
+        # v2.3.0 — 💰 Financeiro: valor imobilizado · ABC por valor · evolução de preço
+        with st.container(border=True):
+            st.markdown("#### 💰 Financeiro (Valoração — estimativas rotuladas)")
+            st.caption(
+                "Valores são **estimativas** baseadas no **último preço** conhecido "
+                "(SCM; na falta, último preço de PO/SC7). Não substituem o custo contábil."
+            )
+            try:
+                vi = obter_valor_imobilizado()
+            except Exception as e:
+                vi = None
+                st.error(f"Erro ao calcular valoração: {e}")
+
+            if vi:
+                k1, k2, k3 = st.columns(3)
+                k1.metric(
+                    "💰 Valor imobilizado (BRL)", f"R$ {vi['total_brl']:,.2f}",
+                    help="Σ (estoque atual × preço de valoração) dos itens em BRL. "
+                         "Estimativa pelo último preço.",
+                )
+                k2.metric(
+                    "✅ Itens valorados", vi["itens_valorados"],
+                    help="Itens com preço de referência conhecido (SCM ou histórico).",
+                )
+                k3.metric(
+                    "⚠️ Sem preço", vi["itens_sem_preco"],
+                    help="Itens COM estoque mas SEM preço conhecido — subestimam o total. "
+                         "Aparecem quando o material ainda não foi comprado via SCM/SC7.",
+                )
+                if vi["itens_nao_brl"]:
+                    st.caption(
+                        f"🌐 {vi['itens_nao_brl']} item(ns) com moeda ≠ BRL "
+                        f"(≈ {vi['total_nao_brl']:,.2f} na moeda original) somados à parte — "
+                        "sem conversão cambial nesta versão."
+                    )
+
+            fa, fb = st.columns(2)
+
+            # Evolução do valor imobilizado (fotos diárias)
+            with fa:
+                st.markdown("**📈 Evolução do valor imobilizado**")
+                st.caption("Soma diária de (estoque × preço) — capital parado ao longo do tempo.")
+                try:
+                    ev = obter_evolucao_valor_imobilizado(dias=180)
+                except Exception:
+                    ev = {"serie": [], "n_snapshots": 0}
+                if ev["serie"]:
+                    df_ev = pd.DataFrame(ev["serie"]).set_index("data")
+                    st.line_chart(df_ev["valor"], height=240)
+                    st.caption(f"Baseado em {ev['n_snapshots']} foto(s) de estoque.")
+                else:
+                    st.info("Ainda sem fotos suficientes — a série amadurece a cada import diário.")
+
+            # Curva ABC por valor
+            with fb:
+                st.markdown("**📊 Curva ABC por valor (últimos 90d)**")
+                st.caption("Ranking pelo valor consumido = qtd saída × preço. A=80% · B=95% · C=resto.")
+                try:
+                    abc = obter_abc_valor(dias=90, limit=15)
+                except Exception:
+                    abc = []
+                if abc:
+                    df_abc_v = pd.DataFrame(abc)
+                    df_abc_v["Item"] = df_abc_v["part_number"] + " • " + \
+                        df_abc_v["nome_item"].astype(str).str.slice(0, 18)
+                    st.dataframe(
+                        df_abc_v[["Item", "classe", "valor", "pct_acumulado", "origem"]]
+                        .rename(columns={"classe": "Classe", "valor": "Valor (R$)",
+                                         "pct_acumulado": "% Acum.", "origem": "Origem"}),
+                        hide_index=True, width="stretch", height=280,
+                        column_config={
+                            "Valor (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+                            "% Acum.": st.column_config.NumberColumn(format="%.1f%%"),
+                        },
+                    )
+                else:
+                    st.info("Sem saídas valorizáveis no período.")
+
+            # Top capital parado (valor alto + giro 0) — alvo de redução de imobilizado
+            if not df_series.empty and "Valor em Estoque" in df_series.columns \
+                    and "Giro(anual)" in df_series.columns:
+                st.markdown("**🧊 Top capital parado (maior valor em estoque, giro 0)**")
+                st.caption("Dinheiro parado sem saída no período — candidatos a reduzir/realocar.")
+                parado_val = (df_series[(df_series["Giro(anual)"] == 0) &
+                                        (df_series["Valor em Estoque"] > 0)]
+                              .nlargest(8, "Valor em Estoque")[["PN", "Estoque Atual",
+                                                                "Valor em Estoque"]])
+                if not parado_val.empty:
+                    st.dataframe(
+                        parado_val, hide_index=True, width="stretch",
+                        column_config={"Valor em Estoque":
+                                       st.column_config.NumberColumn(format="R$ %.2f")},
+                    )
+                else:
+                    st.success("✅ Nenhum item de valor relevante totalmente parado.")
+
+            # Evolução de preço por item (antecipa parte da Ficha 360 v2.6)
+            st.markdown("**🔎 Evolução de preço (por item)**")
+            if not df_series.empty and "PN" in df_series.columns:
+                _map_pn = {i["part_number"]: i["id"] for i in listar_inventario()}
+                pn_sel = st.selectbox("Item", ["—"] + sorted(_map_pn.keys()),
+                                      key="fin_pn_preco")
+                if pn_sel and pn_sel != "—":
+                    serie_p = obter_evolucao_preco(_map_pn[pn_sel])
+                    if serie_p:
+                        df_p = pd.DataFrame(serie_p)
+                        df_p["data"] = pd.to_datetime(df_p["data"], errors="coerce")
+                        df_p = df_p.dropna(subset=["data"]).sort_values("data")
+                        if not df_p.empty:
+                            st.line_chart(df_p.set_index("data")["preco_unitario"], height=220)
+                            st.caption(
+                                f"{len(df_p)} registro(s) de preço · origem(ns): "
+                                f"{', '.join(sorted(df_p['origem'].dropna().unique()))}."
+                            )
+                        else:
+                            st.info("Sem datas válidas no histórico de preço deste item.")
+                    else:
+                        st.info("Sem histórico de preço para este item ainda.")
 
         st.markdown("---")
 

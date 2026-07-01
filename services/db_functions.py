@@ -7,6 +7,7 @@ from services.constants import (
     JANELA_CONSUMO_DIAS, PREVISAO_RUPTURA_SEM_RISCO,
     SNAPSHOT_RETENCAO_DIAS, RELATORIO_SCS_ABAS, decodificar_moeda,
     JANELAS_CONSUMO, TENDENCIA_LIMIAR_PCT, GIRO_JANELA_DIAS, LEAD_TIME_MAX_DIAS,
+    ABC_LIMIAR_A, ABC_LIMIAR_B, VALOR_CONSUMIDO_JANELA_DIAS,
 )
 import pandas as pd
 
@@ -1423,11 +1424,20 @@ def exportar_inventario_df():
 
     # v2.2.1: enriquece com giro / tempo em estoque (calculado sob demanda a partir
     # dos snapshots). Uma conexão compartilhada evita 1 transação por item.
+    # v2.3.0: + valoração (preço/valor em estoque/valor consumido) e classe ABC-valor.
     with transaction() as conn:
+        classe_abc = {x["item_id"]: x["classe"] for x in obter_abc_valor(conn=conn)}
         for it in itens:
             g = calcular_giro(it["id"], conn=conn)
             it["giro_anual"] = g["giro_anual"]
             it["tempo_medio_dias"] = g["tempo_medio_dias"]
+            preco, origem, _moeda = _preco_valoracao(conn, it["id"])
+            it["preco_ref"] = round(preco, 2)
+            it["preco_origem"] = origem or "—"
+            it["valor_estoque"] = round(float(it.get("estoque_atual", 0) or 0) * preco, 2)
+            vc = calcular_valor_consumido(it["id"], conn=conn)
+            it["valor_consumido_90d"] = vc["valor"]
+            it["classe_abc_valor"] = classe_abc.get(it["id"], "—")
 
     # v2.0.2 / v2.2.1: estrutura de exportação
     colunas = [
@@ -1439,6 +1449,8 @@ def exportar_inventario_df():
         "tendencia_label", "tendencia_pct",
         "lead_time_dias", "lead_time_calculado", "lead_time_calculado_origem",
         "giro_anual", "tempo_medio_dias", "previsao_ruptura_dias",
+        "preco_ref", "preco_origem", "valor_estoque", "valor_consumido_90d",
+        "classe_abc_valor",
         "sc_numero", "status_material", "status_sc",
         "data_inventario",
         "caixa_identificacao" # Campo reutilizado para Obs Operacional
@@ -1474,6 +1486,11 @@ def exportar_inventario_df():
         "giro_anual": "Giro(anual)",
         "tempo_medio_dias": "Tempo Estoque(d)",
         "previsao_ruptura_dias": "Ruptura(d)",
+        "preco_ref": "Preço Ref",
+        "preco_origem": "Origem Preço",
+        "valor_estoque": "Valor em Estoque",
+        "valor_consumido_90d": "Valor Consumido(90d)",
+        "classe_abc_valor": "Classe ABC(valor)",
         "sc_numero": "Última SC",
         "status_material": "Status Material",
         "status_sc": "Status SC",
@@ -1985,6 +2002,159 @@ def obter_maturidade_dados(conn=None):
             dias = max((datetime.now() - dt.to_pydatetime()).days, 0)
             data_inicio = dt.strftime("%Y-%m-%d")
     return {"dias": dias, "data_inicio": data_inicio, "n_snapshots": n_snap or 0}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v2.3.0 — PILAR FINANCEIRO / VALORAÇÃO
+# Tudo derivado na leitura (sem coluna nova). Valoração é ESTIMATIVA rotulada;
+# não é a base do Sr. Neidson (Mín/Máx/Lead Time/Categoria).
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _preco_valoracao(c, item_id):
+    """Preço unitário de valoração + origem + moeda (transparência). Usa
+    preco_referencia (último preço SCM) se > 0; senão o preço mais recente de
+    precos_historico (tipicamente SC7); senão (0.0, None, 'BRL'). v2.3.0.
+
+    Recebe uma conexão/transação JÁ ABERTA (c) — reuso em varreduras por item."""
+    r = c.execute("SELECT preco_referencia FROM inventario WHERE id=?", (item_id,)).fetchone()
+    preco = float(r["preco_referencia"] or 0) if r else 0.0
+    if preco > 0:
+        return preco, "SCM", "BRL"  # preco_referencia é cache SCM (assumido BRL)
+    ph = c.execute(
+        """SELECT preco_unitario, origem, moeda FROM precos_historico
+           WHERE item_id=? AND COALESCE(preco_unitario,0) > 0
+           ORDER BY COALESCE(data, data_registro) DESC, id DESC LIMIT 1""",
+        (item_id,),
+    ).fetchone()
+    if ph and ph["preco_unitario"]:
+        return float(ph["preco_unitario"]), (ph["origem"] or "Histórico"), (ph["moeda"] or "BRL")
+    return 0.0, None, "BRL"
+
+
+def obter_valor_imobilizado(conn=None):
+    """Valor total imobilizado = Σ(estoque_atual × preço de valoração), em BRL.
+
+    Transparência: conta itens valorados, itens com estoque mas SEM preço
+    (subestimam o total) e itens com moeda≠BRL (somados à parte, sem câmbio).
+    v2.3.0."""
+    total = 0.0
+    valorados = sem_preco = nao_brl = 0
+    total_nao_brl = 0.0
+    with transaction(conn) as c:
+        itens = c.execute("SELECT id, estoque_atual FROM inventario").fetchall()
+        for r in itens:
+            est = float(r["estoque_atual"] or 0)
+            preco, _origem, moeda = _preco_valoracao(c, r["id"])
+            if preco > 0:
+                valorados += 1
+                if moeda and moeda != "BRL":
+                    nao_brl += 1
+                    total_nao_brl += est * preco
+                else:
+                    total += est * preco
+            elif est > 0:
+                sem_preco += 1
+    return {
+        "total_brl": round(total, 2),
+        "itens_valorados": valorados,
+        "itens_sem_preco": sem_preco,
+        "itens_nao_brl": nao_brl,
+        "total_nao_brl": round(total_nao_brl, 2),
+    }
+
+
+def obter_evolucao_valor_imobilizado(dias=180, conn=None):
+    """Série do valor imobilizado ao longo do tempo (Σ valor_estoque por dia das
+    fotos diárias). Base p/ o gráfico de evolução (Diretoria). Retorna também
+    n_snapshots (maturidade). v2.3.0."""
+    with transaction(conn) as c:
+        rows = c.execute(
+            """SELECT data, SUM(COALESCE(valor_estoque,0)) AS valor
+               FROM estoque_snapshots WHERE data >= date('now', ?)
+               GROUP BY data ORDER BY data""",
+            (f"-{dias} days",),
+        ).fetchall()
+        n = c.execute("SELECT COUNT(DISTINCT data) AS n FROM estoque_snapshots").fetchone()["n"]
+    serie = [{"data": r["data"], "valor": round(float(r["valor"] or 0), 2)} for r in rows]
+    return {"serie": serie, "n_snapshots": n or 0}
+
+
+def obter_evolucao_preco(item_id, conn=None):
+    """Série de preços de um item (precos_historico, SCM+SC7) ordenada por data —
+    base do gráfico 'evolução de preço'. v2.3.0."""
+    with transaction(conn) as c:
+        rows = c.execute(
+            """SELECT data, preco_unitario, moeda, origem, fornecedor, numero_po, numero_sc
+               FROM precos_historico
+               WHERE item_id=? AND COALESCE(preco_unitario,0) > 0
+               ORDER BY COALESCE(data, data_registro), id""",
+            (item_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def calcular_valor_consumido(item_id, dias=VALOR_CONSUMIDO_JANELA_DIAS, conn=None):
+    """Valor consumido (ESTIMATIVA) = Σ(saídas na janela) × preço de valoração.
+
+    Estimativa: usa o último preço (não o preço vigente em cada saída — as
+    movimentações não guardam preço). Rótulo de origem acompanha. v2.3.0."""
+    with transaction(conn) as c:
+        preco, origem, moeda = _preco_valoracao(c, item_id)
+        r = c.execute(
+            """SELECT COALESCE(SUM(quantidade),0) AS qtd FROM movimentacoes
+               WHERE item_id=? AND tipo='saida' AND data_hora >= datetime('now', ?)""",
+            (item_id, f"-{dias} days"),
+        ).fetchone()
+    qtd = float(r["qtd"] or 0)
+    return {
+        "valor": round(qtd * preco, 2),
+        "qtd": round(qtd, 2),
+        "preco": preco,
+        "origem": origem,
+        "moeda": moeda,
+        "janela_dias": dias,
+    }
+
+
+def obter_abc_valor(dias=VALOR_CONSUMIDO_JANELA_DIAS, limit=None, conn=None):
+    """Curva ABC por VALOR consumido (qtd_saída × preço) na janela. Ordena
+    decrescente, calcula % acumulada e classe A/B/C (limiares 80/95). Usa todas
+    as saídas (coerente com consumo/giro). v2.3.0."""
+    with transaction(conn) as c:
+        rows = c.execute(
+            """SELECT i.id, i.part_number, i.nome_item,
+                      COALESCE(SUM(m.quantidade),0) AS qtd
+               FROM movimentacoes m JOIN inventario i ON i.id = m.item_id
+               WHERE m.tipo='saida' AND m.data_hora >= datetime('now', ?)
+               GROUP BY i.id HAVING qtd > 0""",
+            (f"-{dias} days",),
+        ).fetchall()
+        itens = []
+        for r in rows:
+            preco, origem, moeda = _preco_valoracao(c, r["id"])
+            valor = float(r["qtd"]) * preco
+            if valor <= 0:
+                continue
+            itens.append({
+                "item_id": r["id"], "part_number": r["part_number"],
+                "nome_item": r["nome_item"], "qtd": round(float(r["qtd"]), 2),
+                "preco": preco, "origem": origem, "moeda": moeda,
+                "valor": round(valor, 2),
+            })
+    itens.sort(key=lambda x: x["valor"], reverse=True)
+    total = sum(x["valor"] for x in itens)
+    acc = 0.0
+    for x in itens:
+        # Classe pela % acumulada ANTES do item (convenção padrão): o item que
+        # cruza 80% ainda é A; o que cruza 95% ainda é B. Evita que o 2º maior
+        # item caia em C quando um item domina e o acumulado "pula" a faixa.
+        prev_pct = (acc / total * 100.0) if total > 0 else 0.0
+        acc += x["valor"]
+        x["pct_acumulado"] = round((acc / total * 100.0) if total > 0 else 0.0, 1)
+        x["classe"] = "A" if prev_pct < ABC_LIMIAR_A else ("B" if prev_pct < ABC_LIMIAR_B else "C")
+    if limit:
+        itens = itens[:limit]
+    return itens
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -29,6 +29,16 @@ GIRO_JANELA_DIAS = 90            # janela padrão do giro / estoque médio
 LEAD_TIME_MAX_DIAS = 365         # cap de outlier no cálculo de Lead Time (SC7/recebimento)
 
 # ══════════════════════════════════════════════════════════════════════════════
+# v2.3.0 — Pilar Financeiro / Valoração
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Curva ABC por VALOR consumido (qtd × preço): classe pela % acumulada do valor.
+# Curva clássica 80/15/5 → A até 80%, B até 95%, C o restante.
+ABC_LIMIAR_A = 80
+ABC_LIMIAR_B = 95
+VALOR_CONSUMIDO_JANELA_DIAS = 90   # janela padrão de valor consumido / ABC-valor
+
+# ══════════════════════════════════════════════════════════════════════════════
 # v2.2.0 — Ingestão do Relatório de SCs / Pilar Financeiro / Snapshots
 # ══════════════════════════════════════════════════════════════════════════════
 
