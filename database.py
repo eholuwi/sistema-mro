@@ -303,6 +303,7 @@ def criar_banco():
             numero_sc      TEXT,
             numero_po      TEXT,
             origem         TEXT,
+            lead_time_dias INTEGER,
             data_registro  TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (item_id) REFERENCES inventario(id) ON DELETE CASCADE
         )
@@ -465,9 +466,18 @@ def criar_banco():
             logger.info("  -> Migracao: %s em inventario adicionada.", col)
     conn.commit()
 
+    # v2.4.0 — lead time por linha SC7 em precos_historico (delta Dt.Entrega − DT
+    # Emissao). Persiste o dado que a v2.2.1 calculava e descartava, permitindo
+    # atribuir lead time ao fornecedor via numero_po (SC7 × SCM). Coluna nullable.
+    cols_ph = {r[1] for r in conn.execute("PRAGMA table_info(precos_historico)")}
+    if "lead_time_dias" not in cols_ph:
+        conn.execute("ALTER TABLE precos_historico ADD COLUMN lead_time_dias INTEGER")
+        logger.info("  -> Migracao: lead_time_dias em precos_historico adicionada.")
+        conn.commit()
+
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.3.0")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.4.0")
 
 
 def _migrar(conn):

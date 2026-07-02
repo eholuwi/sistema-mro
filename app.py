@@ -1,7 +1,7 @@
 from services.db_functions import obter_dados_dashboard 
 import streamlit as st
 import pandas as pd
-import json, io, os, sys, time
+import json, io, os, sys, time, urllib.parse
 from streamlit_option_menu import option_menu
 from datetime import date, datetime
 from services.styles import inject_custom_css
@@ -31,6 +31,7 @@ from services.db_functions import (
     obter_maturidade_dados, calcular_giro,
     obter_valor_imobilizado, obter_evolucao_valor_imobilizado,
     obter_evolucao_preco, obter_abc_valor,
+    obter_fornecedores_por_item,
 )
 
 setup_logging()
@@ -43,7 +44,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 2.3.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 2.4.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
 
 inject_custom_css()
 
@@ -1317,8 +1318,9 @@ elif pagina == "🧾 Compras (SC)":
     st.title("🧾 Gestão de Compras — S.C.")
     
     # Estrutura de abas mantida conforme solicitado
-    aba_mon, aba_nova_sc, aba_rec, aba_ed, aba_h, aba_import = st.tabs([
-    "📡 Monitor", "➕ Nova SC", "📦 Receber Material", "🔄 Atualizar Status", "📜 Histórico", "📥 Importar Relatório de SCs"
+    aba_mon, aba_forn, aba_nova_sc, aba_rec, aba_ed, aba_h, aba_import = st.tabs([
+    "📡 Monitor", "🏢 Fornecedores & Cotação", "➕ Nova SC", "📦 Receber Material",
+    "🔄 Atualizar Status", "📜 Histórico", "📥 Importar Relatório de SCs"
     ])
     # ══════════════════════════════════════════════════════════════════════════════
     # 📡 MONITOR DE COMPRAS 
@@ -1529,6 +1531,113 @@ elif pagina == "🧾 Compras (SC)":
                         st.success(f"Importado: {res_o.get('linhas_importadas', 0)} linhas.")
                     else:
                         st.error(f"Falha: {res_o.get('erro', 'erro')}")
+    # ══════════════════════════════════════════════════════════════════════════════
+    #   🏢 FORNECEDORES & COTAÇÃO (v2.4.0) — busca material → fornecedores/preços,
+    #   melhor fornecedor (menor último preço), lead time por fornecedor e rascunho
+    #   de e-mail. Assistente: o sistema prepara a cotação; o comprador revisa e ENVIA.
+    # ══════════════════════════════════════════════════════════════════════════════
+    with aba_forn:
+        st.markdown("### 🏢 Fornecedores & Cotação")
+        st.caption("Busque um material para ver seus fornecedores, último preço e lead time, "
+                   "e gerar um e-mail de cotação pronto. O sistema recomenda; o comprador decide.")
+
+        _, item_forn, _ = sel_material("Busque o material (PN ou nome)", "forn_item")
+        if not item_forn:
+            st.info("Selecione um material para consultar os fornecedores.")
+        else:
+            lt_cad = int(item_forn.get("lead_time_dias") or 0)
+            lt_calc = item_forn.get("lead_time_calculado")
+            lt_calc_txt = (
+                f" · Lead time calculado: {int(lt_calc)}d "
+                f"({item_forn.get('lead_time_calculado_amostras') or 0} amostras, "
+                f"{item_forn.get('lead_time_calculado_origem') or '—'})"
+            ) if lt_calc else ""
+            st.info(
+                f"**{item_forn['part_number']} — {item_forn['nome_item']}**  \n"
+                f"Saldo: {(item_forn.get('estoque_atual') or 0):g} {item_forn.get('unidade', '')} · "
+                f"Mínimo: {(item_forn.get('estoque_minimo') or 0):g} · "
+                f"Lead time cadastrado (Neidson): {lt_cad}d{lt_calc_txt}"
+            )
+
+            fs = obter_fornecedores_por_item(item_forn["id"])
+            if not fs:
+                st.warning("Sem fornecedores para este item ainda. Os fornecedores vêm dos "
+                           "pedidos importados no Relatório de SCs (Nome Fantasia por nº do pedido).")
+            else:
+                melhor = next((f for f in fs if f.get("melhor")), None)
+                if melhor:
+                    st.success(
+                        f"⭐ **Melhor fornecedor: {melhor['fornecedor']}** — {melhor['melhor_motivo']}. "
+                        f"E-mail: {melhor['email'] or 'sem e-mail no cadastro'}."
+                    )
+
+                df_fs = pd.DataFrame([{
+                    "Fornecedor": f["fornecedor"],
+                    "Último Preço": f["ultimo_preco"],
+                    "Moeda": f["moeda"],
+                    "Nº Compras": f["n_compras"],
+                    "Última Compra": fmt(f["ultima_data"]),
+                    "Lead Time (d)": f["lead_time_fornecedor"],
+                    "E-mail": f["email"] or "—",
+                    "Contato": f["contato"] or "—",
+                    "Telefone": f["telefone"] or "—",
+                    "Cadastro": "✅" if f["no_cadastro"] else "⚠️",
+                } for f in fs])
+                st.dataframe(
+                    df_fs, hide_index=True, width="stretch",
+                    column_config={
+                        "Último Preço": st.column_config.NumberColumn(format="%.2f"),
+                        "Lead Time (d)": st.column_config.NumberColumn(
+                            format="%d",
+                            help="Mediana do prazo real (SC7) atribuído ao fornecedor via nº do pedido."),
+                    },
+                )
+                st.caption("Ordenado por menor último preço. Lead time por fornecedor = mediana do "
+                           "prazo real (SC7) atribuído pelo nº do pedido. ‘⚠️’ = fornecedor sem "
+                           "correspondência no cadastro (sem e-mail para cotação).")
+
+                # --- Rascunho de cotação (não envia) ---
+                st.markdown("#### ✉️ Rascunho de cotação")
+                nomes = [f["fornecedor"] for f in fs]
+                default_sel = [melhor["fornecedor"]] if melhor else nomes[:1]
+                sel_forn = st.multiselect("Fornecedores para cotar", nomes,
+                                          default=default_sel, key="forn_cotar")
+                qtd_cotar = st.number_input(
+                    "Quantidade a cotar", min_value=0.0,
+                    value=float(item_forn.get("estoque_minimo") or 0),
+                    step=1.0, key="forn_qtd")
+                prazo = st.text_input("Prazo desejado (opcional)",
+                                      placeholder="Ex.: até 15 dias", key="forn_prazo")
+
+                escolhidos = [f for f in fs if f["fornecedor"] in sel_forn]
+                emails = [f["email"] for f in escolhidos if f["email"]]
+                sem_email = [f["fornecedor"] for f in escolhidos if not f["email"]]
+
+                assunto = f"Cotação — {item_forn['part_number']} ({item_forn['nome_item']})"
+                corpo = (
+                    "Prezados,\n\n"
+                    "Solicitamos cotação para o item abaixo:\n\n"
+                    f"• Part Number: {item_forn['part_number']}\n"
+                    f"• Descrição: {item_forn['nome_item']}\n"
+                    f"• Quantidade: {qtd_cotar:g} {item_forn.get('unidade', '')}\n"
+                    + (f"• Prazo desejado: {prazo}\n" if prazo else "")
+                    + "\nFavor informar preço unitário, prazo de entrega e condições de pagamento.\n\n"
+                    "Atenciosamente,\nCompras — Inventus Power"
+                )
+                st.text_area("Corpo do e-mail (copie ou edite)", corpo, height=220, key="forn_corpo")
+                if emails:
+                    st.markdown("**Destinatários:**")
+                    st.code(", ".join(emails), language=None)
+                    mailto = ("mailto:" + ",".join(emails)
+                              + "?subject=" + urllib.parse.quote(assunto)
+                              + "&body=" + urllib.parse.quote(corpo))
+                    st.link_button("✉️ Abrir e-mail no meu cliente", mailto)
+                elif escolhidos:
+                    st.warning("Nenhum fornecedor selecionado tem e-mail no cadastro.")
+                if sem_email:
+                    st.caption("Sem e-mail no cadastro: " + ", ".join(sem_email))
+                st.caption("O sistema **prepara** a cotação; o envio é feito pelo comprador, "
+                           "no próprio cliente de e-mail.")
     # ══════════════════════════════════════════════════════════════════════════════
     #   ➕ NOVA SC (Formulário em Grid + Agrupamento Lógico)
     # ══════════════════════════════════════════════════════════════════════════════

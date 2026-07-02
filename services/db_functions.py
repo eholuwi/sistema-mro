@@ -7,7 +7,7 @@ from services.constants import (
     JANELA_CONSUMO_DIAS, PREVISAO_RUPTURA_SEM_RISCO,
     SNAPSHOT_RETENCAO_DIAS, RELATORIO_SCS_ABAS, decodificar_moeda,
     JANELAS_CONSUMO, TENDENCIA_LIMIAR_PCT, GIRO_JANELA_DIAS, LEAD_TIME_MAX_DIAS,
-    ABC_LIMIAR_A, ABC_LIMIAR_B, VALOR_CONSUMIDO_JANELA_DIAS,
+    ABC_LIMIAR_A, ABC_LIMIAR_B, VALOR_CONSUMIDO_JANELA_DIAS, MOEDA_PADRAO,
 )
 import pandas as pd
 
@@ -2093,6 +2093,175 @@ def obter_evolucao_preco(item_id, conn=None):
     return [dict(r) for r in rows]
 
 
+def _fornecedores_master_norm(c):
+    """Índice {nome_normalizado: dict do cadastro} de `fornecedores` (SA1), p/ casar
+    o nome livre ("Nome Fantasia") gravado em precos_historico/itens_sc com o
+    cadastro mestre e recuperar e-mail/telefone/contato para cotação. v2.4.0.
+
+    Chaveia por nome_fantasia e, como fallback, por razao_social. Em colisão,
+    prioriza a linha que TEM e-mail (o dado que interessa à cotação)."""
+    idx = {}
+    rows = c.execute(
+        """SELECT codigo, loja, razao_social, nome_fantasia, cnpj, email,
+                  telefone, contato, cond_pagto
+           FROM fornecedores WHERE COALESCE(ativo, 1) = 1"""
+    ).fetchall()
+    for r in rows:
+        d = dict(r)
+        tem_email = "@" in (d.get("email") or "")
+        for campo in (d.get("nome_fantasia"), d.get("razao_social")):
+            chave = _normalizar_txt(campo)
+            if not chave:
+                continue
+            atual = idx.get(chave)
+            if atual is None or (tem_email and "@" not in (atual.get("email") or "")):
+                idx[chave] = d
+    return idx
+
+
+def _nome_fornecedor_valido(nome):
+    """True se `nome` parece um Nome Fantasia de verdade (tem ao menos uma letra).
+    Descarta o lixo que a ingestão do SCM às vezes grava no lugar do fornecedor
+    (ex.: '1.0'/'2.0' = nº da loja, 'None'), verificado nos dados reais. v2.4.0."""
+    return bool(nome) and bool(re.search(r"[A-Za-zÀ-ÿ]", str(nome)))
+
+
+def obter_fornecedores_por_item(item_id, conn=None):
+    """Fornecedores de um item, "mastigados" para cotação (v2.4.0).
+
+    Deriva na leitura (sem tabela materializada). O elo confiável nos dados reais
+    é o Nº DO PEDIDO (numero_po):
+      • `itens_sc.fornecedor_item` dá PO → fornecedor (Nome Fantasia real);
+      • `precos_historico` dá PO → preço (SCM/SC7) e lead time (SC7);
+      • o join por numero_po reconstrói preço + lead time por fornecedor.
+    Nomes inválidos ('1.0', 'None' etc.) são descartados (_nome_fornecedor_valido).
+    Enriquece com e-mail/telefone/contato do cadastro (SA1).
+
+    Ordena por MENOR último preço (fornecedores sem preço vão ao fim) e marca
+    `melhor=True` no primeiro com preço — sugestão explicável em 1 frase
+    (`melhor_motivo`). Assistente, não piloto: o comprador decide. Retorna []
+    quando não há fornecedor nomeado para o item."""
+    def _br(dstr):
+        try:
+            return datetime.strptime(dstr, "%Y-%m-%d").strftime("%d/%m/%Y")
+        except Exception:
+            return dstr or ""
+
+    with transaction(conn) as c:
+        # 1) PO -> fornecedor + fornecedores nomeados vistos (itens_sc).
+        po_forn = {}                 # numero_po -> nome de exibição
+        fornecedores_vistos = {}     # nome_norm -> nome de exibição
+        pos_por_forn = {}            # nome_norm -> set(numero_po)
+        for r in c.execute(
+            """SELECT numero_po, fornecedor_item FROM itens_sc
+               WHERE item_id=? AND fornecedor_item IS NOT NULL
+                     AND TRIM(fornecedor_item) <> ''""",
+            (item_id,),
+        ).fetchall():
+            nome = str(r["fornecedor_item"]).strip()
+            if not _nome_fornecedor_valido(nome):
+                continue
+            chave = _normalizar_txt(nome)
+            fornecedores_vistos.setdefault(chave, nome)
+            po = str(r["numero_po"]).strip() if r["numero_po"] else ""
+            if po:
+                po_forn.setdefault(po, nome)
+                pos_por_forn.setdefault(chave, set()).add(po)
+
+        # 2) Preços por PO (SCM+SC7), mais recente primeiro — atribuídos pelo PO.
+        precos = c.execute(
+            """SELECT numero_po, preco_unitario, moeda, data
+               FROM precos_historico
+               WHERE item_id=? AND numero_po IS NOT NULL
+                     AND COALESCE(preco_unitario,0) > 0
+               ORDER BY COALESCE(data, data_registro) DESC, id DESC""",
+            (item_id,),
+        ).fetchall()
+
+        # 3) Lead times observados (SC7) atribuídos ao fornecedor via numero_po.
+        leads = c.execute(
+            """SELECT numero_po, lead_time_dias FROM precos_historico
+               WHERE item_id=? AND origem='SC7' AND lead_time_dias IS NOT NULL
+                     AND numero_po IS NOT NULL""",
+            (item_id,),
+        ).fetchall()
+
+        master = _fornecedores_master_norm(c)
+
+    # Agregação por fornecedor (fora da transação — matemática pura).
+    agg = {}  # nome_norm -> acumulador
+    for chave, nome in fornecedores_vistos.items():
+        agg[chave] = {
+            "fornecedor": nome, "ultimo_preco": None, "ultima_data": None,
+            "moeda": None, "preco_min": None, "preco_max": None,
+            "_soma": 0.0, "_np": 0,
+            "n_compras": len(pos_por_forn.get(chave, ())), "_leads": [],
+        }
+
+    for r in precos:
+        nome = po_forn.get(str(r["numero_po"]).strip())
+        if not nome:
+            continue
+        a = agg[_normalizar_txt(nome)]
+        preco = float(r["preco_unitario"] or 0)
+        if a["ultimo_preco"] is None:        # 1ª (mais recente, pois ordenado desc)
+            a["ultimo_preco"] = preco
+            a["ultima_data"] = r["data"]
+            a["moeda"] = r["moeda"] or MOEDA_PADRAO
+            a["preco_min"] = a["preco_max"] = preco
+        else:
+            a["preco_min"] = min(a["preco_min"], preco)
+            a["preco_max"] = max(a["preco_max"], preco)
+        a["_soma"] += preco
+        a["_np"] += 1
+
+    for r in leads:
+        nome = po_forn.get(str(r["numero_po"]).strip())
+        if nome:
+            agg[_normalizar_txt(nome)]["_leads"].append(int(r["lead_time_dias"]))
+
+    resultado = []
+    for chave, a in agg.items():
+        cad = master.get(chave)
+        lt = _mediana(a["_leads"])
+        tem_preco = a["ultimo_preco"] is not None
+        resultado.append({
+            "fornecedor": a["fornecedor"],
+            "ultimo_preco": round(a["ultimo_preco"], 2) if tem_preco else None,
+            "moeda": a["moeda"] or MOEDA_PADRAO,
+            "ultima_data": a["ultima_data"],
+            "preco_min": round(a["preco_min"], 2) if tem_preco else None,
+            "preco_max": round(a["preco_max"], 2) if tem_preco else None,
+            "preco_medio": round(a["_soma"] / a["_np"], 2) if a["_np"] else None,
+            "n_compras": a["n_compras"],
+            "lead_time_fornecedor": int(round(lt)) if lt is not None else None,
+            "lead_time_amostras": len(a["_leads"]),
+            "codigo": cad["codigo"] if cad else None,
+            "loja": cad["loja"] if cad else None,
+            "email": ((cad["email"] or "").strip() or None) if cad else None,
+            "telefone": ((cad["telefone"] or "").strip() or None) if cad else None,
+            "contato": ((cad["contato"] or "").strip() or None) if cad else None,
+            "cnpj": cad["cnpj"] if cad else None,
+            "cond_pagto": cad["cond_pagto"] if cad else None,
+            "no_cadastro": cad is not None,
+            "melhor": False,
+            "melhor_motivo": None,
+        })
+
+    # Menor último preço primeiro; sem preço vai ao fim (ordenado por nome).
+    resultado.sort(key=lambda x: (
+        x["ultimo_preco"] is None, x["ultimo_preco"] or 0.0, x["fornecedor"]))
+    if resultado and resultado[0]["ultimo_preco"] is not None:
+        m = resultado[0]
+        m["melhor"] = True
+        data_fmt = _br(m["ultima_data"])
+        m["melhor_motivo"] = (
+            f"Menor último preço ({m['moeda']} {m['ultimo_preco']:.2f}"
+            + (f" em {data_fmt}" if data_fmt else "") + ")"
+        )
+    return resultado
+
+
 def calcular_valor_consumido(item_id, dias=VALOR_CONSUMIDO_JANELA_DIAS, conn=None):
     """Valor consumido (ESTIMATIVA) = Σ(saídas na janela) × preço de valoração.
 
@@ -2461,6 +2630,10 @@ def ingerir_sc7_precos(df, nome_arquivo="Relatorio de SCs.xlsx"):
 
                 # Backfill de Lead Time (independe de preço): Dt.Entrega − DT Emissao,
                 # quando houve entrega. Filtro de outlier em _gravar_lead_time_calculado.
+                # lead_row = delta desta linha (dentro da faixa válida), persistido em
+                # precos_historico.lead_time_dias p/ atribuir lead time ao fornecedor
+                # via numero_po (v2.4.0). Fora da faixa → None (não polui o dado).
+                lead_row = None
                 qtd_entregue = _to_float(_valor(row, col["qtd_entregue"], 0))
                 if col["dt_entrega"] and qtd_entregue > 0:
                     # Datas do SC7 vêm como datetime do Excel ou ISO (YYYY-MM-DD);
@@ -2468,7 +2641,10 @@ def ingerir_sc7_precos(df, nome_arquivo="Relatorio de SCs.xlsx"):
                     emi = pd.to_datetime(_valor(row, col["dt_emissao"], None), errors="coerce")
                     ent = pd.to_datetime(_valor(row, col["dt_entrega"], None), errors="coerce")
                     if not pd.isna(emi) and not pd.isna(ent):
-                        lead_deltas.setdefault(item_id, []).append((ent - emi).days)
+                        delta = (ent - emi).days
+                        lead_deltas.setdefault(item_id, []).append(delta)
+                        if 1 <= delta <= LEAD_TIME_MAX_DIAS:
+                            lead_row = delta
 
                 preco = _to_float(_valor(row, col["preco"], 0))
                 if preco <= 0:
@@ -2486,12 +2662,18 @@ def ingerir_sc7_precos(df, nome_arquivo="Relatorio de SCs.xlsx"):
                     (item_id, pedido, preco)
                 ).fetchone()
                 if existe:
+                    # Backfill idempotente: reimportações preenchem o lead time em
+                    # linhas SC7 antigas (gravadas antes da v2.4.0) sem duplicar.
+                    if lead_row is not None:
+                        conn.execute(
+                            "UPDATE precos_historico SET lead_time_dias=? WHERE id=? AND lead_time_dias IS NULL",
+                            (lead_row, existe["id"]))
                     continue
                 conn.execute("""
                     INSERT INTO precos_historico
-                        (item_id,data,preco_unitario,moeda,fornecedor,numero_sc,numero_po,origem)
-                    VALUES (?,?,?,?,?,?,?,?)
-                """, (item_id, data, preco, moeda_str, None, numero_sc, pedido or None, "SC7"))
+                        (item_id,data,preco_unitario,moeda,fornecedor,numero_sc,numero_po,origem,lead_time_dias)
+                    VALUES (?,?,?,?,?,?,?,?,?)
+                """, (item_id, data, preco, moeda_str, None, numero_sc, pedido or None, "SC7", lead_row))
                 stats["precos_inseridos"] += 1
 
             # Grava o Lead Time calculado (mediana) por item a partir do backfill SC7.
