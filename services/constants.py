@@ -82,3 +82,24 @@ RELATORIO_SCS_ABAS = {
     "FORNECEDORES": 0,
     "SCM USERS": 1,
 }
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v2.5.0 — Assistente de Reposição (Planejamento)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Horizonte de abastecimento alvo (meta do PO: ~2 meses). Usado no alvo HÍBRIDO
+# da quantidade sugerida: alvo = max(estoque_maximo_Neidson, consumo_dia × N).
+HORIZONTE_REPOSICAO_DIAS = 60
+
+# Antecedência da abertura da SC (meta do PO: ~15 dias). O gatilho de reposição
+# dispara quando (estoque + guarda-chuva) ≤ ROP + consumo_dia × N, antecipando o
+# pedido em N dias além do ponto de pedido clássico.
+ANTECEDENCIA_REPOSICAO_DIAS = 15
+
+# Fallback de lead time (dias) quando o item não tem lead time cadastrado (Neidson)
+# nem calculado. Rotulado como "lead time desconhecido" para transparência — NÃO
+# sobrescreve nem grava nada na base; é usado apenas no cálculo da sugestão.
+LEAD_TIME_DEFAULT_DIAS = 30
+
+# Desfechos válidos de uma sugestão de reposição (auditoria em sugestoes_reposicao).
+REPOSICAO_DESFECHOS = ("gerada", "criou_sc", "adiada", "ignorada")

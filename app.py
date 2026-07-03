@@ -33,6 +33,10 @@ from services.db_functions import (
     obter_evolucao_preco, obter_abc_valor,
     obter_fornecedores_por_item,
 )
+from services.planejamento import (
+    gerar_sugestoes_reposicao, sugestao_para_item_sc,
+    registrar_desfecho_sugestao, listar_sugestoes, buscar_sc_id_por_numero,
+)
 
 setup_logging()
 criar_banco()
@@ -44,7 +48,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 2.4.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 2.5.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
 
 inject_custom_css()
 
@@ -100,7 +104,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 2.3.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 2.5.0</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1318,9 +1322,9 @@ elif pagina == "🧾 Compras (SC)":
     st.title("🧾 Gestão de Compras — S.C.")
     
     # Estrutura de abas mantida conforme solicitado
-    aba_mon, aba_forn, aba_nova_sc, aba_rec, aba_ed, aba_h, aba_import = st.tabs([
-    "📡 Monitor", "🏢 Fornecedores & Cotação", "➕ Nova SC", "📦 Receber Material",
-    "🔄 Atualizar Status", "📜 Histórico", "📥 Importar Relatório de SCs"
+    aba_mon, aba_assist, aba_forn, aba_nova_sc, aba_rec, aba_ed, aba_h, aba_import = st.tabs([
+    "📡 Monitor", "🧠 Assistente de Reposição", "🏢 Fornecedores & Cotação", "➕ Nova SC",
+    "📦 Receber Material", "🔄 Atualizar Status", "📜 Histórico", "📥 Importar Relatório de SCs"
     ])
     # ══════════════════════════════════════════════════════════════════════════════
     # 📡 MONITOR DE COMPRAS 
@@ -1536,6 +1540,186 @@ elif pagina == "🧾 Compras (SC)":
     #   melhor fornecedor (menor último preço), lead time por fornecedor e rascunho
     #   de e-mail. Assistente: o sistema prepara a cotação; o comprador revisa e ENVIA.
     # ══════════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════════
+    #   🧠 ASSISTENTE DE REPOSIÇÃO (v2.5.0) — recomenda o quê/quando/quanto/de quem;
+    #   o comprador decide e cria a SC. Nada sobrescreve a base do Neidson.
+    # ══════════════════════════════════════════════════════════════════════════════
+    with aba_assist:
+        st.markdown("### 🧠 Assistente de Reposição")
+        st.caption("Fila priorizada do que repor — o quê, quando, quanto, por quê e de quem. "
+                   "O sistema **recomenda**; o comprador decide e cria a SC. Nada aqui "
+                   "sobrescreve a base do Sr. Neidson (mín/máx/lead time/categoria).")
+
+        _mat = obter_maturidade_dados()
+        st.caption(
+            f"📅 Indicadores de série baseados em ~{_mat['dias']} dias de histórico"
+            + (f" (desde {fmt(_mat['data_inicio'])})" if _mat.get('data_inicio') else "")
+            + " — amadurecem conforme os dados acumulam."
+        )
+
+        with st.spinner("Calculando sugestões de reposição…"):
+            sugestoes = gerar_sugestoes_reposicao()
+
+        if not sugestoes:
+            st.success("✅ Nenhuma reposição necessária agora. Estoque + guarda-chuva "
+                       "cobrem o horizonte planejado para todos os itens.")
+        else:
+            # --- Filtros ---
+            cflt1, cflt2, cflt3 = st.columns(3)
+            with cflt1:
+                so_criticos = st.checkbox("🔴 Só críticos", value=False, key="rep_so_crit",
+                                          help="Itens no/abaixo do ponto de pedido (ROP).")
+            with cflt2:
+                setores = sorted({s["setor"] for s in sugestoes if s["setor"]})
+                f_setor = st.selectbox("Setor", ["Todos"] + setores, key="rep_setor")
+            with cflt3:
+                forns = sorted({s["fornecedor_sugerido"] or "Sem fornecedor sugerido"
+                                for s in sugestoes})
+                f_forn = st.selectbox("Fornecedor sugerido (agrupar)", ["Todos"] + forns,
+                                      key="rep_forn")
+
+            filtradas = sugestoes
+            if so_criticos:
+                filtradas = [s for s in filtradas if s["prioridade_tier"] == 0]
+            if f_setor != "Todos":
+                filtradas = [s for s in filtradas if s["setor"] == f_setor]
+            if f_forn != "Todos":
+                filtradas = [s for s in filtradas
+                             if (s["fornecedor_sugerido"] or "Sem fornecedor sugerido") == f_forn]
+
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Itens a repor", len(filtradas))
+            k2.metric("🔴 Críticos", sum(1 for s in filtradas if s["prioridade_tier"] == 0))
+            k3.metric("⛔ Parada de Linha", sum(1 for s in filtradas if s["parada_linha"]))
+
+            st.divider()
+
+            df_rep = pd.DataFrame([{
+                "Prioridade": s["prioridade"],
+                "PN": s["part_number"],
+                "Item": s["nome_item"],
+                "Cobertura(d)": (s["cobertura_dias"]
+                                 if s["cobertura_dias"] < PREVISAO_RUPTURA_SEM_RISCO else None),
+                "ROP": s["rop"],
+                "Estoque": s["estoque_atual"],
+                "Guarda-Chuva": s["guarda_chuva"],
+                "Qtd Sugerida": s["qtd_sugerida"],
+                "Un": s["unidade"],
+                "Fornecedor": s["fornecedor_sugerido"] or "—",
+            } for s in filtradas])
+            st.dataframe(
+                df_rep, hide_index=True, width="stretch",
+                column_config={
+                    "Cobertura(d)": st.column_config.NumberColumn(
+                        format="%.1f",
+                        help="(estoque + guarda-chuva) ÷ consumo diário. "
+                             "Vazio = sem consumo registrado no período."),
+                    "ROP": st.column_config.NumberColumn(
+                        format="%.1f",
+                        help="Ponto de pedido = consumo diário × lead time + estoque de segurança."),
+                    "Qtd Sugerida": st.column_config.NumberColumn(
+                        format="%d",
+                        help="alvo − estoque − guarda-chuva. "
+                             "Alvo = máx(máx. Neidson, consumo × 60 d)."),
+                },
+            )
+            st.caption("Ordem: urgência → Parada de Linha → menor cobertura. Guarda-Chuva = "
+                       "qtd já negociada que ainda falta chegar (não pede em duplicidade).")
+
+            st.divider()
+            st.markdown("#### 📝 Detalhe e ação por item")
+            opc_rep = {
+                f"{s['prioridade']} · {s['part_number']} — {s['nome_item']} "
+                f"(sugerido {s['qtd_sugerida']} {s['unidade']})": s
+                for s in filtradas
+            }
+            escolha = st.selectbox("Selecione um item para criar a SC ou registrar a decisão",
+                                   ["—"] + list(opc_rep.keys()), key="rep_sel")
+            if escolha != "—":
+                s = opc_rep[escolha]
+                st.info(f"**Justificativa:** {s['justificativa']}")
+
+                mc1, mc2, mc3, mc4 = st.columns(4)
+                mc1.metric("Cobertura",
+                           f"{s['cobertura_dias']:.1f} d"
+                           if s["cobertura_dias"] < PREVISAO_RUPTURA_SEM_RISCO else "—")
+                mc2.metric("ROP", f"{s['rop']:g}",
+                           help=f"consumo {s['consumo_diario']:.2f}/d × lead time {s['lead_time']}d "
+                                f"({s['lead_time_origem']}) + segurança {s['estoque_seguranca']:g} "
+                                f"({s['estoque_seguranca_origem']})")
+                mc3.metric("Alvo", f"{s['alvo']:g}",
+                           help=f"{s['alvo_origem']} · máx. Neidson {s['alvo_neidson']:g} · "
+                                f"horizonte {s['horizonte_dias']}d = {s['alvo_horizonte']:g}")
+                mc4.metric("Qtd sugerida", f"{s['qtd_sugerida']} {s['unidade']}")
+
+                if s["lead_time_maturidade"]:
+                    st.caption(f"⚠️ {s['lead_time_maturidade']} — usando lead time "
+                               f"{s['lead_time']}d ({s['lead_time_origem']}).")
+                if s["fornecedor_sugerido"]:
+                    preco_txt = (
+                        f" · último preço {s['fornecedor_moeda']} {s['fornecedor_ultimo_preco']:.2f}"
+                        if s["fornecedor_ultimo_preco"] is not None else ""
+                    )
+                    email_txt = f" · {s['fornecedor_email']}" if s["fornecedor_email"] else ""
+                    st.caption(f"🏢 Fornecedor sugerido: **{s['fornecedor_sugerido']}**"
+                               f"{preco_txt}{email_txt}")
+
+                with st.form("form_rep_acao", clear_on_submit=False):
+                    fa1, fa2 = st.columns(2)
+                    num_sc_rep = fa1.text_input(
+                        "Número da SC *", value=f"REP-{datetime.now():%Y%m%d-%H%M}",
+                        key="rep_num_sc")
+                    dt_ab_rep = fa2.date_input("Data de abertura", value=date.today(),
+                                               key="rep_dt_ab")
+                    qtd_final = st.number_input(
+                        "Quantidade (editável)", min_value=0.0,
+                        value=float(s["qtd_sugerida"]), step=1.0, key="rep_qtd_final")
+                    obs_rep = st.text_area("Observações da SC", value=s["justificativa"],
+                                           height=70, key="rep_obs")
+                    ba1, ba2, ba3 = st.columns(3)
+                    criar_rep = ba1.form_submit_button("✅ Criar SC", type="primary",
+                                                       width="stretch")
+                    adiar_rep = ba2.form_submit_button("⏸️ Adiar", width="stretch")
+                    ignorar_rep = ba3.form_submit_button("🚫 Ignorar", width="stretch")
+
+                if criar_rep:
+                    if not num_sc_rep.strip():
+                        st.warning("⚠️ Informe o número da SC.")
+                    else:
+                        s_final = dict(s)
+                        s_final["qtd_sugerida"] = qtd_final
+                        item_sc = sugestao_para_item_sc(s_final, data_necessidade=str(date.today()))
+                        ok, msg = criar_sc(num_sc_rep.strip(), str(dt_ab_rep), [item_sc], obs_rep)
+                        if ok:
+                            sc_id = buscar_sc_id_por_numero(num_sc_rep.strip())
+                            registrar_desfecho_sugestao(s_final, "criou_sc", sc_id=sc_id)
+                            st.success(f"✅ {msg} Desfecho registrado no histórico.")
+                        else:
+                            st.error(f"❌ {msg}")
+                elif adiar_rep:
+                    registrar_desfecho_sugestao(s, "adiada", observacao=obs_rep)
+                    st.info("⏸️ Sugestão adiada e registrada no histórico.")
+                elif ignorar_rep:
+                    registrar_desfecho_sugestao(s, "ignorada", observacao=obs_rep)
+                    st.info("🚫 Sugestão ignorada e registrada no histórico.")
+
+            with st.expander("📜 Histórico de decisões de reposição"):
+                hist = listar_sugestoes(limit=50)
+                if not hist:
+                    st.caption("Nenhuma decisão registrada ainda.")
+                else:
+                    st.dataframe(
+                        pd.DataFrame([{
+                            "Quando": fmt(h["data_geracao"]),
+                            "PN": h["part_number"],
+                            "Item": h["nome_item"],
+                            "Qtd": h["qtd_sugerida"],
+                            "Desfecho": h["desfecho"],
+                            "Fornecedor": h["fornecedor_sugerido"] or "—",
+                        } for h in hist]),
+                        hide_index=True, width="stretch",
+                    )
+
     with aba_forn:
         st.markdown("### 🏢 Fornecedores & Cotação")
         st.caption("Busque um material para ver seus fornecedores, último preço e lead time, "
