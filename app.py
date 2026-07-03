@@ -37,6 +37,9 @@ from services.planejamento import (
     gerar_sugestoes_reposicao, sugestao_para_item_sc,
     registrar_desfecho_sugestao, listar_sugestoes, buscar_sc_id_por_numero,
 )
+from services.ficha import (
+    montar_ficha_360, salvar_imagem_item, remover_imagem_item,
+)
 
 setup_logging()
 criar_banco()
@@ -48,7 +51,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 2.5.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 2.6.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
 
 inject_custom_css()
 
@@ -104,18 +107,18 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 2.5.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 2.6.0</span>
     </div>
     """, unsafe_allow_html=True)
 
     # 2. Navegação (Option Menu)
 
-    opcoes_limpas = ["Dashboard", "Inventário", "Gerenciar Itens", "Movimentações", "Requisição", "Compras (SC)", "Feedback", "Configurações"]
+    opcoes_limpas = ["Dashboard", "Inventário", "Ficha 360", "Gerenciar Itens", "Movimentações", "Requisição", "Compras (SC)", "Feedback", "Configurações"]
 
     escolha_limpa = option_menu(
         menu_title=None,
         options=opcoes_limpas,
-        icons=["bar-chart-fill", "box-seam", "plus-circle", "arrow-repeat", "clipboard-check", "receipt", "chat-dots", "gear"],
+        icons=["bar-chart-fill", "box-seam", "card-image", "plus-circle", "arrow-repeat", "clipboard-check", "receipt", "chat-dots", "gear"],
         menu_icon="cast",
         default_index=0,
         styles={
@@ -129,6 +132,7 @@ with st.sidebar:
     # Reconstrói a variável 'pagina' para compatibilidade com seus IFs
     pagina = f"📊 {escolha_limpa}" if escolha_limpa == "Dashboard" else \
              f"📋 {escolha_limpa}" if escolha_limpa in ["Inventário", "Requisição"] else \
+             f"📇 {escolha_limpa}" if escolha_limpa == "Ficha 360" else \
              f"➕ {escolha_limpa}" if escolha_limpa == "Gerenciar Itens" else \
              f"🔄 {escolha_limpa}" if escolha_limpa == "Movimentações" else \
              f"🧾 {escolha_limpa}" if escolha_limpa == "Compras (SC)" else \
@@ -2116,6 +2120,207 @@ elif pagina == "🧾 Compras (SC)":
                         c_meta3.caption(f"👤 **Recebido por:** {r['emitente']} | {r['observacao']}")
             else:
                 st.info("ℹ️ Nenhum recebimento vinculado a SC encontrado no histórico.")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 📇 FICHA 360 DO MATERIAL (v2.6.0) — vida útil do item em uma tela (read-only,
+#     exceto a imagem do produto). Montagem de dados já existentes (v2.2–v2.5).
+# ══════════════════════════════════════════════════════════════════════════════
+elif pagina == "📇 Ficha 360":
+    st.title("📇 Ficha 360 do Material")
+    st.caption("Toda a vida útil do material em uma tela — cadastro, estoque, consumo, "
+               "compras, utilização, indicadores e recomendação. Somente leitura "
+               "(a única escrita é a imagem do produto).")
+
+    _, item_f, _ = sel_material("Selecione o material (PN ou nome)", "ficha_item")
+    if not item_f:
+        st.info("Selecione um material para ver a ficha completa.")
+    else:
+        ficha = montar_ficha_360(item_f["id"])
+        if not ficha:
+            st.error("Material não encontrado.")
+        else:
+            it = ficha["item"]
+            rep = ficha["reposicao"]
+            mat = ficha["maturidade"]
+
+            def _g(v):  # número curto e seguro (None -> 0)
+                return f"{(v or 0):g}"
+
+            # ── Cabeçalho: imagem + cadastro ──────────────────────────────────
+            col_img, col_cad = st.columns([1, 2])
+            with col_img:
+                if ficha["imagem_abs"]:
+                    st.image(ficha["imagem_abs"], use_container_width=True)
+                else:
+                    st.markdown(
+                        "<div style='border:1px dashed #444;border-radius:8px;"
+                        "padding:32px;text-align:center;color:#888;'>Sem imagem</div>",
+                        unsafe_allow_html=True)
+                with st.expander("🖼️ Imagem do produto"):
+                    up = st.file_uploader(
+                        "Enviar/atualizar (png/jpg/webp, até 5 MB)",
+                        type=["png", "jpg", "jpeg", "webp", "gif"], key="ficha_img_up")
+                    cb1, cb2 = st.columns(2)
+                    if cb1.button("💾 Salvar", key="ficha_img_save",
+                                  disabled=up is None, width="stretch"):
+                        ok, msg = salvar_imagem_item(it["id"], up.name, up.getvalue())
+                        if ok:
+                            st.success("Imagem salva."); st.rerun()
+                        else:
+                            st.error(msg)
+                    if ficha["imagem_abs"] and cb2.button(
+                            "🗑️ Remover", key="ficha_img_del", width="stretch"):
+                        remover_imagem_item(it["id"]); st.rerun()
+            with col_cad:
+                st.subheader(f"{it['part_number']} — {it['nome_item']}")
+                st.markdown(
+                    f"**Categoria/Tipo:** {it.get('tipo_material') or '—'}  \n"
+                    f"**Unidade:** {it.get('unidade') or '—'} · "
+                    f"**Criticidade:** {it.get('importancia') or '—'}  \n"
+                    f"**Setor responsável:** {it.get('setor_responsavel') or '—'}  \n"
+                    f"**Local:** {it.get('local_armazenagem') or '—'}"
+                    + (f" · Caixa {it.get('caixa_identificacao')}" if it.get('caixa_identificacao') else "")
+                )
+                if it.get("descricao"):
+                    st.caption(it["descricao"])
+
+            # ── Recomendação de reposição (read-only, reusa v2.5) ─────────────
+            if rep["precisa"]:
+                st.warning(f"🛒 **{rep['prioridade']}** — repor **{rep['qtd_sugerida']} "
+                           f"{it.get('unidade') or 'UN'}**. {rep['justificativa']}")
+            else:
+                st.success("✅ Sem necessidade de reposição no momento "
+                           "(estoque + guarda-chuva cobrem o horizonte).")
+
+            # ── Estoque / cobertura / giro ────────────────────────────────────
+            st.divider()
+            e1, e2, e3, e4, e5 = st.columns(5)
+            e1.metric("Estoque atual", _g(it.get("estoque_atual")))
+            e2.metric("Mínimo", _g(it.get("estoque_minimo")))
+            e3.metric("Máximo", _g(it.get("estoque_maximo")))
+            e4.metric("Segurança", _g(it.get("estoque_seguranca")),
+                      help=f"Origem: {rep['estoque_seguranca_origem']}.")
+            e5.metric("Guarda-chuva", _g(it.get("estoque_em_transito")),
+                      help="Qtd já negociada que ainda falta chegar (SCs abertas).")
+
+            cob = it.get("dias_cobertura")
+            giro = ficha["giro"]
+            g1, g2, g3, g4 = st.columns(4)
+            g1.metric("Cobertura",
+                      f"{cob:.0f} d" if cob is not None and cob < PREVISAO_RUPTURA_SEM_RISCO else "—",
+                      help="(estoque + guarda-chuva) ÷ consumo diário.")
+            tend = it.get("tendencia_label")
+            tend_txt = (f"{tend} {'+' if (it.get('tendencia_pct') or 0) >= 0 else ''}"
+                        f"{_g(it.get('tendencia_pct'))}%") if tend else None
+            g2.metric("Consumo/dia", _g(it.get("consumo_medio_diario")), delta=tend_txt,
+                      delta_color="inverse", help="Média diária de saídas (janela 30d).")
+            g3.metric("Giro anual", _g(giro["giro_anual"]),
+                      help=f"Tempo médio em estoque: "
+                           f"{giro['tempo_medio_dias'] if giro['tempo_medio_dias'] else '—'} d · "
+                           f"baseado em {giro['n_snapshots']} fotos.")
+            lt_calc = it.get("lead_time_calculado")
+            g4.metric("Lead time (Neidson)", f"{int(it.get('lead_time_dias') or 0)} d",
+                      help=(f"Calculado (sugestão): {int(lt_calc)} d "
+                            f"({it.get('lead_time_calculado_amostras') or 0} amostras, "
+                            f"{it.get('lead_time_calculado_origem') or '—'})" if lt_calc
+                            else "Sem lead time calculado ainda."))
+
+            # ── Consumo (30/60/90) + Valor ────────────────────────────────────
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                st.markdown("##### 📉 Consumo médio/dia por janela")
+                st.bar_chart(pd.DataFrame(
+                    {"Consumo/dia": [it.get("consumo_30d") or 0,
+                                     it.get("consumo_60d") or 0,
+                                     it.get("consumo_90d") or 0]},
+                    index=["30 dias", "60 dias", "90 dias"]))
+            with cc2:
+                st.markdown("##### 💰 Valor")
+                vc = ficha["valor"]["valor_consumido"]
+                st.metric("Valor em estoque",
+                          f"R$ {ficha['valor']['valor_estoque']:,.2f}")
+                st.metric(f"Valor consumido ({vc['janela_dias']}d)",
+                          f"{vc['moeda']} {vc['valor']:,.2f}",
+                          help=f"Estimativa (último preço, origem {vc['origem']}).")
+                if ficha["abc"]:
+                    st.caption(f"Curva ABC (valor): classe **{ficha['abc']['classe']}** "
+                               f"· {ficha['abc']['pct_acumulado']}% acumulado.")
+
+            # ── Evolução de preço ─────────────────────────────────────────────
+            ep = ficha["evolucao_preco"]
+            if ep:
+                st.markdown("##### 📈 Evolução de preço")
+                df_ep = pd.DataFrame(ep)
+                df_ep["data"] = pd.to_datetime(df_ep["data"], errors="coerce")
+                st.line_chart(df_ep.dropna(subset=["data"]).set_index("data")["preco_unitario"])
+
+            # ── Quem consome (departamentos / centros de custo) ───────────────
+            st.markdown("##### 👥 Quem consome (últimos 180 dias)")
+            dep = ficha["departamentos"]
+            if dep["total"] <= 0:
+                st.caption("Sem saídas registradas no período.")
+            else:
+                d1, d2 = st.columns(2)
+                d1.caption("Por centro de custo")
+                d1.dataframe(pd.DataFrame([
+                    {"Centro de custo": r["chave"], "Qtd": r["qtd"], "%": r["pct"]}
+                    for r in dep["por_centro_custo"]], ), hide_index=True, width="stretch")
+                d2.caption("Por setor")
+                d2.dataframe(pd.DataFrame([
+                    {"Setor": r["chave"], "Qtd": r["qtd"], "%": r["pct"]}
+                    for r in dep["por_setor"]]), hide_index=True, width="stretch")
+
+            # ── Fornecedores ──────────────────────────────────────────────────
+            with st.expander(f"🏢 Fornecedores ({len(ficha['fornecedores'])})"):
+                fs = ficha["fornecedores"]
+                if not fs:
+                    st.caption("Sem fornecedores vinculados (vêm dos pedidos do Relatório de SCs).")
+                else:
+                    st.dataframe(pd.DataFrame([{
+                        "Fornecedor": f["fornecedor"], "Último Preço": f["ultimo_preco"],
+                        "Moeda": f["moeda"], "Nº Compras": f["n_compras"],
+                        "Lead Time (d)": f["lead_time_fornecedor"], "E-mail": f["email"] or "—",
+                        "⭐": "⭐" if f.get("melhor") else "",
+                    } for f in fs]), hide_index=True, width="stretch")
+
+            # ── Histórico de SCs / POs ────────────────────────────────────────
+            with st.expander(f"🧾 Histórico de SCs / POs ({len(ficha['scs_pos'])})"):
+                sp = ficha["scs_pos"]
+                if not sp:
+                    st.caption("Nenhuma SC registrada para este item.")
+                else:
+                    st.dataframe(pd.DataFrame([{
+                        "SC": s["numero_sc"], "PO": s.get("po_item") or s.get("numero_po") or "—",
+                        "Fornecedor": s.get("fornecedor_item") or "—", "Status": s.get("status"),
+                        "Abertura": fmt(s.get("data_abertura")),
+                        "Solic.": s.get("quantidade_solicitada"),
+                        "Receb.": s.get("quantidade_recebida"), "Pendente": s.get("pendente"),
+                    } for s in sp]), hide_index=True, width="stretch")
+
+            # ── Histórico de movimentações ────────────────────────────────────
+            with st.expander(f"🔄 Movimentações recentes ({len(ficha['movimentacoes'])})"):
+                mv = ficha["movimentacoes"]
+                if not mv:
+                    st.caption("Sem movimentações.")
+                else:
+                    st.dataframe(pd.DataFrame([{
+                        "Data": fmt(m.get("data_hora")), "Tipo": m.get("tipo"),
+                        "Qtd": m.get("quantidade"), "Saldo": m.get("saldo_apos"),
+                        "Centro de custo": m.get("centro_custo") or "—",
+                        "Setor": m.get("setor") or "—", "Obs": m.get("observacao") or "",
+                    } for m in mv]), hide_index=True, width="stretch")
+
+            # ── Histórico de Part Number ──────────────────────────────────────
+            if ficha["historico_pn"]:
+                with st.expander(f"🔖 Histórico de Part Number ({len(ficha['historico_pn'])})"):
+                    st.dataframe(pd.DataFrame(ficha["historico_pn"]),
+                                 hide_index=True, width="stretch")
+
+            st.divider()
+            st.caption("🔬 XYZ e sazonalidade: em breve (v2.7). "
+                       f"📅 Indicadores de série baseados em ~{mat['dias']} dias de "
+                       "histórico — amadurecem conforme os dados acumulam. "
+                       "A base do Sr. Neidson (mín/máx/lead time/categoria) permanece intocada.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FEEDBACK / SUGESTÕES (Item 3 / v2.1.0)

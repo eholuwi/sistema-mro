@@ -490,6 +490,9 @@ def criar_banco():
         "lead_time_calculado": "INTEGER",
         "lead_time_calculado_amostras": "INTEGER DEFAULT 0",
         "lead_time_calculado_origem": "TEXT",
+        # v2.6.0 — Ficha 360: caminho da imagem do produto (arquivo em docs/itens/,
+        # fora do SQLite para nao inchar o .db). Nullable; nao afeta a base do Neidson.
+        "imagem_path": "TEXT",
     }.items():
         if col not in cols_inv0:
             conn.execute(f"ALTER TABLE inventario ADD COLUMN {col} {tipo}")
@@ -507,7 +510,7 @@ def criar_banco():
 
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.5.0")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.6.0")
 
 
 def _migrar(conn):
