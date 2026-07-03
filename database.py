@@ -374,6 +374,33 @@ def criar_banco():
         )
     """)
 
+    # ── v2.5.0 — Assistente de Reposição (Planejamento) ───────────────────────
+    # Log de DESFECHO de cada sugestão de reposição (auditoria + calibração
+    # futura). O motor recalcula as sugestões ao vivo (listar_inventario); esta
+    # tabela guarda a FOTO do cálculo no momento da decisão do comprador. Aditiva,
+    # não-destrutiva; NÃO altera a base do Neidson (mín/máx/lead time/categoria).
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS sugestoes_reposicao (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id            INTEGER NOT NULL,
+            data_geracao       TEXT DEFAULT CURRENT_TIMESTAMP,
+            cobertura_dias     REAL,
+            rop                REAL,
+            alvo               REAL,
+            horizonte_dias     INTEGER,
+            qtd_sugerida       REAL,
+            fornecedor_sugerido TEXT,
+            prioridade         TEXT,
+            justificativa      TEXT,
+            desfecho           TEXT DEFAULT 'gerada',
+            sc_id              INTEGER,
+            data_desfecho      TEXT,
+            observacao         TEXT,
+            FOREIGN KEY (item_id) REFERENCES inventario(id) ON DELETE CASCADE,
+            FOREIGN KEY (sc_id) REFERENCES solicitacoes_compra(id) ON DELETE SET NULL
+        )
+    """)
+
     # Seed dos solicitantes MRO atuais (mesmos 3 da antiga constante SOLICITANTES_MRO).
     for _nome in ("Jasiva Lopes", "Luis Gabriel Arruda de Oliveira", "Sidinei Correa Alfon"):
         _norm = _normalizar_nome(_nome)
@@ -435,6 +462,9 @@ def criar_banco():
     c.execute("CREATE INDEX IF NOT EXISTS idx_forn_cod_loja ON fornecedores(codigo, loja)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_snap_item_data ON estoque_snapshots(item_id, data)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_forn_item     ON fornecedor_item(item_id)")
+    # v2.5.0 — histórico de sugestões de reposição (consultas por item e por data).
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sugest_item   ON sugestoes_reposicao(item_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sugest_data   ON sugestoes_reposicao(data_geracao)")
 
     conn.commit()
     _migrar(conn)
@@ -477,7 +507,7 @@ def criar_banco():
 
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.4.0")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.5.0")
 
 
 def _migrar(conn):
