@@ -21,3 +21,6 @@ ENV/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Ficha 360 — imagens de produto (dado operacional, fora do versionamento)
+docs/itens/
