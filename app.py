@@ -51,7 +51,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 2.7.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 2.7.1", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
 
 inject_custom_css()
 
@@ -107,7 +107,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 2.7.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 2.7.1</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -914,8 +914,9 @@ elif pagina == "🔄 Movimentações":
                     st.markdown("**🛡️ Menor cobertura (dias)**")
                     st.caption("(estoque + guarda-chuva) ÷ consumo diário")
                     if "Cobertura(d)" in df_series.columns:
+                        _cols_lc = [c for c in ["PN", "Nome", "Cobertura(d)"] if c in df_series.columns]
                         low = (df_series[df_series["Cobertura(d)"] < 900]
-                               .nsmallest(8, "Cobertura(d)")[["PN", "Cobertura(d)"]])
+                               .nsmallest(8, "Cobertura(d)")[_cols_lc])
                         st.dataframe(low, hide_index=True, width="stretch", height=250)
                 with cc:
                     st.markdown("**🔁 Itens parados (giro 0 c/ estoque)**")
@@ -924,7 +925,8 @@ elif pagina == "🔄 Movimentações":
                         parados = df_series[(df_series["Giro(anual)"] == 0) &
                                             (df_series["Estoque Atual"] > 0)]
                         st.caption(f"Total: {len(parados)} itens")
-                        st.dataframe(parados[["PN", "Estoque Atual"]].head(8),
+                        _cols_par = [c for c in ["PN", "Nome", "Estoque Atual"] if c in df_series.columns]
+                        st.dataframe(parados[_cols_par].head(8),
                                      hide_index=True, width="stretch", height=210)
 
         st.markdown("---")
@@ -1012,10 +1014,11 @@ elif pagina == "🔄 Movimentações":
                     and "Giro(anual)" in df_series.columns:
                 st.markdown("**🧊 Top capital parado (maior valor em estoque, giro 0)**")
                 st.caption("Dinheiro parado sem saída no período — candidatos a reduzir/realocar.")
+                _cols_cap = [c for c in ["PN", "Nome", "Estoque Atual", "Valor em Estoque"]
+                             if c in df_series.columns]
                 parado_val = (df_series[(df_series["Giro(anual)"] == 0) &
                                         (df_series["Valor em Estoque"] > 0)]
-                              .nlargest(8, "Valor em Estoque")[["PN", "Estoque Atual",
-                                                                "Valor em Estoque"]])
+                              .nlargest(8, "Valor em Estoque")[_cols_cap])
                 if not parado_val.empty:
                     st.dataframe(
                         parado_val, hide_index=True, width="stretch",
@@ -1958,18 +1961,23 @@ elif pagina == "🧾 Compras (SC)":
                     else:
                         qtd_r = c1.number_input("Qtd Recebida *", min_value=0.01, step=1.0)
                         
-                    forn   = c2.text_input("Fornecedor *", value=(sc_sel.get("fornecedor_item") or sc_sel.get("fornecedor") or "") if sc_sel else "")
+                    # v2.7.1: Fornecedor não é obrigatório (pré-preenche da SC quando há).
+                    forn   = c2.text_input("Fornecedor", value=(sc_sel.get("fornecedor_item") or sc_sel.get("fornecedor") or "") if sc_sel else "")
                     dt_r   = c3.date_input("Data Recebimento", value=date.today())
-                    
-                    cc_r   = st.selectbox("Centro de Custo *", centros if centros else ["—"])
+
+                    # v2.7.1: CC não é obrigatório — recebimentos MRO caem no Almoxarifado
+                    # por padrão (quase todas as SCs deste time vão para o MRO).
+                    _cc_opts = centros if centros else ["—"]
+                    _cc_default = next((i for i, c in enumerate(_cc_opts)
+                                        if "ALMOXARIFADO" in str(c).upper()), 0)
+                    cc_r   = st.selectbox("Centro de Custo", _cc_opts, index=_cc_default,
+                                          help="Padrão MRO: Almoxarifado. Ajuste se necessário.")
                     obs_nf = st.text_input("Nota Fiscal / Documento *" if sc_sel else "Obs / Nota Fiscal")
-                    
+
                     rec_b  = st.form_submit_button("📥 Confirmar Recebimento", width="stretch", type="primary")
 
                 if rec_b:
-                    if not forn:
-                        st.warning("⚠️ Informe o fornecedor.")
-                    elif sc_sel and not obs_nf.strip():
+                    if sc_sel and not obs_nf.strip():
                         st.warning("⚠️ Informe o número da Nota Fiscal para rastreabilidade.")
                     elif sc_sel:
                         ok, msg = registrar_recebimento_sc(
@@ -2207,9 +2215,20 @@ elif pagina == "📇 Ficha 360":
                                f"requisição(ões){_ult_txt}.")
 
             # ── Recomendação de reposição (read-only, reusa v2.5) ─────────────
-            if rep["precisa"]:
+            un = it.get("unidade") or "UN"
+            if it.get("sem_movimentacao"):
+                st.info("⚪ **Sem movimentação** — item sem consumo real; fora da lista "
+                        "de compra. Revise no **Assistente de Reposição** (opção "
+                        "\"Mostrar itens sem movimentação\") se for um spare a manter em estoque.")
+            elif rep["precisa"] and rep["qtd_sugerida"] > 0:
                 st.warning(f"🛒 **{rep['prioridade']}** — repor **{rep['qtd_sugerida']} "
-                           f"{it.get('unidade') or 'UN'}**. {rep['justificativa']}")
+                           f"{un}**. {rep['justificativa']}")
+            elif rep["precisa"]:
+                # v2.7.1: gatilho ativo mas qtd = 0 → o guarda-chuva já cobre o alvo
+                # (antes aparecia "repor 0", confuso).
+                st.info(f"🟡 **{rep['prioridade']}** — **sem compra agora**: o guarda-chuva "
+                        f"(**{_g(it.get('estoque_em_transito'))} {un}** já negociados) cobre o "
+                        f"alvo de **{_g(rep['alvo'])} {un}**. Reavaliar quando o material chegar.")
             else:
                 st.success("✅ Sem necessidade de reposição no momento "
                            "(estoque + guarda-chuva cobrem o horizonte).")
@@ -2261,6 +2280,10 @@ elif pagina == "📇 Ficha 360":
                 vc = ficha["valor"]["valor_consumido"]
                 st.metric("Valor em estoque",
                           f"R$ {ficha['valor']['valor_estoque']:,.2f}")
+                # v2.7.1: valor unitário (preço de referência) logo abaixo
+                _preco_un = vc.get("preco") or 0
+                st.caption(f"Valor unitário: **{vc['moeda']} {_preco_un:,.2f}** / {un} "
+                           f"· origem {vc['origem']}")
                 st.metric(f"Valor consumido ({vc['janela_dias']}d)",
                           f"{vc['moeda']} {vc['valor']:,.2f}",
                           help=f"Estimativa (último preço, origem {vc['origem']}).")
