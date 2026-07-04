@@ -250,6 +250,7 @@ def montar_sugestao(item, incluir_fornecedor=True):
         "unidade": item.get("unidade") or "UN",
         "setor": item.get("setor_responsavel"),
         "importancia": item.get("importancia"),
+        "sem_movimentacao": bool(item.get("sem_movimentacao")),
         "estoque_atual": _num(item.get("estoque_atual")),
         "estoque_minimo": _num(item.get("estoque_minimo")),
         "estoque_maximo": _num(item.get("estoque_maximo")),
@@ -282,14 +283,21 @@ def montar_sugestao(item, incluir_fornecedor=True):
     }
 
 
-def gerar_sugestoes_reposicao(incluir_fornecedor=True):
+def gerar_sugestoes_reposicao(incluir_fornecedor=True, incluir_sem_movimentacao=False):
     """Fila priorizada de reposições.
 
     Percorre o inventário (`listar_inventario`), filtra por `precisa_repor` e
     quantidade > 0, monta cada sugestão e ordena por urgência (tier) → criticidade
-    (Parada de Linha) → menor cobertura → part number."""
+    (Parada de Linha) → menor cobertura → part number.
+
+    v2.7.0: por padrão, exclui itens SEM MOVIMENTAÇÃO (nunca consumidos por
+    requisição) para não poluir a fila. `incluir_sem_movimentacao=True` os traz de
+    volta para revisão (ex.: spares "Parada de Linha" que o Neidson estoca sem
+    giro) — marcados com `sem_movimentacao=True` na sugestão."""
     sugestoes = []
     for item in listar_inventario():
+        if not incluir_sem_movimentacao and item.get("sem_movimentacao"):
+            continue
         if not precisa_repor(item):
             continue
         if calcular_qtd_sugerida(item)["qtd"] <= 0:

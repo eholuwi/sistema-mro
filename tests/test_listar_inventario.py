@@ -9,21 +9,24 @@ def _item(itens, pn):
     return next(i for i in itens if i["part_number"] == pn)
 
 
-def test_status_material_ok_e_estoque_maximo(db, make_item):
-    make_item("PN-OK", estoque=100, minimo=10)
+def test_status_material_ok_e_estoque_maximo(db, make_item, registrar_consumo):
+    iid = make_item("PN-OK", estoque=100, minimo=10)
+    registrar_consumo(iid)  # v2.7.0: item precisa de consumo real p/ sair do "Sem Movimentação"
     item = _item(F.listar_inventario(), "PN-OK")
     assert "OK" in item["status_material"]
     assert item["estoque_maximo"] == 20            # regra atual: minimo * 2
 
 
-def test_status_material_comprar(db, make_item):
-    make_item("PN-LOW", estoque=5, minimo=10)
+def test_status_material_comprar(db, make_item, registrar_consumo):
+    iid = make_item("PN-LOW", estoque=5, minimo=10)
+    registrar_consumo(iid)
     item = _item(F.listar_inventario(), "PN-LOW")
     assert "COMPRAR" in item["status_material"]
 
 
-def test_status_material_atencao(db, make_item):
-    make_item("PN-AT", estoque=11, minimo=10)
+def test_status_material_atencao(db, make_item, registrar_consumo):
+    iid = make_item("PN-AT", estoque=11, minimo=10)
+    registrar_consumo(iid)
     item = _item(F.listar_inventario(), "PN-AT")
     assert "ATENÇÃO" in item["status_material"]
 
@@ -46,10 +49,13 @@ def test_estoque_em_transito_reflete_saldo_da_sc(db, make_item):
 
 
 def test_integracao_com_calcular_status(db, make_item):
+    # v2.7.0: `calcular_status_inventario` continua sendo a fonte do status FÍSICO,
+    # agora exposto em `status_estoque_fisico` (o `status_material` pode ser
+    # sobreposto por "⚪ Sem Movimentação"). A integração da regra permanece.
     make_item("PN-A", estoque=100, minimo=10)
     make_item("PN-B", estoque=5, minimo=10)
     make_item("PN-C", estoque=11, minimo=10)
     for item in F.listar_inventario():
         esperado = F.calcular_status_inventario(
             item["estoque_atual"], item["estoque_minimo"], item["estoque_em_transito"])
-        assert item["status_material"] == esperado
+        assert item["status_estoque_fisico"] == esperado

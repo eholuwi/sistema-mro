@@ -8,6 +8,7 @@ from services.constants import (
     SNAPSHOT_RETENCAO_DIAS, RELATORIO_SCS_ABAS, decodificar_moeda,
     JANELAS_CONSUMO, TENDENCIA_LIMIAR_PCT, GIRO_JANELA_DIAS, LEAD_TIME_MAX_DIAS,
     ABC_LIMIAR_A, ABC_LIMIAR_B, VALOR_CONSUMIDO_JANELA_DIAS, MOEDA_PADRAO,
+    SAIDA_REAL_WHERE, STATUS_SEM_MOVIMENTACAO,
 )
 import pandas as pd
 
@@ -151,7 +152,11 @@ def listar_inventario():
             JOIN solicitacoes_compra s2 ON s2.id = isc.sc_id
             WHERE isc.item_id = i.id
             AND s2.status NOT IN ('Recebido','Cancelado')
-        ), 0) AS estoque_em_transito
+        ), 0) AS estoque_em_transito,
+        (SELECT COUNT(*) FROM movimentacoes m
+            WHERE m.item_id = i.id AND """ + SAIDA_REAL_WHERE + """) AS qtd_requisicoes,
+        (SELECT MAX(m.data_hora) FROM movimentacoes m
+            WHERE m.item_id = i.id AND """ + SAIDA_REAL_WHERE + """) AS ultima_requisicao_data
         FROM inventario i
         LEFT JOIN solicitacoes_compra sc ON sc.id = i.ultima_sc_id
         ORDER BY
@@ -167,10 +172,23 @@ def listar_inventario():
         item = dict(r)
 
         # 1. Status do Material (Baseado em Estoque Físico vs Mínimo)
-        item["status_material"] = calcular_status_inventario(
+        item["status_estoque_fisico"] = calcular_status_inventario(
             item.get("estoque_atual", 0) or 0,
             item.get("estoque_minimo", 0) or 0,
             item.get("estoque_em_transito", 0) or 0
+        )
+
+        # v2.7.0: "Sem Movimentação" — item que NUNCA teve consumo real (nenhuma
+        # saída por requisição) sai da lista de compra e ganha status próprio,
+        # sobrepondo 🔴/🟡/🟢. O status físico fica preservado em
+        # `status_estoque_fisico` (revisão/Ficha). Decisão do PO: vale para TODO
+        # item sem consumo, inclusive "Parada de Linha" (segue visível no
+        # Assistente de Reposição via toggle). NÃO altera a base do Neidson.
+        item["qtd_requisicoes"] = int(item.get("qtd_requisicoes") or 0)
+        item["sem_movimentacao"] = item["qtd_requisicoes"] == 0
+        item["status_material"] = (
+            STATUS_SEM_MOVIMENTACAO if item["sem_movimentacao"]
+            else item["status_estoque_fisico"]
         )
 
         # v2.2.1: dias de cobertura explícito (estoque + guarda-chuva) / consumo.
@@ -1366,20 +1384,28 @@ def obter_dados_dashboard(limit_abc=10):
             abc_rows = []
 
         itens = conn.execute(
-            "SELECT estoque_atual, estoque_minimo, data_inventario FROM inventario"
+            f"""SELECT i.estoque_atual, i.estoque_minimo, i.data_inventario,
+                   (SELECT COUNT(*) FROM movimentacoes m
+                      WHERE m.item_id = i.id AND {SAIDA_REAL_WHERE}) AS qtd_requisicoes
+                FROM inventario i"""
         ).fetchall()
 
-    ok = atencao = comprar = inv_ok = 0
+    ok = atencao = comprar = inv_ok = sem_movimentacao = 0
     for r in itens:
         est = r["estoque_atual"] or 0
         mn  = r["estoque_minimo"] or 0
-        status = calcular_status_inventario(est, mn, 0)
-        if "COMPRAR" in status:
-            comprar += 1
-        elif "ATENÇÃO" in status:
-            atencao += 1
+        # v2.7.0: item sem consumo real fica em balde próprio e NÃO conta como
+        # crítico/atenção/ok — coerente com o status "⚪ Sem Movimentação".
+        if (r["qtd_requisicoes"] or 0) == 0:
+            sem_movimentacao += 1
         else:
-            ok += 1
+            status = calcular_status_inventario(est, mn, 0)
+            if "COMPRAR" in status:
+                comprar += 1
+            elif "ATENÇÃO" in status:
+                atencao += 1
+            else:
+                ok += 1
         if r["data_inventario"]:
             inv_ok += 1
 
@@ -1390,6 +1416,7 @@ def obter_dados_dashboard(limit_abc=10):
             "ok": ok,
             "atencao": atencao,
             "comprar": comprar,
+            "sem_movimentacao": sem_movimentacao,
             "inv_ok": inv_ok,
             "periodo_abc": f"{periodo_inicio} a {periodo_fim}"
         }
@@ -1438,6 +1465,14 @@ def exportar_inventario_df():
             vc = calcular_valor_consumido(it["id"], conn=conn)
             it["valor_consumido_90d"] = vc["valor"]
             it["classe_abc_valor"] = classe_abc.get(it["id"], "—")
+            # v2.7.0: coluna de transparência de consumo real. "Sem movimentação"
+            # quando nunca houve requisição; senão "N req · últ. dd/mm".
+            if it.get("sem_movimentacao"):
+                it["movimentacao"] = "Sem movimentação"
+            else:
+                ult = it.get("ultima_requisicao_data")
+                ult_txt = f" · últ. {ult[8:10]}/{ult[5:7]}" if ult else ""
+                it["movimentacao"] = f"{it.get('qtd_requisicoes', 0)} req{ult_txt}"
 
     # v2.0.2 / v2.2.1: estrutura de exportação
     colunas = [
@@ -1446,7 +1481,7 @@ def exportar_inventario_df():
         "estoque_atual", "estoque_minimo", "estoque_maximo", "estoque_seguranca",
         "estoque_em_transito", "dias_cobertura",
         "consumo_medio_diario", "consumo_30d", "consumo_60d", "consumo_90d",
-        "tendencia_label", "tendencia_pct",
+        "tendencia_label", "tendencia_pct", "movimentacao",
         "lead_time_dias", "lead_time_calculado", "lead_time_calculado_origem",
         "giro_anual", "tempo_medio_dias", "previsao_ruptura_dias",
         "preco_ref", "preco_origem", "valor_estoque", "valor_consumido_90d",
@@ -1480,6 +1515,7 @@ def exportar_inventario_df():
         "consumo_90d": "Consumo 90d",
         "tendencia_label": "Tendência",
         "tendencia_pct": "Tendência %",
+        "movimentacao": "Movimentação",
         "lead_time_dias": "Lead Time(d)",
         "lead_time_calculado": "Lead Time Calc(d)",
         "lead_time_calculado_origem": "LT Calc Origem",
