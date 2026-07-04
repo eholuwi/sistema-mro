@@ -493,6 +493,14 @@ def criar_banco():
         # v2.6.0 — Ficha 360: caminho da imagem do produto (arquivo em docs/itens/,
         # fora do SQLite para nao inchar o .db). Nullable; nao afeta a base do Neidson.
         "imagem_path": "TEXT",
+        # v2.9.0 — Conversão de Unidades (Fundação). O item é CADASTRADO numa unidade
+        # de estoque (`unidade`, base do Neidson) mas COMPRADO em outra (L, KG, par,
+        # bombona…). `unidade_compra` (livre: L/KG/P/BB… — NÃO entra no CHECK de
+        # `unidade`) e `fator_conversao` (quantas unidade_compra cabem em 1 unidade de
+        # estoque) são CURADOS: o sistema sugere, o gestor confirma. NULL/1 = no-op
+        # (comportamento idêntico ao de hoje para os itens de UM única).
+        "unidade_compra": "TEXT",
+        "fator_conversao": "REAL DEFAULT 1",
     }.items():
         if col not in cols_inv0:
             conn.execute(f"ALTER TABLE inventario ADD COLUMN {col} {tipo}")
@@ -508,9 +516,17 @@ def criar_banco():
         logger.info("  -> Migracao: lead_time_dias em precos_historico adicionada.")
         conn.commit()
 
+    # v2.9.0 — UM de compra observada por linha de PO (abas SCM/SC7 do Relatório de
+    # SCs). Fonte da SUGESTÃO de `inventario.unidade_compra`; a ingestão a capturava
+    # e descartava antes desta versão. Coluna livre e nullable.
+    if "unidade" not in cols_ph:
+        conn.execute("ALTER TABLE precos_historico ADD COLUMN unidade TEXT")
+        logger.info("  -> Migracao: unidade em precos_historico adicionada.")
+        conn.commit()
+
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.8.0")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.9.0")
 
 
 def _migrar(conn):

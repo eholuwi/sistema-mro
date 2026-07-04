@@ -32,7 +32,9 @@ from services.db_functions import (
     obter_valor_imobilizado, obter_evolucao_valor_imobilizado,
     obter_evolucao_preco, obter_abc_valor,
     obter_fornecedores_por_item,
+    sugerir_conversao,
 )
+from services.constants import UNIDADES_COMPRA_SUGERIDAS, FATOR_CONVERSAO_PADRAO
 from services.planejamento import (
     gerar_sugestoes_reposicao, sugestao_para_item_sc,
     registrar_desfecho_sugestao, listar_sugestoes, buscar_sc_id_por_numero,
@@ -52,7 +54,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 2.8.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 2.9.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
 
 inject_custom_css()
 
@@ -108,7 +110,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 2.8.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 2.9.0</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -417,18 +419,30 @@ elif pagina == "📋 Inventário":
 
     # --- CONTAINER 2: TABELA PRINCIPAL ---
     with st.container(border=True):
+        # v2.9.0: aviso forward-only de unidade a revisar (comprado em UM ≠ estoque e
+        # ainda sem fator de conversão → recebimento pode somar quantidade crua).
+        if "unidade_divergente" in df.columns:
+            _n_div = int(df["unidade_divergente"].fillna(False).astype(bool).sum())
+            if _n_div:
+                st.warning(f"⚠️ **{_n_div}** item(ns) comprado(s) em unidade diferente da de estoque "
+                           "e ainda **sem fator de conversão**. Revise em **Gerenciar Itens → "
+                           "Conversão de unidades** — até lá o recebimento pode somar quantidade crua.")
+
         cols_show = [
             "part_number", "nome_item", "importancia", "unidade", "tipo_material",
-            "local_armazenagem", 
+            "local_armazenagem",
             "estoque_minimo", "estoque_maximo", "estoque_atual",
             "status_material", "previsao_ruptura_dias", "data_inventario",
             "lead_time_dias", "sc_numero", "status_sc", "sc_po",
             "caixa_identificacao" # Adicionado para visualização rápida da obs
         ]
         cols_show = [c for c in cols_show if c in df.columns]
-        
+
         df_exib = df[cols_show].copy()
         df_exib["data_inventario"] = df_exib["data_inventario"].apply(lambda v: fmt(v) if v else "—")
+        # v2.9.0: marca visual "⚠️" para itens com unidade a revisar.
+        if "unidade_divergente" in df.columns:
+            df_exib["Un?"] = df["unidade_divergente"].map(lambda v: "⚠️" if v else "")
 
         num_linhas = len(df_exib)
         altura_tabela = min(40 + (num_linhas * 35), 320) if num_linhas > 0 else 100
@@ -455,6 +469,8 @@ elif pagina == "📋 Inventário":
                 "status_sc": st.column_config.TextColumn("Status SC", width="small"),
                 "sc_po": st.column_config.TextColumn("P.O.", width="small"),
                 "caixa_identificacao": st.column_config.TextColumn("Obs. Inventário", width="medium"), # Nova coluna na tabela
+                "Un?": st.column_config.TextColumn("Un?", width="small",
+                    help="⚠️ = comprado em unidade diferente da de estoque e ainda sem fator de conversão."),
             }
         )
 
@@ -603,6 +619,22 @@ elif pagina == "➕ Gerenciar Itens":
             min_novo = c3.number_input("Estoque Mínimo *", min_value=0, value=10)
             est_ini_novo = c4.number_input("Estoque Inicial", min_value=0.0, value=0.0)
 
+            # ── Conversão de unidades (curadoria v2.9.0) — opcional ──────────────
+            st.markdown("###### 🔁 Conversão de unidades (se comprado em outra unidade)")
+            _sug_novo = sugerir_conversao(
+                {"nome_item": nome_novo, "descricao": desc_novo, "unidade": un_novo})
+            cvn1, cvn2 = st.columns(2)
+            uc_novo = cvn1.text_input(
+                "Unidade de compra", value=(_sug_novo['unidade_compra_sugerida'] or un_novo),
+                help="Unidade em que o fornecedor vende (L, KG, BB, par…). "
+                     "Igual à de estoque se não houver diferença.")
+            fator_novo = cvn2.number_input(
+                "Fator de conversão", min_value=0.0,
+                value=float(_sug_novo['fator_sugerido'] or 1.0), step=1.0,
+                help="Quantas unidades de compra cabem em 1 de estoque. Ex.: 1 GL = 5 L → 5.")
+            if _sug_novo['fator_sugerido']:
+                st.caption(f"💡 Sugestão automática pelo nome do item: {_sug_novo['origem']}.")
+
             if st.button("💾 Salvar Novo Item", type="primary", width="stretch"):
                 if not pn_novo or not nome_novo:
                     st.error("Preencha Part Number e Nome.")
@@ -613,18 +645,20 @@ elif pagina == "➕ Gerenciar Itens":
                         st.error(f"PN '{pn_novo}' já cadastrado!")
                     else:
                         ok, msg = salvar_item(
-                            part_number=pn_novo, 
-                            nome_item=nome_novo, 
-                            descricao="",
+                            part_number=pn_novo,
+                            nome_item=nome_novo,
+                            descricao=desc_novo,
                             unidade=un_novo,
                             importancia=imp_novo,
-                            tipo_material=tipo_novo, 
+                            tipo_material=tipo_novo,
                             setor="Improdutivo",
-                            local=loc_novo, 
+                            local=loc_novo,
                             caixa=caixa_novo,
-                            estoque_atual=est_ini_novo, 
-                            estoque_minimo=min_novo, 
-                            lead_time=lead_novo
+                            estoque_atual=est_ini_novo,
+                            estoque_minimo=min_novo,
+                            lead_time=lead_novo,
+                            unidade_compra=(uc_novo or "").strip() or None,
+                            fator_conversao=fator_novo if fator_novo > 0 else FATOR_CONVERSAO_PADRAO,
                         )
                         if ok:
                             st.success(msg)
@@ -641,9 +675,16 @@ elif pagina == "➕ Gerenciar Itens":
 
             if item_sel:
                 st.info(f"**Editando:** `{item_sel['part_number']} — {item_sel['nome_item']}`")
+                if item_sel.get("unidade_divergente"):
+                    st.warning(
+                        "⚠️ **Revisar unidade:** este item é comprado numa unidade diferente "
+                        "da de estoque (visto nos POs), mas ainda **sem fator de conversão** "
+                        "(fator = 1). Defina a *unidade de compra* e o *fator* abaixo para que "
+                        "o recebimento converta corretamente."
+                    )
                 ed_desc = st.text_area("Descrição / Observação", value=item_sel.get('descricao', ''), height=70, key="ed_desc")
-            
-                st.markdown("---") 
+
+                st.markdown("---")
                 
                 c1, c2, c3 = st.columns(3)
                 tipos_opts = opcoes_com_atual(TIPOS, item_sel.get('tipo_material'))
@@ -672,6 +713,38 @@ elif pagina == "➕ Gerenciar Itens":
                     st.markdown(f"**Estoque Atual:** `{item_sel['estoque_atual']}` (Alterar em *Inventário*)")
                     st.markdown(f"**Status:** `{item_sel['status_material']}`")
 
+                # ── Conversão de unidades (curadoria v2.9.0) ─────────────────────
+                st.markdown("---")
+                st.markdown("##### 🔁 Conversão de unidades (compra ↔ estoque)")
+                _sug = sugerir_conversao(item_sel)
+                _un_est = item_sel.get('unidade') or 'UN'
+                _stored_fator = float(item_sel.get('fator_conversao') or 1.0)
+                _stored_uc = item_sel.get('unidade_compra')
+                # Item ainda não curado (fator=1 e sem UM de compra) → pré-preenche com
+                # a sugestão; já curado → mostra o que o gestor gravou.
+                _nao_curado = abs(_stored_fator - 1.0) < 1e-9 and not _stored_uc
+                _def_uc = (_stored_uc or (_sug['unidade_compra_sugerida'] if _nao_curado else None)
+                           or _un_est)
+                _def_fator = (_sug['fator_sugerido'] or 1.0) if (_nao_curado and _sug['fator_sugerido']) else _stored_fator
+                cvc1, cvc2 = st.columns([1, 1])
+                ed_uc = cvc1.text_input(
+                    "Unidade de compra", value=_def_uc, key="ed_uc",
+                    help="Unidade em que o fornecedor vende (L, KG, BB, par…). "
+                         "Deixe igual à de estoque se não houver diferença. "
+                         f"Sugestões: {', '.join(UNIDADES_COMPRA_SUGERIDAS[:10])}…")
+                ed_fator = cvc2.number_input(
+                    "Fator de conversão", min_value=0.0, value=float(_def_fator), step=1.0,
+                    key="ed_fator",
+                    help="Quantas unidades de COMPRA cabem em 1 unidade de ESTOQUE. "
+                         "Ex.: 1 GL = 5 L → fator 5. Fator 1 = mesma unidade (sem conversão).")
+                _uc_txt = (ed_uc or _un_est).strip() or _un_est
+                if abs(ed_fator - 1.0) > 1e-9 and _uc_txt.upper() != _un_est.upper():
+                    st.caption(f"📐 **1 {_un_est}** de estoque = **{ed_fator:g} {_uc_txt}** de compra. "
+                               f"No recebimento, cada {ed_fator:g} {_uc_txt} recebidos viram 1 {_un_est} no estoque.")
+                else:
+                    st.caption("📐 Sem conversão (compra e estoque na mesma unidade).")
+                st.caption(f"💡 Sugestão do sistema: {_sug['origem']}.")
+
                 if st.button("✅ Atualizar Item", type="primary", width="stretch"):
                     dados_edicao = {
                         "descricao": ed_desc,
@@ -684,6 +757,8 @@ elif pagina == "➕ Gerenciar Itens":
                         "estoque_minimo": ed_min,
                         "estoque_maximo": ed_max,
                         "estoque_seguranca": ed_seg,
+                        "unidade_compra": (ed_uc or "").strip() or None,
+                        "fator_conversao": ed_fator if ed_fator > 0 else FATOR_CONVERSAO_PADRAO,
                     }
                     ok, msg = atualizar_item_inventario(item_sel['id'], dados_edicao)
                     if ok:
@@ -1644,6 +1719,9 @@ elif pagina == "🧾 Compras (SC)":
 
             st.divider()
 
+            # v2.9.0: coluna extra da qtd na UNIDADE DE COMPRA só aparece quando algum
+            # item da fila tem conversão (fator≠1), para não poluir a tabela dos demais.
+            _has_conv = any(abs((x.get("fator_conversao") or 1) - 1) > 1e-9 for x in filtradas)
             df_rep = pd.DataFrame([{
                 "Prioridade": ("⚪ " + s["prioridade"]) if s.get("sem_movimentacao") else s["prioridade"],
                 "PN": s["part_number"],
@@ -1656,6 +1734,9 @@ elif pagina == "🧾 Compras (SC)":
                 "Guarda-Chuva": s["guarda_chuva"],
                 "Qtd Sugerida": s["qtd_sugerida"],
                 "Un": s["unidade"],
+                **({"Qtd (compra)": (f"{s['qtd_sugerida_compra']} {s['unidade_compra']}"
+                                     if abs((s.get('fator_conversao') or 1) - 1) > 1e-9 else "—")}
+                   if _has_conv else {}),
                 "Fornecedor": s["fornecedor_sugerido"] or "—",
             } for s in filtradas])
             st.dataframe(
@@ -1784,6 +1865,10 @@ elif pagina == "🧾 Compras (SC)":
                            help=f"{s['alvo_origem']} · máx. Neidson {s['alvo_neidson']:g} · "
                                 f"horizonte {s['horizonte_dias']}d = {s['alvo_horizonte']:g}")
                 mc4.metric("Qtd sugerida", f"{s['qtd_sugerida']} {s['unidade']}")
+                if abs((s.get('fator_conversao') or 1) - 1) > 1e-9:
+                    st.caption(
+                        f"🛒 Pedir ao fornecedor: **{s['qtd_sugerida_compra']} {s['unidade_compra']}** "
+                        f"(= {s['qtd_sugerida']} {s['unidade']} de estoque × fator {s['fator_conversao']:g}).")
 
                 if s["lead_time_maturidade"]:
                     st.caption(f"⚠️ {s['lead_time_maturidade']} — usando lead time "
@@ -2044,37 +2129,53 @@ elif pagina == "🧾 Compras (SC)":
             _, item_rec, _ = sel_material("Material *", "sel_rec")
 
             if item_rec:
+                # v2.9.0: conversão de unidades. A qtd recebida é informada na UNIDADE
+                # DE COMPRA; o estoque/ledger vive na UNIDADE DE ESTOQUE. fator=1 (itens
+                # de UM única) → sem diferença, tudo como antes.
+                _fator_rec = float(item_rec.get('fator_conversao') or 1.0) or 1.0
+                _ue_rec = item_rec.get('unidade') or 'UN'
+                _uc_rec = item_rec.get('unidade_compra') or _ue_rec
+                _tem_conv = abs(_fator_rec - 1.0) > 1e-9 and _uc_rec.upper() != _ue_rec.upper()
+
                 # UX: Card de contexto do item selecionado
-                st.markdown(f"`{item_rec['part_number']}` — **{item_rec['nome_item']}** | Saldo Atual: `{item_rec['estoque_atual']}` {item_rec.get('unidade','UN')}")
-                
+                st.markdown(f"`{item_rec['part_number']}` — **{item_rec['nome_item']}** | Saldo Atual: `{item_rec['estoque_atual']}` {_ue_rec}")
+                if item_rec.get("unidade_divergente"):
+                    st.warning("⚠️ Este item é comprado em unidade diferente da de estoque e ainda "
+                               "**não tem fator de conversão** definido — o recebimento somará a "
+                               "quantidade crua. Cadastre o fator em **Gerenciar Itens → Conversão "
+                               "de unidades** antes de receber.")
+
                 scs_item = buscar_scs_por_item(item_rec["id"], apenas_abertas=True)
                 sc_sel = None
 
                 if scs_item:
                     vincular = st.checkbox("🔗 Vincular a uma S.C. Aberta", value=True)
                     if vincular:
-                        opc_sc = {f"SC {s['numero_sc']} | PO: {s.get('po_item') or '—'} | Saldo: {s['pendente']} {item_rec['unidade']}": s for s in scs_item}
+                        opc_sc = {f"SC {s['numero_sc']} | PO: {s.get('po_item') or '—'} | Saldo: {s['pendente']} {_uc_rec}": s for s in scs_item}
                         sel_sc_str = st.selectbox("Selecionar SC", list(opc_sc.keys()), label_visibility="collapsed")
                         sc_sel = opc_sc[sel_sc_str]
-                        
+
                         with st.container(border=True):
                             st.markdown(f"✅ **SC {sc_sel['numero_sc']}** | PO: `{sc_sel['numero_po'] or '—'}` | Fornecedor: {sc_sel.get('fornecedor_item') or sc_sel['fornecedor'] or '—'}")
-                            st.markdown(f"Solicitado: `{sc_sel['quantidade_solicitada']}` | Negociado: `{sc_sel.get('quantidade_negociada') or sc_sel['quantidade_solicitada']}` | Recebido: `{sc_sel['quantidade_recebida']}` | **Saldo Residual: `{sc_sel['pendente']}`**")
+                            st.markdown(f"Solicitado: `{sc_sel['quantidade_solicitada']}` | Negociado: `{sc_sel.get('quantidade_negociada') or sc_sel['quantidade_solicitada']}` | Recebido: `{sc_sel['quantidade_recebida']}` | **Saldo Residual: `{sc_sel['pendente']}` {_uc_rec}**")
                 else:
                     st.info("ℹ️ Nenhuma SC aberta para este material. A entrada será registrada como avulsa.")
 
+                # v2.9.0: qtd fora do form → conversão em tempo real (form não faz rerun).
+                limite_rec = float(sc_sel["pendente"]) if sc_sel else None
+                qtd_default = min(1.0, limite_rec) if limite_rec else 1.0
+                lbl_qtd = f"Qtd Recebida (em {_uc_rec}) *" if _tem_conv else "Qtd Recebida *"
+                if limite_rec:
+                    qtd_r = st.number_input(lbl_qtd, min_value=0.01, max_value=limite_rec, step=1.0, value=qtd_default, key="rec_qtd")
+                else:
+                    qtd_r = st.number_input(lbl_qtd, min_value=0.01, step=1.0, key="rec_qtd")
+                if _tem_conv:
+                    _incr = qtd_r / _fator_rec
+                    st.caption(f"📐 **{qtd_r:g} {_uc_rec}** ÷ fator {_fator_rec:g} = **+{_incr:g} {_ue_rec}** no estoque.")
+
                 with st.form("form_rec"):
                     st.markdown("##### 📥 Dados do Recebimento")
-                    c1, c2, c3 = st.columns(3)
-                    limite_rec = float(sc_sel["pendente"]) if sc_sel else None
-                    qtd_default = min(1.0, limite_rec) if limite_rec else 1.0
-                    
-                    # UX: Limita input ao saldo pendente para evitar erros humanos
-                    if limite_rec:
-                        qtd_r = c1.number_input("Qtd Recebida *", min_value=0.01, max_value=limite_rec, step=1.0, value=qtd_default)
-                    else:
-                        qtd_r = c1.number_input("Qtd Recebida *", min_value=0.01, step=1.0)
-                        
+                    c2, c3 = st.columns(2)
                     # v2.7.1: Fornecedor não é obrigatório (pré-preenche da SC quando há).
                     forn   = c2.text_input("Fornecedor", value=(sc_sel.get("fornecedor_item") or sc_sel.get("fornecedor") or "") if sc_sel else "")
                     dt_r   = c3.date_input("Data Recebimento", value=date.today())
@@ -2094,6 +2195,7 @@ elif pagina == "🧾 Compras (SC)":
                     if sc_sel and not obs_nf.strip():
                         st.warning("⚠️ Informe o número da Nota Fiscal para rastreabilidade.")
                     elif sc_sel:
+                        # qtd_r na UM de compra; registrar_recebimento_sc converte ao estoque.
                         ok, msg = registrar_recebimento_sc(
                             sc_id=sc_sel["id"], item_sc_id=sc_sel["item_sc_id"],
                             qtd_recebida=qtd_r, centro_custo=cc_r,
@@ -2103,10 +2205,16 @@ elif pagina == "🧾 Compras (SC)":
                         if ok: st.success(f"✅ **Recebimento registrado!** {msg}"); time.sleep(2); st.rerun()
                         else:  st.error(f"❌ {msg}")
                     else:
+                        # v2.9.0: entrada avulsa converte aqui (registrar_movimentacao é
+                        # primitivo em unidade de ESTOQUE — a conversão é responsabilidade
+                        # da borda, como no recebimento de SC).
+                        _qtd_estoque = qtd_r / _fator_rec
+                        _obs_conv = (f" | convertido {qtd_r:g} {_uc_rec} ÷ {_fator_rec:g} = "
+                                     f"{_qtd_estoque:g} {_ue_rec}") if _tem_conv else ""
                         ok, msg = registrar_movimentacao(
-                            item_id=item_rec["id"], tipo="entrada", quantidade=qtd_r,
+                            item_id=item_rec["id"], tipo="entrada", quantidade=_qtd_estoque,
                             centro_custo=cc_r, solicitante="Almoxarifado", emitente="Almoxarifado",
-                            observacao=f"Fornecedor: {forn} | {obs_nf}"
+                            observacao=f"Fornecedor: {forn} | {obs_nf}{_obs_conv}"
                         )
                         if ok: st.success(f"✅ **Entrada avulsa registrada!** {msg}"); time.sleep(2); st.rerun()
                         else:  st.error(f"❌ {msg}")
@@ -2327,6 +2435,17 @@ elif pagina == "📇 Ficha 360":
                     _ult_txt = f" · última em {fmt(_ult)}" if _ult else ""
                     st.caption(f"🟢 **Situação de consumo:** {it.get('qtd_requisicoes', 0)} "
                                f"requisição(ões){_ult_txt}.")
+
+            # ── Conversão de unidades (v2.9.0) ────────────────────────────────
+            _fat_f = float(it.get("fator_conversao") or 1.0) or 1.0
+            _uc_f = it.get("unidade_compra")
+            if it.get("unidade_divergente"):
+                st.warning("⚠️ **Revisar unidade:** comprado em unidade diferente da de estoque "
+                           "(visto nos POs) e ainda **sem fator de conversão**. Cadastre em "
+                           "**Gerenciar Itens → Conversão de unidades** para o recebimento converter certo.")
+            elif abs(_fat_f - 1.0) > 1e-9 and _uc_f:
+                st.caption(f"🔁 **Conversão:** compra em **{_uc_f}** · **1 {it.get('unidade') or 'UN'}** "
+                           f"de estoque = **{_fat_f:g} {_uc_f}** (fator {_fat_f:g}).")
 
             # ── Recomendação de reposição (read-only, reusa v2.5) ─────────────
             un = it.get("unidade") or "UN"

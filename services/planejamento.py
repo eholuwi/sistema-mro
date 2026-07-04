@@ -281,12 +281,23 @@ def montar_sugestao(item, incluir_fornecedor=True):
         item.get("dias_cobertura"), calc["lead_time"]
     )
     forn = fornecedor or {}
+    # v2.9.0 — exibição dupla: a qtd sugerida (unidade de ESTOQUE) também na unidade
+    # de COMPRA do fornecedor, para o comprador pedir na unidade certa.
+    #   qtd_compra = ceil(qtd_sugerida × fator).  fator=1 → sem diferença (no-op).
+    fator = _num(item.get("fator_conversao")) or 1.0
+    if fator <= 0:
+        fator = 1.0
+    unidade_compra = item.get("unidade_compra") or item.get("unidade") or "UN"
+    qtd_sugerida_compra = int(math.ceil(qtd["qtd"] * fator)) if qtd["qtd"] > 0 else 0
     return {
         "item_id": item["id"],
         "part_number": item.get("part_number"),
         "nome_item": item.get("nome_item"),
         "descricao": item.get("descricao"),
         "unidade": item.get("unidade") or "UN",
+        "unidade_compra": unidade_compra,
+        "fator_conversao": fator,
+        "qtd_sugerida_compra": qtd_sugerida_compra,
         "tipo_material": item.get("tipo_material"),
         "setor": item.get("setor_responsavel"),
         "importancia": item.get("importancia"),
