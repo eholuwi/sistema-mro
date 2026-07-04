@@ -51,7 +51,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 2.6.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 2.7.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
 
 inject_custom_css()
 
@@ -107,7 +107,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 2.6.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 2.7.0</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -212,15 +212,17 @@ if pagina == "📊 Dashboard":
     ok      = sum(1 for i in itens if "OK" in i.get("status_material",""))
     atencao = sum(1 for i in itens if "ATENÇÃO" in i.get("status_material",""))
     comprar = sum(1 for i in itens if "COMPRAR" in i.get("status_material",""))
-    
+    # v2.7.0: itens que nunca tiveram consumo real (fora da lista de compra)
+    sem_mov = sum(1 for i in itens if i.get("sem_movimentacao"))
+
     # ✅ NOVO: Contagem de itens com estoque físico zerado
     zerados = sum(1 for i in itens if (i.get("estoque_atual") or 0) <= 0)
-    
+
     inv_ok  = sum(1 for i in itens if i.get("data_inventario"))
-    
+
     # --- 2. CARDS DE RESUMO (Métricas com Explicação) ---
-    # 6 colunas para incluir a nova métrica "Zerados"
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    # 7 colunas (v2.7.0 incluiu "Sem Movimentação")
+    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
 
     with c1:
         st.metric("📦 Itens Totais", total, help="Total de SKUs cadastrados no MRO")
@@ -232,15 +234,19 @@ if pagina == "📊 Dashboard":
         st.metric("🟡 Perto de criticidade", atencao, f"{perc_at}% do total", delta_color="off", help="Itens atingindo o ponto de pedido")
     with c4:
         perc_co = round(comprar/total*100) if total else 0
-        st.metric("⚠️ Críticos", comprar, f"{perc_co}% do total", delta_color="inverse", help="Itens abaixo do estoque mínimo")
-    
-    # ✅ NOVA MÉTRICA: ZERADOS (estoque físico = 0)
+        st.metric("⚠️ Críticos", comprar, f"{perc_co}% do total", delta_color="inverse", help="Itens abaixo do mínimo E com consumo real (candidatos de compra)")
     with c5:
-        perc_zer = round(zerados/total*100) if total else 0
-        st.metric("🔴 Zerados", zerados, f"{perc_zer}% do total", delta_color="inverse", 
-                 help="Itens com estoque físico = 0 (risco imediato de parada)")
-    
+        perc_sm = round(sem_mov/total*100) if total else 0
+        st.metric("⚪ Sem Movimentação", sem_mov, f"{perc_sm}% do total", delta_color="off",
+                 help="Nunca tiveram saída por requisição (sem consumo real). Ficam FORA da lista de compra; revise em Compras → Assistente de Reposição.")
+
+    # ✅ NOVA MÉTRICA: ZERADOS (estoque físico = 0)
     with c6:
+        perc_zer = round(zerados/total*100) if total else 0
+        st.metric("🔴 Zerados", zerados, f"{perc_zer}% do total", delta_color="inverse",
+                 help="Itens com estoque físico = 0 (risco imediato de parada)")
+
+    with c7:
         perc_inv = round(inv_ok/total*100) if total else 0
         st.metric("🔍 Inventariado", f"{inv_ok}/{total}", f"{perc_inv}% Inventariado", help="Progresso da conferência física")
     
@@ -373,7 +379,7 @@ elif pagina == "📋 Inventário":
             f_loc    = c1.selectbox("📍 Localização", ["Todas"] + locais_db)
             f_imp    = c2.multiselect("Importância", IMPORTANCIAS)
             f_tipo   = c3.multiselect("Tipo", TIPOS)
-            f_status = c4.multiselect("Status", ["🟢 OK", "🟡 ATENÇÃO", "🔴 COMPRAR"])
+            f_status = c4.multiselect("Status", ["🟢 OK", "🟡 ATENÇÃO", "🔴 COMPRAR", "⚪ Sem Movimentação"])
             
             c5, c6 = st.columns(2)
             f_busca  = c5.text_input("🔎 Buscar PN ou Nome")
@@ -1561,8 +1567,14 @@ elif pagina == "🧾 Compras (SC)":
             + " — amadurecem conforme os dados acumulam."
         )
 
+        incluir_sem_mov = st.checkbox(
+            "⚪ Mostrar itens sem movimentação (revisão)", value=False, key="rep_incl_semmov",
+            help="Por padrão, itens que nunca tiveram consumo real ficam fora da fila. "
+                 "Marque para revisá-los — inclui os spares 'Parada de Linha' que o "
+                 "Neidson estoca sem giro.")
+
         with st.spinner("Calculando sugestões de reposição…"):
-            sugestoes = gerar_sugestoes_reposicao()
+            sugestoes = gerar_sugestoes_reposicao(incluir_sem_movimentacao=incluir_sem_mov)
 
         if not sugestoes:
             st.success("✅ Nenhuma reposição necessária agora. Estoque + guarda-chuva "
@@ -1599,7 +1611,7 @@ elif pagina == "🧾 Compras (SC)":
             st.divider()
 
             df_rep = pd.DataFrame([{
-                "Prioridade": s["prioridade"],
+                "Prioridade": ("⚪ " + s["prioridade"]) if s.get("sem_movimentacao") else s["prioridade"],
                 "PN": s["part_number"],
                 "Item": s["nome_item"],
                 "Cobertura(d)": (s["cobertura_dias"]
@@ -2183,6 +2195,16 @@ elif pagina == "📇 Ficha 360":
                 )
                 if it.get("descricao"):
                     st.caption(it["descricao"])
+
+                # v2.7.0 — Situação de consumo (real = saída por requisição)
+                if it.get("sem_movimentacao"):
+                    st.caption("⚪ **Situação de consumo:** Sem movimentação "
+                               "(nunca teve saída por requisição) — fora da lista de compra.")
+                else:
+                    _ult = it.get("ultima_requisicao_data")
+                    _ult_txt = f" · última em {fmt(_ult)}" if _ult else ""
+                    st.caption(f"🟢 **Situação de consumo:** {it.get('qtd_requisicoes', 0)} "
+                               f"requisição(ões){_ult_txt}.")
 
             # ── Recomendação de reposição (read-only, reusa v2.5) ─────────────
             if rep["precisa"]:

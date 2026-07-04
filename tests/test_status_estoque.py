@@ -15,8 +15,10 @@ class TestRegraOficialFaixa20:
     def test_none_nao_quebra(self):       assert "COMPRAR" in status(None, None, 0)
 
 
-def test_dashboard_concorda_com_regra_oficial(db, make_item):
+def test_dashboard_concorda_com_regra_oficial(db, make_item, registrar_consumo):
     from services import db_functions as F
-    make_item("PN-AT", estoque=11, minimo=10)   # zona de ATENCAO pela regra oficial
+    iid = make_item("PN-AT", estoque=11, minimo=10)   # zona de ATENCAO pela regra oficial
+    registrar_consumo(iid)  # v2.7.0: com consumo real, entra na classificação normal
     kpis = F.obter_dados_dashboard()["kpis"]
     assert kpis["atencao"] == 1 and kpis["ok"] == 0
+    assert kpis["sem_movimentacao"] == 0

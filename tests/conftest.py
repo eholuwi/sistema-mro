@@ -47,6 +47,41 @@ def make_item(db):
 
 
 @pytest.fixture
+def registrar_consumo(db):
+    """Marca um item como 'COM movimentação' (v2.7.0): insere uma requisição real
+    (linha em `requisicoes` + `movimentacoes.saida` com `requisicao_id`) SEM alterar
+    o estoque. Isola os testes de status de estoque do filtro 'Sem Movimentação',
+    já que `make_item` sozinho cria só 'Saldo inicial' (entrada, sem requisição)."""
+    import database
+    contador = {"n": 0}
+
+    def _reg(item_id, quantidade=1.0, data_hora="2026-06-01 08:00:00"):
+        contador["n"] += 1
+        conn = database.get_connection()
+        try:
+            cur = conn.execute(
+                "INSERT INTO requisicoes (numero_requisicao, data_hora, setor, emitente, centro_custo) "
+                "VALUES (?,?,?,?,?)",
+                (f"REQ-TEST-{item_id}-{contador['n']}", data_hora, "MANUTENÇÃO",
+                 "Joao", "21106 - MANUTENÇÃO"),
+            )
+            req_id = cur.lastrowid
+            conn.execute(
+                "INSERT INTO movimentacoes (item_id,tipo,quantidade,saldo_apos,data_hora,"
+                "centro_custo,setor,emitente,observacao,requisicao_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (item_id, "saida", quantidade, None, data_hora,
+                 "21106 - MANUTENÇÃO", "MANUTENÇÃO", "Joao", f"Req {req_id}", req_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return req_id
+
+    return _reg
+
+
+@pytest.fixture
 def make_sc(make_item):
     """Cria uma SC com itens via criar_sc e devolve o sc_id (Fase 5 / T-01).
 

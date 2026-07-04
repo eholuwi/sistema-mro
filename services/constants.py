@@ -9,6 +9,19 @@ MARGEM_ATENCAO = 1.2           # limite da zona ATENCAO = estoque_minimo * 1.2
 FATOR_ESTOQUE_MAXIMO = 2       # estoque_maximo = estoque_minimo * 2
 FATOR_ESTOQUE_SEGURANCA = 1.5  # estoque_seguranca = consumo * lead_time * 1.5
 
+# --- Consumo real / "Sem Movimentação" (v2.7.0) ---
+# "Consumo real" = saída por REQUISIÇÃO (requisicao_id preenchido). Exclui os
+# ajustes/saldo inicial/testes (que têm requisicao_id NULL) — validado no mro.db
+# real como idêntico ao filtro manual do comprador por Observação "Req%".
+# Fragmento WHERE compartilhado (DRY) por listar_inventario, obter_dados_dashboard
+# e a Curva ABC, para que a definição de consumo real viva num único lugar.
+SAIDA_REAL_WHERE = "tipo='saida' AND requisicao_id IS NOT NULL"
+
+# Status atribuído ao item que NUNCA teve consumo real (0 requisições de saída).
+# Sobrepõe 🔴/🟡/🟢 em listar_inventario → some da lista de compra e ganha balde
+# próprio, filtrável. NÃO altera a base do Neidson nem apaga nada.
+STATUS_SEM_MOVIMENTACAO = "⚪ Sem Movimentação"
+
 # --- Consumo / ruptura ---
 JANELA_CONSUMO_DIAS = 30            # janela do consumo medio diario (dias)
 PREVISAO_RUPTURA_SEM_RISCO = 999   # dias; sentinela "sem ruptura prevista"

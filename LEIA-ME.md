@@ -1,27 +1,27 @@
-# MRO Inventus Power — Sistema Atualizado
+# MRO Inventus Power v2.7.0
 
-Aplicação Streamlit para gestão de materiais MRO, compras e inventário operacional.
+Plataforma inteligente de gestão MRO, compras, inventário e rastreabilidade operacional com 190+ testes.
 
 ## Visão geral
 
-O código atual está em `2.0.2/sistema-mro/`.
-A aplicação utiliza Streamlit para interface e SQLite para persistência local.
+Aplicação Streamlit + SQLite para inteligência operacional: prevenção de ruptura, rastreabilidade logística e suporte à tomada de decisão industrial. Versão atual: **2.7.0** (04/07/2026) — higiene da lista de compra com o status **⚪ Sem Movimentação**.
 
 ## Arquivos principais
 
 - `app.py` — interface Streamlit, navegação e páginas do aplicativo.
 - `database.py` — criação do banco SQLite, migrações, seeds e índices.
-- `services/db_functions.py` — regras de negócio, operações de inventário, SC, requisições e movimentações.
+- `services/db_functions.py` — núcleo de lógica operacional (inventário, SC, requisições, movimentações).
+- `services/planejamento.py` — motor de reposição inteligente (v2.5.0+).
+- `services/ficha.py` — montagem da Ficha 360 do Material (v2.6.0+).
 - `services/constants.py` — constantes de domínio.
 - `services/logging_config.py` — configuração de logging.
 - `services/styles.py` — injeção de estilo visual.
-- `tests/` — casos de teste com `pytest`.
+- `tests/` — 180+ casos de teste com `pytest`.
 
 ## Como executar
 
-1. Navegue até `2.0.2/sistema-mro/`.
-2. Crie e ative o ambiente virtual.
-3. Instale dependências com:
+1. Crie e ative o ambiente virtual.
+2. Instale dependências com:
 
 ```powershell
 pip install -r requirements.txt
@@ -41,50 +41,50 @@ streamlit run app.py
 
 ## Páginas da aplicação
 
-- Dashboard
-- Inventário
-- Gerenciar Itens (inclui edição e alteração de Part Number com histórico)
-- Movimentações
-- Requisição
-- Compras (SC)
-- Feedback (sugestões e backlog)
-- Configurações (inclui importação da base: Tipo, Mínimo, Máximo, Lead Time)
+- **Dashboard** — KPIs, itens críticos, cobertura real, pendências.
+- **Ficha 360 do Material** (v2.6.0) — consolidado: cadastro, estoque, consumo, compras, utilização, indicadores, histórico de vida útil, imagem do produto.
+- **Inventário** — visualização e filtros.
+- **Gerenciar Itens** — edição, alteração de Part Number com histórico.
+- **Movimentações** — histórico de entradas/saídas com rastreabilidade.
+- **Requisição** — solicitações operacionais.
+- **Compras (SC)** — gestão de solicitações de compra com **Assistente de Reposição** (v2.5.0): fila priorizada, gatilhos de reposição, quantidade sugerida, decisões auditadas.
+- **Feedback** — sugestões e backlog.
+- **Configurações** — importação de base (Tipo, Mín/Máx, Lead Time).
 
 ## Observações
 
-- Versão atual: `2.1.0` (cabeçalho e sidebar atualizados). Ver `changelog/2.1.0.md`.
-- A arquitetura atual é monolítica; a lógica de negócio está concentrada em `services/db_functions.py` e parte dela permanece em `app.py`.
-- A pasta `.agents/` e `.claude/` são artefatos de ferramenta/IDE e não fazem parte do fluxo de execução do sistema.
+- Versão atual: `2.6.0` (Ficha 360 + Imagem do Produto).
+- Arquitetura modularizada: `db_functions.py` (core), `planejamento.py` (reposição), `ficha.py` (consolidação).
+- 180+ testes com cobertura de cálculos, migrações, integração e UI.
+- A pasta `.agents/` e `.claude/` são artefatos de ferramenta/IDE.
 
 ## Estrutura do projeto
 
 ```text
-2.0.2/sistema-mro/
+sistema-mro/
   ├── app.py
   ├── database.py
   ├── requirements.txt
   ├── requirements-dev.txt
   ├── pytest.ini
   ├── services/
+  │   ├── db_functions.py      (core: inventário, SC, requisições)
+  │   ├── planejamento.py      (v2.5.0: assistente de reposição)
+  │   ├── ficha.py             (v2.6.0: ficha 360 do material)
   │   ├── constants.py
-  │   ├── db_functions.py
   │   ├── logging_config.py
   │   └── styles.py
-  └── tests/
+  ├── tests/                   (180+ testes)
+  ├── changelog/               (histórico de releases)
+  ├── docs/                    (blueprints e contexto)
+  └── docs/itens/              (imagens de produtos)
 ```
 
-* schema
-* migrações
-* pragmas
+### Módulos principais
 
-### `services/db_functions.py`
-
-Núcleo de lógica operacional:
-
-* cálculos
-* consultas SQL
-* regras de negócio
-* analytics
+- **`db_functions.py`**: cálculos, consultas SQL, regras de negócio, analytics.
+- **`planejamento.py`**: motor de reposição (ROP, gatilho com antecedência, quantidade híbrida).
+- **`ficha.py`**: consolidação de dados por item (consumo por departamento, imagem, histórico).
 
 ---
 
@@ -150,30 +150,59 @@ O mecanismo `_migrar()`:
 
 # 📌 Evolução da Plataforma
 
-## v1.x
+## v1.x — Controle Operacional
 
-* Controle operacional básico
-* Gestão de estoque
+* Gestão de estoque básica
 * SC simples
 * Inventário manual
 
-## v2.0.0
+## v2.0–2.1 — Inteligência Logística
 
-* Inteligência logística
-* Cobertura real
+* Cobertura real (estoque + em trânsito / consumo)
 * Gestão de saldo residual
 * Lead Time real
 * Rastreabilidade avançada
 * Analytics operacionais
-* Arquitetura relacional robusta
+
+## v2.2–2.4 — Consolidação de Dados
+
+* Consumo real por item
+* Lead Time efetivo (calculado + cadastrado)
+* Estoque de segurança
+* Curva ABC (quantidade + valor)
+* Fornecedores por item
+
+## v2.5 — Pilar de Planejamento
+
+* Assistente de Reposição (ROP + gatilho + quantidade sugerida)
+* Priorização automática (crítico, antecipar, atenção)
+* Fila priorizada com auditoria de decisões
+* Motor de reposição testável e modular
+
+## v2.6 — Ficha 360 do Material
+
+* Consolidação completa: cadastro + estoque + consumo + compras + histórico
+* Imagem do produto (upload/remoção)
+* Consumo por departamento/centro de custo
+* Recomendação de reposição embutida
+* Transparência de origem e fórmulas
 
 ---
 
-# 🎯 Objetivo Estratégico da v2.0.0
+# 🎯 Objetivo Estratégico
 
-O sistema deixa de atuar apenas como um controle de almoxarifado e passa a operar como:
+O sistema opera como:
 
-> uma plataforma de inteligência operacional voltada para prevenção de ruptura, rastreabilidade logística e suporte à tomada de decisão industrial.
+> uma plataforma de inteligência operacional voltada para prevenção de ruptura, rastreabilidade logística e suporte à tomada de decisão industrial — com assistência inteligente de reposição e consolidação completa da vida útil do material.
+
+---
+
+---
+
+# 🚀 Próximos Passos
+
+* **v2.7.0** — Críticos automáticos, XYZ & Sazonalidade
+* **v3.0.0** — Dashboards por público (Comprador / Gestão / Diretoria)
 
 ---
 
@@ -181,3 +210,5 @@ O sistema deixa de atuar apenas como um controle de almoxarifado e passa a opera
 
 Desenvolvido por **Luis Gabriel Arruda de Oliveira**
 Inventus Power · MRO Intelligence System 🟠
+
+Última atualização: **04/07/2026** (v2.7.0)

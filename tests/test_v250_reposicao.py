@@ -231,12 +231,15 @@ def test_schema_sugestoes_reposicao(db):
 # GERAÇÃO DA FILA (integração via listar_inventario)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def test_gerar_fila_filtra_e_prioriza(db, make_item):
+def test_gerar_fila_filtra_e_prioriza(db, make_item, registrar_consumo):
     critico = make_item("PN-CRIT", estoque=8, minimo=5, lead=10,
                         importancia="Parada de Linha")
     ok_item = make_item("PN-OK", estoque=200, minimo=10, lead=10)
     _set_inv(critico, consumo_medio_diario=1.0)
     _set_inv(ok_item, consumo_medio_diario=1.0)
+    # v2.7.0: consumo real vem de requisições — sem isso o item é "Sem Movimentação"
+    registrar_consumo(critico)
+    registrar_consumo(ok_item)
 
     fila = P.gerar_sugestoes_reposicao(incluir_fornecedor=False)
     pns = [s["part_number"] for s in fila]
@@ -246,9 +249,10 @@ def test_gerar_fila_filtra_e_prioriza(db, make_item):
     assert fila[0]["qtd_sugerida"] > 0
 
 
-def test_gerar_fila_desconta_guarda_chuva(db, make_item, make_sc):
+def test_gerar_fila_desconta_guarda_chuva(db, make_item, make_sc, registrar_consumo):
     item_id = make_item("PN-GC", estoque=8, minimo=5, lead=10)
     _set_inv(item_id, consumo_medio_diario=1.0, estoque_maximo=60)
+    registrar_consumo(item_id)  # v2.7.0: dá consumo real ao item
     # Sem guarda-chuva: alvo=max(60, 60)=60; qtd = 60-8 = 52
     fila = P.gerar_sugestoes_reposicao(incluir_fornecedor=False)
     assert fila[0]["qtd_sugerida"] == 52
@@ -264,9 +268,10 @@ def test_gerar_fila_desconta_guarda_chuva(db, make_item, make_sc):
 # PONTE PARA "CRIAR SC" (reusa criar_sc)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def test_criar_sc_a_partir_da_sugestao(db, make_item):
+def test_criar_sc_a_partir_da_sugestao(db, make_item, registrar_consumo):
     item_id = make_item("PN-SC5", estoque=8, minimo=5, lead=10)
     _set_inv(item_id, consumo_medio_diario=1.0, estoque_maximo=60)
+    registrar_consumo(item_id)  # v2.7.0
     fila = P.gerar_sugestoes_reposicao(incluir_fornecedor=False)
     sug = next(s for s in fila if s["part_number"] == "PN-SC5")
 
@@ -288,9 +293,10 @@ def test_criar_sc_a_partir_da_sugestao(db, make_item):
 # AUDITORIA DE DESFECHO
 # ══════════════════════════════════════════════════════════════════════════════
 
-def test_registrar_e_listar_desfecho(db, make_item):
+def test_registrar_e_listar_desfecho(db, make_item, registrar_consumo):
     item_id = make_item("PN-DES", estoque=8, minimo=5, lead=10)
     _set_inv(item_id, consumo_medio_diario=1.0, estoque_maximo=60)
+    registrar_consumo(item_id)  # v2.7.0
     sug = P.gerar_sugestoes_reposicao(incluir_fornecedor=False)[0]
 
     P.registrar_desfecho_sugestao(sug, "adiada", observacao="aguardando orçamento")
