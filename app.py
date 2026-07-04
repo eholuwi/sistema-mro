@@ -36,6 +36,7 @@ from services.db_functions import (
 from services.planejamento import (
     gerar_sugestoes_reposicao, sugestao_para_item_sc,
     registrar_desfecho_sugestao, listar_sugestoes, buscar_sc_id_por_numero,
+    agrupar_por_natureza, resumir_grupo_sc,
 )
 from services.ficha import (
     montar_ficha_360, salvar_imagem_item, remover_imagem_item,
@@ -51,7 +52,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 2.7.1", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 2.8.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
 
 inject_custom_css()
 
@@ -107,7 +108,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 2.7.1</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 2.8.0</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1606,10 +1607,40 @@ elif pagina == "🧾 Compras (SC)":
                 filtradas = [s for s in filtradas
                              if (s["fornecedor_sugerido"] or "Sem fornecedor sugerido") == f_forn]
 
+            def _cate(s):
+                """'Comprar até' formatado (⏰ = já atrasado; '—' = sem consumo)."""
+                ca = s.get("comprar_ate")
+                if not ca:
+                    return "—"
+                dd = datetime.strptime(ca, "%Y-%m-%d").strftime("%d/%m/%Y")
+                return f"⏰ {dd}" if s.get("comprar_atrasado") else dd
+
             k1, k2, k3 = st.columns(3)
             k1.metric("Itens a repor", len(filtradas))
             k2.metric("🔴 Críticos", sum(1 for s in filtradas if s["prioridade_tier"] == 0))
             k3.metric("⛔ Parada de Linha", sum(1 for s in filtradas if s["parada_linha"]))
+
+            # --- 🔴 Críticos automáticos (versão auto da lista CRÍTICOS manual) ---
+            criticos = [s for s in filtradas if s["prioridade_tier"] == 0]
+            if criticos:
+                with st.expander(f"🔴 Críticos automáticos ({len(criticos)}) — comprar primeiro",
+                                 expanded=True):
+                    st.caption("Itens no/abaixo do ponto de pedido (ROP): vão romper por consumo. "
+                               "Ordenados pela data-limite de compra.")
+                    crit_ord = sorted(criticos, key=lambda s: s.get("comprar_ate") or "9999-99-99")
+                    st.dataframe(
+                        pd.DataFrame([{
+                            "PN": s["part_number"],
+                            "Item": s["nome_item"],
+                            "Cobertura(d)": (s["cobertura_dias"]
+                                             if s["cobertura_dias"] < PREVISAO_RUPTURA_SEM_RISCO else None),
+                            "Comprar até": _cate(s),
+                            "Qtd": s["qtd_sugerida"],
+                            "Un": s["unidade"],
+                            "Fornecedor": s["fornecedor_sugerido"] or "—",
+                        } for s in crit_ord]),
+                        hide_index=True, width="stretch",
+                    )
 
             st.divider()
 
@@ -1619,6 +1650,7 @@ elif pagina == "🧾 Compras (SC)":
                 "Item": s["nome_item"],
                 "Cobertura(d)": (s["cobertura_dias"]
                                  if s["cobertura_dias"] < PREVISAO_RUPTURA_SEM_RISCO else None),
+                "Comprar até": _cate(s),
                 "ROP": s["rop"],
                 "Estoque": s["estoque_atual"],
                 "Guarda-Chuva": s["guarda_chuva"],
@@ -1633,6 +1665,10 @@ elif pagina == "🧾 Compras (SC)":
                         format="%.1f",
                         help="(estoque + guarda-chuva) ÷ consumo diário. "
                              "Vazio = sem consumo registrado no período."),
+                    "Comprar até": st.column_config.TextColumn(
+                        help="Data-limite p/ emitir a SC e o material chegar antes de acabar "
+                             "(cobertura − lead time − 15 d de antecedência). "
+                             "⏰ = já atrasado; — = sem consumo."),
                     "ROP": st.column_config.NumberColumn(
                         format="%.1f",
                         help="Ponto de pedido = consumo diário × lead time + estoque de segurança."),
@@ -1644,6 +1680,84 @@ elif pagina == "🧾 Compras (SC)":
             )
             st.caption("Ordem: urgência → Parada de Linha → menor cobertura. Guarda-Chuva = "
                        "qtd já negociada que ainda falta chegar (não pede em duplicidade).")
+
+            buf_rep = io.BytesIO()
+            with pd.ExcelWriter(buf_rep, engine="openpyxl") as w:
+                df_rep.to_excel(w, index=False, sheet_name="Sugestões")
+            st.download_button(
+                "⬇️ Exportar sugestões (Excel)", data=buf_rep.getvalue(),
+                file_name=f"reposicao_mro_{date.today():%d-%m-%Y}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="rep_export")
+
+            # --- 📦 SCs sugeridas (agrupadas por NATUREZA da SC) — "de mão beijada" ---
+            st.divider()
+            st.markdown("#### 📦 SCs sugeridas")
+            st.caption("Itens juntados pela **natureza da SC** (o mesmo vocabulário que a operação "
+                       "já usa no Protheus, derivado do histórico de cada item), com título, "
+                       "justificativa e **centro de custo** sugeridos. Revise, edite e crie a SC "
+                       "agrupada em um clique — o sistema recomenda, você decide.")
+            grupos_sc = agrupar_por_natureza(filtradas)
+            resumos = [resumir_grupo_sc(label, sugs) for label, sugs in grupos_sc.items()]
+            for gi, r in enumerate(resumos):
+                nat_curta = (r["label"].replace("SOLICITAÇÃO DE COMPRA - ", "")
+                             .replace("SOLICITAÇÃO DE COMPRA – ", ""))
+                cabecalho = f"{nat_curta} · {r['n_itens']} itens · {r['prioridade']}"
+                if r["comprar_ate_min"]:
+                    cabecalho += (" · comprar até "
+                                  + datetime.strptime(r["comprar_ate_min"], "%Y-%m-%d").strftime("%d/%m"))
+                with st.expander(cabecalho, expanded=(gi == 0 and r["prioridade_tier"] == 0)):
+                    st.dataframe(
+                        pd.DataFrame([{
+                            "PN": s["part_number"],
+                            "Item": s["nome_item"],
+                            "Cobertura(d)": (s["cobertura_dias"]
+                                             if s["cobertura_dias"] < PREVISAO_RUPTURA_SEM_RISCO else None),
+                            "Comprar até": _cate(s),
+                            "Qtd": s["qtd_sugerida"],
+                            "Un": s["unidade"],
+                            "CC (item)": s.get("cc_sugerido") or "—",
+                            "Fornecedor": s["fornecedor_sugerido"] or "—",
+                        } for s in r["itens"]]),
+                        hide_index=True, width="stretch",
+                    )
+                    cap = f"🏷️ Centro de custo sugerido: **{r['cc_sugerido']}**"
+                    if r["valor_estimado"] > 0:
+                        cap += f"  ·  💰 Valor estimado: ~R$ {r['valor_estimado']:,.2f}"
+                    st.caption(cap)
+                    with st.form(f"form_sc_grupo_{gi}", clear_on_submit=False):
+                        gc1, gc2 = st.columns([2, 1])
+                        titulo_g = gc1.text_input("Título da SC (natureza)", value=r["titulo"],
+                                                  key=f"sc_tit_{gi}")
+                        num_sc_g = gc2.text_input(
+                            "Número da SC *",
+                            value=f"REP-{datetime.now():%Y%m%d-%H%M}-{gi + 1}",
+                            key=f"sc_num_{gi}")
+                        gc3, gc4 = st.columns([1, 1])
+                        cc_g = gc3.text_input("Centro de custo (sugestão)", value=r["cc_sugerido"],
+                                              key=f"sc_cc_{gi}")
+                        dt_g = gc4.date_input("Data de abertura", value=date.today(),
+                                              key=f"sc_dt_{gi}")
+                        just_g = st.text_area("Justificativa", value=r["justificativa"],
+                                              height=90, key=f"sc_just_{gi}")
+                        criar_g = st.form_submit_button(
+                            f"✅ Criar esta SC ({r['n_itens']} itens)", type="primary",
+                            width="stretch")
+                    if criar_g:
+                        if not num_sc_g.strip():
+                            st.warning("⚠️ Informe o número da SC.")
+                        else:
+                            itens_g = [sugestao_para_item_sc(s, data_necessidade=str(date.today()))
+                                       for s in r["itens"]]
+                            obs_g = f"{titulo_g}\nCentro de custo sugerido: {cc_g}\n\n{just_g}"
+                            ok, msg = criar_sc(num_sc_g.strip(), str(dt_g), itens_g, obs_g)
+                            if ok:
+                                sc_id_g = buscar_sc_id_por_numero(num_sc_g.strip())
+                                for s in r["itens"]:
+                                    registrar_desfecho_sugestao(s, "criou_sc", sc_id=sc_id_g)
+                                st.success(f"✅ {msg} Desfechos registrados no histórico.")
+                            else:
+                                st.error(f"❌ {msg}")
 
             st.divider()
             st.markdown("#### 📝 Detalhe e ação por item")

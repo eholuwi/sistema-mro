@@ -116,3 +116,23 @@ LEAD_TIME_DEFAULT_DIAS = 30
 
 # Desfechos válidos de uma sugestão de reposição (auditoria em sugestoes_reposicao).
 REPOSICAO_DESFECHOS = ("gerada", "criou_sc", "adiada", "ignorada")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v2.8.0 — SCs agrupadas "de mão beijada" (natureza + centro de custo sugeridos)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Natureza/categoria da SC = campo `descricao_solicitacao` das SCs (vocabulário real
+# do Protheus, ex.: "SOLICITAÇÃO DE COMPRA - CONSUMÍVEIS PRODUÇÃO"). As SCs sugeridas
+# são agrupadas por essa natureza, derivada do histórico de SCs de cada item. Itens
+# sem histórico caem na categoria padrão abaixo (categoria legítima da taxonomia).
+CATEGORIA_SC_PADRAO = "SOLICITAÇÃO DE COMPRA - OUTROS"
+
+# Centros de custo genéricos/contábeis que NÃO indicam o setor consumidor real
+# (dominam as saídas por serem conta residual/rótulos de ajuste). São ignorados ao
+# sugerir o CC de uma SC, para não sugerir "99000" em tudo.
+CC_GENERICOS = frozenset({
+    "99000 - ATIVO PASSIVO RES. F", "INVENTÁRIO", "EDIÇÃO", "",
+})
+
+# Rótulo quando não há CC significativo (todos os consumos do grupo são genéricos).
+CC_SUGERIDO_PADRAO = "(a definir)"

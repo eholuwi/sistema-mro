@@ -14,7 +14,9 @@ lead times) e devolvem números/rótulos — fáceis de testar e de explicar.
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import datetime, date, timedelta
+
+from collections import Counter
 
 from database import transaction
 from services.constants import (
@@ -23,6 +25,10 @@ from services.constants import (
     LEAD_TIME_DEFAULT_DIAS,
     PREVISAO_RUPTURA_SEM_RISCO,
     REPOSICAO_DESFECHOS,
+    SAIDA_REAL_WHERE,
+    CATEGORIA_SC_PADRAO,
+    CC_GENERICOS,
+    CC_SUGERIDO_PADRAO,
 )
 from services.db_functions import (
     listar_inventario,
@@ -49,10 +55,39 @@ def _fmt_num(valor):
     return s.replace(".", ",")
 
 
+def _fmt_data(iso):
+    """ISO 'YYYY-MM-DD' → 'DD/MM/YYYY' (devolve o original se não parsear)."""
+    try:
+        return datetime.strptime(iso, "%Y-%m-%d").strftime("%d/%m/%Y")
+    except (TypeError, ValueError):
+        return iso
+
+
 def _disponivel(item):
     """Estoque disponível para cobrir a demanda = estoque atual + guarda-chuva
     (qtd já negociada que ainda falta chegar; `estoque_em_transito` do inventário)."""
     return _num(item.get("estoque_atual")) + _num(item.get("estoque_em_transito"))
+
+
+def calcular_comprar_ate(cobertura_dias, lead_time, hoje=None):
+    """Data-limite para emitir a SC e o material chegar antes de acabar (v2.8.0).
+
+    Deriva da COBERTURA (dias), não do ROP (quantidade):
+        Comprar até = hoje + (cobertura − lead_time − ANTECEDENCIA)
+    A folga de ANTECEDENCIA (~15 d) honra a regra do Sr. Neidson de comprar com
+    antecedência. Sem consumo (cobertura ≥ PREVISAO_RUPTURA_SEM_RISCO) → não há
+    relógio de ruptura, logo sem data. Se o prazo já passou, a data é hoje (atrasado).
+
+    Retorna (comprar_ate:str|None ISO 'YYYY-MM-DD', dias_para_comprar:int|None,
+    atrasado:bool)."""
+    cobertura = _num(cobertura_dias)
+    if cobertura >= PREVISAO_RUPTURA_SEM_RISCO:
+        return None, None, False
+    hoje = hoje or date.today()
+    dias = int(round(cobertura - _num(lead_time) - ANTECEDENCIA_REPOSICAO_DIAS))
+    atrasado = dias <= 0
+    comprar_ate = (hoje + timedelta(days=max(0, dias))).isoformat()
+    return comprar_ate, dias, atrasado
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -242,12 +277,17 @@ def montar_sugestao(item, incluir_fornecedor=True):
     fornecedor = melhor_fornecedor_item(item["id"]) if incluir_fornecedor else None
     prioridade = classificar_prioridade(item)
     justificativa = montar_justificativa(item, calc, qtd, fornecedor)
+    comprar_ate, dias_para_comprar, comprar_atrasado = calcular_comprar_ate(
+        item.get("dias_cobertura"), calc["lead_time"]
+    )
     forn = fornecedor or {}
     return {
         "item_id": item["id"],
         "part_number": item.get("part_number"),
         "nome_item": item.get("nome_item"),
+        "descricao": item.get("descricao"),
         "unidade": item.get("unidade") or "UN",
+        "tipo_material": item.get("tipo_material"),
         "setor": item.get("setor_responsavel"),
         "importancia": item.get("importancia"),
         "sem_movimentacao": bool(item.get("sem_movimentacao")),
@@ -256,6 +296,9 @@ def montar_sugestao(item, incluir_fornecedor=True):
         "estoque_maximo": _num(item.get("estoque_maximo")),
         "guarda_chuva": _num(item.get("estoque_em_transito")),
         "cobertura_dias": _num(item.get("dias_cobertura")),
+        "comprar_ate": comprar_ate,
+        "dias_para_comprar": dias_para_comprar,
+        "comprar_atrasado": comprar_atrasado,
         "consumo_diario": calc["consumo_diario"],
         "tendencia_label": item.get("tendencia_label"),
         "tendencia_pct": _num(item.get("tendencia_pct")),
@@ -281,6 +324,78 @@ def montar_sugestao(item, incluir_fornecedor=True):
         "fornecedor_lead_time": forn.get("lead_time_fornecedor"),
         "justificativa": justificativa,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NATUREZA (categoria da SC) + CENTRO DE CUSTO — derivados do HISTÓRICO (v2.8.0)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _natureza_curta(natureza):
+    """Remove o prefixo 'SOLICITAÇÃO DE COMPRA - ' para exibição curta."""
+    if not natureza:
+        return natureza
+    for pref in ("SOLICITAÇÃO DE COMPRA - ", "SOLICITAÇÃO DE COMPRA – "):
+        if natureza.startswith(pref):
+            return natureza[len(pref):]
+    return natureza
+
+
+def mapear_categoria_sc_por_item(item_ids=None, conn=None):
+    """{item_id: natureza da SC} derivado do HISTÓRICO real de SCs de cada item.
+
+    Natureza = `solicitacoes_compra.descricao_solicitacao` (vocabulário do Protheus,
+    ex.: 'SOLICITAÇÃO DE COMPRA - CONSUMÍVEIS PRODUÇÃO'). Para cada item, escolhe a
+    natureza MAIS FREQUENTE entre suas SCs (desempate: a da SC mais recente). Itens
+    sem histórico não entram no mapa — o chamador aplica CATEGORIA_SC_PADRAO."""
+    with transaction(conn) as c:
+        rows = c.execute("""
+            SELECT isc.item_id AS item_id, s.descricao_solicitacao AS nat,
+                   COALESCE(s.data_abertura, '') AS da
+            FROM itens_sc isc
+            JOIN solicitacoes_compra s ON s.id = isc.sc_id
+            WHERE s.descricao_solicitacao IS NOT NULL
+              AND TRIM(s.descricao_solicitacao) <> ''
+        """).fetchall()
+    filtro = set(item_ids) if item_ids is not None else None
+    por_item = {}
+    for r in rows:
+        if filtro is not None and r["item_id"] not in filtro:
+            continue
+        por_item.setdefault(r["item_id"], []).append((r["nat"], r["da"]))
+    mapa = {}
+    for iid, lst in por_item.items():
+        cont = Counter(nat for nat, _ in lst)
+        top = max(cont.values())
+        candidatas = {nat for nat, n in cont.items() if n == top}
+        # desempate: natureza da SC mais recente entre as candidatas
+        mapa[iid] = max((da, nat) for nat, da in lst if nat in candidatas)[1]
+    return mapa
+
+
+def mapear_cc_por_item(item_ids=None, conn=None):
+    """{item_id: centro de custo} sugerido a partir do CONSUMO REAL de cada item.
+
+    CC = o mais frequente nas saídas por requisição (SAIDA_REAL_WHERE), IGNORANDO os
+    CCs genéricos/contábeis (CC_GENERICOS, ex.: '99000 - ATIVO PASSIVO RES. F'), que
+    dominam por serem conta residual e não indicam o setor consumidor. Itens sem CC
+    significativo não entram no mapa."""
+    with transaction(conn) as c:
+        rows = c.execute(f"""
+            SELECT item_id, centro_custo
+            FROM movimentacoes
+            WHERE {SAIDA_REAL_WHERE}
+              AND centro_custo IS NOT NULL AND TRIM(centro_custo) <> ''
+        """).fetchall()
+    filtro = set(item_ids) if item_ids is not None else None
+    por_item = {}
+    for r in rows:
+        cc = r["centro_custo"]
+        if cc in CC_GENERICOS:
+            continue
+        if filtro is not None and r["item_id"] not in filtro:
+            continue
+        por_item.setdefault(r["item_id"], Counter())[cc] += 1
+    return {iid: cont.most_common(1)[0][0] for iid, cont in por_item.items()}
 
 
 def gerar_sugestoes_reposicao(incluir_fornecedor=True, incluir_sem_movimentacao=False):
@@ -310,6 +425,15 @@ def gerar_sugestoes_reposicao(incluir_fornecedor=True, incluir_sem_movimentacao=
         s["cobertura_dias"],
         s["part_number"] or "",
     ))
+    # v2.8.0: enriquece com a natureza da SC (do histórico) e o CC sugerido (do
+    # consumo real) — base das "SCs de mão beijada" agrupadas por natureza.
+    if sugestoes:
+        ids = [s["item_id"] for s in sugestoes]
+        categorias = mapear_categoria_sc_por_item(ids)
+        ccs = mapear_cc_por_item(ids)
+        for s in sugestoes:
+            s["categoria_sc"] = categorias.get(s["item_id"]) or CATEGORIA_SC_PADRAO
+            s["cc_sugerido"] = ccs.get(s["item_id"])   # None = sem CC significativo
     return sugestoes
 
 
@@ -325,6 +449,101 @@ def agrupar_por_fornecedor(sugestoes):
         grupos.items(),
         key=lambda kv: min(x["prioridade_tier"] for x in kv[1]),
     ))
+
+
+def agrupar_por_natureza(sugestoes):
+    """Agrupa as sugestões pela NATUREZA da SC (`categoria_sc`, derivada do histórico)
+    — base das "SCs de mão beijada" (v2.8.0). Junta itens que a operação historicamente
+    comprou sob a mesma natureza (vocabulário real do Protheus, ex.: 'CONSUMÍVEIS
+    PRODUÇÃO'), reduzindo o nº de SCs a aprovar. Itens sem histórico caem em
+    CATEGORIA_SC_PADRAO. Grupos ordenados pela prioridade do item mais urgente."""
+    grupos = {}
+    for s in sugestoes:
+        chave = s.get("categoria_sc") or CATEGORIA_SC_PADRAO
+        grupos.setdefault(chave, []).append(s)
+    return dict(sorted(
+        grupos.items(),
+        key=lambda kv: min(x["prioridade_tier"] for x in kv[1]),
+    ))
+
+
+def _cc_sugerido_grupo(sugs):
+    """CC sugerido do grupo = o CC significativo mais comum entre os itens (do consumo
+    real, já sem os genéricos). CC_SUGERIDO_PADRAO quando nenhum item tem CC."""
+    cont = Counter(s["cc_sugerido"] for s in sugs if s.get("cc_sugerido"))
+    return cont.most_common(1)[0][0] if cont else CC_SUGERIDO_PADRAO
+
+
+def resumir_grupo_sc(label, sugs):
+    """Título + justificativa + CC + agregados de um grupo (natureza) de sugestões (v2.8.0).
+
+    Determinístico e transparente (sem NLP): o comprador edita tudo antes de criar a SC.
+    Título = a própria natureza (vocabulário real das SCs). Justificativa responde
+    'por quê' agrupar (natureza), volume/consumo, prioridade, data-limite e o CC sugerido."""
+    if not sugs:
+        return {
+            "label": label, "titulo": label, "justificativa": "", "n_itens": 0,
+            "qtd_total": 0, "valor_estimado": 0.0, "comprar_ate_min": None,
+            "cc_sugerido": CC_SUGERIDO_PADRAO, "prioridade_tier": 2,
+            "prioridade": "—", "itens": [],
+        }
+    n = len(sugs)
+    natureza_curta = _natureza_curta(label)
+    n_criticos = sum(1 for s in sugs if s.get("prioridade_tier") == 0)
+    tier_min = min(s.get("prioridade_tier", 2) for s in sugs)
+    prio_max = next(
+        (s["prioridade"] for s in sugs if s.get("prioridade_tier") == tier_min), "—"
+    )
+    soma_consumo = sum(_num(s.get("consumo_diario")) for s in sugs)
+    qtd_total = sum(int(_num(s.get("qtd_sugerida"))) for s in sugs)
+    valor_estimado = sum(
+        _num(s.get("qtd_sugerida")) * _num(s.get("fornecedor_ultimo_preco"))
+        for s in sugs if s.get("fornecedor_ultimo_preco")
+    )
+    cc_sugerido = _cc_sugerido_grupo(sugs)
+    # menor "comprar até" do grupo (item mais urgente); ignora None (sem consumo).
+    com_data = [s for s in sugs if s.get("comprar_ate")]
+    if com_data:
+        mais_urgente = min(com_data, key=lambda s: s["comprar_ate"])
+        comprar_ate_min = mais_urgente["comprar_ate"]
+        pn_urgente = mais_urgente.get("part_number")
+    else:
+        comprar_ate_min, pn_urgente = None, None
+
+    unid = "item" if n == 1 else "itens"
+    linhas = [
+        f"Agrupa {n} {unid} da natureza {natureza_curta}.",
+        f"{n_criticos} crítico(s); prioridade máxima: {prio_max}; "
+        f"consumo agregado ~{_fmt_num(soma_consumo)} un/dia.",
+    ]
+    if comprar_ate_min:
+        linhas.append(f"Comprar até {_fmt_data(comprar_ate_min)} (mais urgente: {pn_urgente}).")
+    linhas.append(f"Centro de custo sugerido: {cc_sugerido}.")
+    return {
+        "label": label,
+        "titulo": label,                       # a natureza É o título
+        "justificativa": " ".join(linhas),
+        "n_itens": n,
+        "qtd_total": qtd_total,
+        "valor_estimado": round(valor_estimado, 2),
+        "comprar_ate_min": comprar_ate_min,
+        "cc_sugerido": cc_sugerido,
+        "prioridade_tier": tier_min,
+        "prioridade": prio_max,
+        "itens": sugs,
+    }
+
+
+def gerar_scs_sugeridas(incluir_fornecedor=True, incluir_sem_movimentacao=False):
+    """SCs sugeridas prontas (agrupadas por natureza, com título/justificativa/CC) — v2.8.0.
+    Encadeia gerar_sugestoes_reposicao → agrupar_por_natureza → resumir_grupo_sc.
+    Lista já ordenada pela prioridade do grupo mais urgente."""
+    sugestoes = gerar_sugestoes_reposicao(
+        incluir_fornecedor=incluir_fornecedor,
+        incluir_sem_movimentacao=incluir_sem_movimentacao,
+    )
+    grupos = agrupar_por_natureza(sugestoes)
+    return [resumir_grupo_sc(label, sugs) for label, sugs in grupos.items()]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
