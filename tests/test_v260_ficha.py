@@ -15,16 +15,34 @@ from services import db_functions as F
 from services import ficha
 
 
-def _saida(item_id, qtd, centro_custo="", setor="", quando=None):
-    """Insere uma SAÍDA direta em movimentacoes (determinístico p/ agregação)."""
+_req_seq = 0
+
+
+def _saida(item_id, qtd, centro_custo="", setor="", quando=None, requisicao=True):
+    """Insere uma SAÍDA direta em movimentacoes (determinístico p/ agregação).
+
+    v2.7.1: 'quem consome' passou a contar só CONSUMO REAL (saída por requisição),
+    então por padrão geramos uma linha em `requisicoes` e ligamos via requisicao_id.
+    `requisicao=False` simula um ajuste/inventário (não deve ser contado)."""
+    global _req_seq
     quando = quando or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    req_id = None
     with database.transaction() as c:
+        if requisicao:
+            _req_seq += 1
+            cur = c.execute(
+                "INSERT INTO requisicoes (numero_requisicao, data_hora, setor, emitente, centro_custo) "
+                "VALUES (?,?,?,?,?)",
+                (f"REQ-T{_req_seq}", quando, setor or "MANUTENÇÃO", "t",
+                 centro_custo or "21106 - MANUTENÇÃO"),
+            )
+            req_id = cur.lastrowid
         c.execute(
             """INSERT INTO movimentacoes
                  (item_id,tipo,quantidade,saldo_apos,data_hora,centro_custo,setor,
-                  solicitante,emitente,observacao)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (item_id, "saida", qtd, 0, quando, centro_custo, setor, "t", "t", ""),
+                  solicitante,emitente,observacao,requisicao_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (item_id, "saida", qtd, 0, quando, centro_custo, setor, "t", "t", "", req_id),
         )
 
 
@@ -69,6 +87,20 @@ def test_consumo_sem_saidas(db, make_item):
     dep = ficha.obter_consumo_por_departamento(item_id)
     assert dep["por_centro_custo"] == []
     assert dep["total"] == 0
+
+
+def test_quem_consome_ignora_ajuste_sem_requisicao(db, make_item):
+    # v2.7.1: só CONSUMO REAL (requisição) conta como "quem consome". Ajustes
+    # (ex.: "Inventário", retirada sem requisição) NÃO devem aparecer.
+    item_id = make_item("PN-DEP4", estoque=1000, minimo=10)
+    _saida(item_id, 40, centro_custo="21106 - MANUTENÇÃO", setor="MANUTENÇÃO")  # requisição real
+    _saida(item_id, 999, centro_custo="INVENTÁRIO", setor="INVENTÁRIO",
+           requisicao=False)  # ajuste — não conta
+    dep = ficha.obter_consumo_por_departamento(item_id)
+    chaves = {r["chave"] for r in dep["por_centro_custo"]}
+    assert "INVENTÁRIO" not in chaves
+    assert dep["total"] == 40
+    assert dep["por_centro_custo"][0]["chave"] == "21106 - MANUTENÇÃO"
 
 
 # ── Imagem do produto (isolada em tmp via DB_PATH monkeypatchado no fixture db) ──

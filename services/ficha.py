@@ -15,6 +15,7 @@ from datetime import datetime
 
 import database
 from database import transaction
+from services.constants import SAIDA_REAL_WHERE
 from services.db_functions import (
     listar_inventario,
     listar_movimentacoes,
@@ -120,13 +121,17 @@ def remover_imagem_item(item_id, conn=None):
 def obter_consumo_por_departamento(item_id, dias=180, conn=None):
     """Quem consome o item: agrega as SAÍDAS por centro de custo e por setor na
     janela (qtd + % do total), ordenado do maior para o menor. Vazios viram
-    '(não informado)' para transparência."""
+    '(não informado)' para transparência.
+
+    v2.7.1: considera apenas CONSUMO REAL (saída por requisição — `SAIDA_REAL_WHERE`).
+    Ajustes/inventário/testes (requisicao_id NULL) NÃO são consumidores reais e
+    poluíam a lista (ex.: aparecia "Inventário" como se consumisse)."""
     def _agg(campo, c):
         rows = c.execute(
             f"""SELECT COALESCE(NULLIF(TRIM({campo}), ''), '(não informado)') AS chave,
                        COALESCE(SUM(quantidade), 0) AS qtd
                 FROM movimentacoes
-                WHERE item_id=? AND tipo='saida'
+                WHERE item_id=? AND {SAIDA_REAL_WHERE}
                       AND data_hora >= datetime('now', ?)
                 GROUP BY chave HAVING qtd > 0
                 ORDER BY qtd DESC""",

@@ -1,4 +1,4 @@
-# MRO Inventus Power v2.7.0
+# MRO Inventus Power v2.7.1
 
 Plataforma inteligente de gestão MRO, compras, inventário e rastreabilidade operacional com 190+ testes.
 
@@ -211,4 +211,4 @@ O sistema opera como:
 Desenvolvido por **Luis Gabriel Arruda de Oliveira**
 Inventus Power · MRO Intelligence System 🟠
 
-Última atualização: **04/07/2026** (v2.7.0)
+Última atualização: **04/07/2026** (v2.7.1)
