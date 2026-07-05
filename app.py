@@ -45,6 +45,10 @@ from services.ficha import (
     montar_ficha_360, salvar_imagem_item, remover_imagem_item,
 )
 from services.ajuda_conteudo import GUIAS_PERSONA, MANUAL
+from services.dashboards import (
+    montar_dashboard, PUBLICOS,
+    PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_DIRETORIA,
+)
 
 setup_logging()
 criar_banco()
@@ -56,7 +60,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 2.11.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 3.0.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -127,7 +131,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 2.11.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 3.0.0</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -225,186 +229,253 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DASHBOARD
+# DASHBOARD — v3.0.0 (por público: 👤 Comprador · 📊 Gestão · 🏛️ Diretoria)
+# Os assemblers puros vivem em services/dashboards.py; aqui é só o desenho (DT-3).
 # ══════════════════════════════════════════════════════════════════════════════
-if pagina == "📊 Dashboard":
-    st.title(" Dashboard — MRO Inventus Power")
-    itens = listar_inventario()
-    if not itens:
-        st.info("Nenhum item cadastrado. Vá em **➕ Gerenciar Itens** para começar.")
-        st.stop()
-    
-    # --- 1. CÁLCULOS INICIAIS ---
-    total   = len(itens)
-    ok      = sum(1 for i in itens if "OK" in i.get("status_material",""))
-    atencao = sum(1 for i in itens if "ATENÇÃO" in i.get("status_material",""))
-    comprar = sum(1 for i in itens if "COMPRAR" in i.get("status_material",""))
-    # v2.7.0: itens que nunca tiveram consumo real (fora da lista de compra)
-    sem_mov = sum(1 for i in itens if i.get("sem_movimentacao"))
 
-    # ✅ NOVO: Contagem de itens com estoque físico zerado
-    zerados = sum(1 for i in itens if (i.get("estoque_atual") or 0) <= 0)
+def _dash_fmt_brl(v):
+    """Formata número como R$ pt-BR (milhar com ponto, decimal com vírgula)."""
+    try:
+        return "R$ " + f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except (ValueError, TypeError):
+        return "R$ —"
 
-    inv_ok  = sum(1 for i in itens if i.get("data_inventario"))
 
-    # --- 2. CARDS DE RESUMO (Métricas com Explicação) ---
-    # 7 colunas (v2.7.0 incluiu "Sem Movimentação")
-    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+def _render_dash_comprador(vm):
+    """👤 Comprador — o que fazer agora: KPIs de ação, fila priorizada, SCs sugeridas, aging."""
+    k = vm["kpis"]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("🔴 Críticos", k["criticos"],
+              help="Itens tier-0 na fila de reposição (abaixo do ponto de pedido, com consumo real).")
+    c2.metric("⏰ Comprar até atrasados", k["comprar_atrasados"], delta_color="inverse",
+              help="Sugestões cujo prazo-limite de compra (cobertura − lead time − 15d) já passou.")
+    c3.metric("🧾 SCs abertas", k["scs_abertas"],
+              help="Solicitações de compra com saldo pendente (não recebidas/canceladas).")
+    c4.metric("🚨 Rupturas", k["rupturas"], delta_color="inverse",
+              help="Itens com consumo real e estoque físico = 0 (parada iminente).")
 
-    with c1:
-        st.metric("📦 Itens Totais", total, help="Total de SKUs cadastrados no MRO")
-    with c2:
-        perc_ok = round(ok/total*100) if total else 0
-        st.metric("✅ Materiais ok", ok, f"{perc_ok}% do total", help="Itens com estoque acima do mínimo")
-    with c3:
-        perc_at = round(atencao/total*100) if total else 0
-        st.metric("🟡 Perto de criticidade", atencao, f"{perc_at}% do total", delta_color="off", help="Itens atingindo o ponto de pedido")
-    with c4:
-        perc_co = round(comprar/total*100) if total else 0
-        st.metric("⚠️ Críticos", comprar, f"{perc_co}% do total", delta_color="inverse", help="Itens abaixo do mínimo E com consumo real (candidatos de compra)")
-    with c5:
-        perc_sm = round(sem_mov/total*100) if total else 0
-        st.metric("⚪ Sem Movimentação", sem_mov, f"{perc_sm}% do total", delta_color="off",
-                 help="Nunca tiveram saída por requisição (sem consumo real). Ficam FORA da lista de compra; revise em Compras → Assistente de Reposição.")
+    st.markdown("---")
+    col_fila, col_lado = st.columns([3, 2])
 
-    # ✅ NOVA MÉTRICA: ZERADOS (estoque físico = 0)
-    with c6:
-        perc_zer = round(zerados/total*100) if total else 0
-        st.metric("🔴 Zerados", zerados, f"{perc_zer}% do total", delta_color="inverse",
-                 help="Itens com estoque físico = 0 (risco imediato de parada)")
+    with col_fila:
+        with st.container(border=True):
+            st.markdown(f"#### 🧠 Fila de reposição — top {len(vm['fila'])} de {vm['total_fila']}")
+            st.caption("Priorizada por urgência. Ação completa em **Compras (SC) → 🧠 Assistente de Reposição**.")
+            if vm["fila"]:
+                df = pd.DataFrame([{
+                    "Prio": s.get("prioridade"),
+                    "Part Number": s.get("part_number"),
+                    "Item": (s.get("nome_item") or "")[:32],
+                    "Cobertura(d)": s.get("cobertura_dias"),
+                    "Comprar até": fmt(s.get("comprar_ate")) if s.get("comprar_ate") else "—",
+                    "Qtd": s.get("qtd_sugerida"),
+                    "Un": s.get("unidade"),
+                    "Fornecedor": s.get("fornecedor_sugerido") or "—",
+                } for s in vm["fila"]])
+                st.dataframe(df, width="stretch", hide_index=True, height=400)
+            else:
+                st.success("Nenhuma reposição pendente no momento. 🎉")
 
-    with c7:
-        perc_inv = round(inv_ok/total*100) if total else 0
-        st.metric("🔍 Inventariado", f"{inv_ok}/{total}", f"{perc_inv}% Inventariado", help="Progresso da conferência física")
-    
+    with col_lado:
+        with st.container(border=True):
+            st.markdown("#### 📦 SCs sugeridas (agrupadas)")
+            st.caption("Itens já agrupados por natureza — de 'mão beijada' para o Protheus.")
+            if vm["scs_sugeridas"]:
+                for g in vm["scs_sugeridas"][:6]:
+                    ca = fmt(g["comprar_ate_min"]) if g.get("comprar_ate_min") else "—"
+                    st.markdown(f"**{g['titulo']}** — {g['n_itens']} itens · qtd {g['qtd_total']} · comprar até {ca}")
+                    st.caption(f"CC sugerido: {g.get('cc_sugerido', '—')}")
+            else:
+                st.caption("Sem SCs sugeridas no momento.")
+
+        with st.container(border=True):
+            st.markdown("#### ⏱️ Aging das SCs abertas")
+            ag = vm["aging"]
+            a1, a2, a3 = st.columns(3)
+            a1.metric("0–7 dias", ag["0-7"])
+            a2.metric("8–15 dias", ag["8-15"], delta_color="off")
+            a3.metric("15+ dias", ag["15+"], delta_color="inverse",
+                      help="SCs abertas há mais de 15 dias — o gargalo entre abrir e comprar.")
+            if ag.get("sem_data"):
+                st.caption(f"{ag['sem_data']} SC(s) sem data de abertura registrada.")
+
+
+def _render_dash_gestao(vm):
+    """📊 Gestão — saúde da operação: serviço, cobertura, valor, giro, status e demanda."""
+    k = vm["kpis"]
+    c1, c2, c3, c4 = st.columns(4)
+    ns = k["nivel_servico"]
+    c1.metric("🎯 Nível de Serviço", f"{ns}%" if ns is not None else "—",
+              help="% dos itens COM consumo real que estão fora de ruptura (estoque > 0). "
+                   "Proxy de disponibilidade — NÃO é OTIF de fornecedor (esse depende de dado ainda ausente).")
+    cm = k["cobertura_media"]
+    c2.metric("📅 Cobertura média", f"{cm} d" if cm is not None else "—",
+              help="Média de dias de cobertura (estoque+guarda-chuva ÷ consumo) dos itens com consumo; "
+                   "exclui itens sem consumo.")
+    c3.metric("💰 Valor imobilizado", _dash_fmt_brl(k["valor_imobilizado"]),
+              help="Σ(estoque × preço de valoração), em BRL. Detalhe logo abaixo.")
+    gm = k["giro_medio"]
+    c4.metric("🔄 Giro médio (ano)", f"{gm}x" if gm is not None else "—",
+              help="Média do giro anual dos itens com saída na janela de 90 dias.")
+
+    vd = vm["valor_detalhe"]
+    st.caption(
+        f"💰 Valor: {vd['itens_valorados']} itens valorados · "
+        f"{vd['itens_sem_preco']} com estoque sem preço (subestima o total) · "
+        f"{vd['itens_nao_brl']} em moeda ≠ BRL ({_dash_fmt_brl(vd['total_nao_brl'])}, somados à parte)."
+    )
     st.markdown("---")
 
-    # --- 3. CONTAINER DE ANÁLISE (Estratégico) ---
-        # === CONTAINER 1: Curva ABC ===
-    with st.container(border=True):
-        st.markdown("#### 📉 Curva ABC — Top 10 Consumidores")
-        
-        # Query para pegar dados do Mês Anterior (Lógica v2.0.1)
-        from datetime import date, timedelta
-        hoje = date.today()
-        primeiro_dia_mes_atual = hoje.replace(day=1)
-        ultimo_dia_mes_anterior = primeiro_dia_mes_atual - timedelta(days=1)
-        primeiro_dia_mes_anterior = ultimo_dia_mes_anterior.replace(day=1)
-        
-        periodo_str = f"{primeiro_dia_mes_anterior.strftime('%d/%m')} a {ultimo_dia_mes_anterior.strftime('%d/%m')}"
-        st.caption(f"Referência: Consumo realizado entre {periodo_str}")
+    d = vm["distribuicao"]; total = vm["total"]
+    def _pct(n): return f"{round(n / total * 100)}%" if total else "0%"
+    s1, s2, s3, s4, s5, s6 = st.columns(6)
+    s1.metric("✅ OK", d["ok"], _pct(d["ok"]))
+    s2.metric("🟡 Atenção", d["atencao"], _pct(d["atencao"]), delta_color="off")
+    s3.metric("⚠️ Críticos", d["comprar"], _pct(d["comprar"]), delta_color="inverse")
+    s4.metric("⚪ Sem Mov.", d["sem_mov"], _pct(d["sem_mov"]), delta_color="off",
+              help="Nunca tiveram saída por requisição — ficam fora da lista de compra.")
+    s5.metric("🔴 Zerados", d["zerados"], _pct(d["zerados"]), delta_color="inverse")
+    s6.metric("🔍 Inventariado", f"{d['inventariado']}/{total}", _pct(d["inventariado"]))
 
-        # DT-3: Curva ABC obtida via camada de servico (sem acesso SQLite na UI)
-        df_abc = pd.DataFrame(obter_dados_dashboard()["abc"])
+    st.markdown("---")
+    colA, colB = st.columns(2)
 
-        if not df_abc.empty:
-            import plotly.graph_objects as go
-            
-            # Preparação dos dados
-            df_abc['item_label'] = df_abc.apply(lambda x: f"{x['part_number']} • {x['nome_item'][:15]}...", axis=1)
-            df_abc = df_abc.sort_values('total_saida', ascending=True) # Ordenar ascendente para barra horizontal
-
-            fig = go.Figure(data=[go.Bar(
-                y=df_abc['item_label'],
-                x=df_abc['total_saida'],
-                orientation='h',
-                marker=dict(
-                    color=PAL["accent"], # Laranja Inventus
-                    line=dict(width=1, color=PAL["accent_borda"]), # borda p/ contraste (tema)
-                    # corner_radius removido para evitar erro de compatibilidade
-                ),
-                text=df_abc['total_saida'].apply(lambda x: f'{int(x)} un'),
-                textposition='outside',
-                textfont=dict(size=11, family="Inter", color=PAL["texto_suave"]),
-                hoverinfo='text',
-                hovertext=[f"<b>{pn}</b><br>{nome}<br>Consumo: {qtd} un"
-                           for pn, nome, qtd in zip(df_abc['part_number'], df_abc['nome_item'], df_abc['total_saida'])]
-            )])
-
-            # Layout — acompanha o tema ativo (claro/escuro) via PAL
-            fig.update_layout(
-                template=PAL["plotly_template"],
-                font=dict(family="Inter", size=12, color=PAL["texto"]),
-                margin=dict(l=0, r=20, t=10, b=0),
-                height=320,
-                paper_bgcolor=PAL["paper_bg"],
-                plot_bgcolor=PAL["plot_bg"],
-                showlegend=False,
-                xaxis=dict(
-                    showgrid=False,
-                    zeroline=False,
-                    tickfont=dict(color=PAL["texto_suave"]),
-                    title_text="Quantidade Consumida (Un)",
-                    title_font=dict(size=12, color=PAL["texto_suave"])
-                ),
-                yaxis=dict(
-                    showgrid=False,
-                    tickfont=dict(size=11, color=PAL["texto"], family="Inter"),
-                    categoryorder='total ascending'
-                )
-            )
-            
-            st.plotly_chart(fig, width='stretch', config={'displayModeBar': False})
-            
-        else:
-            st.info(f"Nenhum dado de consumo registrado no período de {periodo_str}.")
-
-        # === CONTAINER 2: Requisições por Setor ===
+    with colA:
         with st.container(border=True):
-            st.markdown("#### 🏭 Requisições por Setor")
-            reqs_all = listar_requisicoes(limit=500)
-            if reqs_all:
-                df_setor = pd.DataFrame(reqs_all)
-                if "setor" in df_setor.columns and not df_setor["setor"].isna().all():
-                    df_count = df_setor["setor"].value_counts().head(7).reset_index()
-                    df_count.columns = ["Setor", "Qtd"]
-                    st.bar_chart(df_count.set_index("Setor"), color="#F7941E", height=250)
+            st.markdown("#### 📉 Top 10 Consumidores (mês anterior)")
+            dados = obter_dados_dashboard()
+            st.caption(f"Referência: consumo real de {dados['kpis'].get('periodo_abc', '—')}.")
+            df_abc = pd.DataFrame(dados["abc"])
+            if not df_abc.empty:
+                import plotly.graph_objects as go
+                df_abc = df_abc.sort_values("total_saida", ascending=True)
+                df_abc["lbl"] = df_abc.apply(lambda x: f"{x['part_number']} • {str(x['nome_item'])[:15]}", axis=1)
+                fig = go.Figure(data=[go.Bar(
+                    y=df_abc["lbl"], x=df_abc["total_saida"], orientation="h",
+                    marker=dict(color=PAL["accent"], line=dict(width=1, color=PAL["accent_borda"])),
+                    text=df_abc["total_saida"].apply(lambda x: f"{int(x)}"), textposition="outside",
+                    textfont=dict(size=11, color=PAL["texto_suave"]),
+                )])
+                fig.update_layout(
+                    template=PAL["plotly_template"], height=320,
+                    margin=dict(l=0, r=20, t=10, b=0), paper_bgcolor=PAL["paper_bg"],
+                    plot_bgcolor=PAL["plot_bg"], showlegend=False,
+                    font=dict(family="Inter", color=PAL["texto"]),
+                    xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(color=PAL["texto_suave"])),
+                    yaxis=dict(showgrid=False, tickfont=dict(size=11, color=PAL["texto"])))
+                st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+            else:
+                st.info("Sem consumo registrado no período.")
+
+    with colB:
+        with st.container(border=True):
+            st.markdown("#### 🔬 Padrões de demanda (SBC)")
+            st.caption("Como os itens se comportam (Syntetos-Boylan), pelas saídas reais. Diagnóstico.")
+            ordem = ["Suave", "Intermitente", "Errático", "Irregular", "Poucos dados"]
+            dem = vm["demanda"]
+            dados_dem = [{"Padrão": p, "Itens": dem.get(p, 0)} for p in ordem if dem.get(p, 0)]
+            if dados_dem:
+                st.bar_chart(pd.DataFrame(dados_dem).set_index("Padrão"), color="#F7941E", height=240)
+            else:
+                st.caption("Ainda sem consumo real suficiente para classificar.")
+            xyz = vm["xyz"]
+            if xyz:
+                st.caption("XYZ (variabilidade mensal — baixa confiança com poucos meses): "
+                           f"X {xyz.get('X', 0)} · Y {xyz.get('Y', 0)} · Z {xyz.get('Z', 0)}.")
+
+    with st.container(border=True):
+        st.markdown("#### 🏭 Requisições por Setor & 👤 Top Emitentes")
+        reqs = listar_requisicoes(limit=500)
+        if reqs:
+            df_r = pd.DataFrame(reqs)
+            colS, colE = st.columns(2)
+            with colS:
+                if "setor" in df_r.columns and not df_r["setor"].isna().all():
+                    dc = df_r["setor"].value_counts().head(7).reset_index()
+                    dc.columns = ["Setor", "Qtd"]
+                    st.bar_chart(dc.set_index("Setor"), color="#F7941E", height=250)
                 else:
                     st.caption("Sem dados de setor preenchidos.")
-            else:
-                st.caption("Aguardando histórico de requisições.")
-
-        # === CONTAINER 3: Top Emitentes ===
-        with st.container(border=True):
-            st.markdown("#### 👤 Top Emitentes")
-            if reqs_all:
-                df_emit = pd.DataFrame(reqs_all)
-                if "emitente" in df_emit.columns and not df_emit["emitente"].isna().all():
-                    df_count = df_emit["emitente"].value_counts().head(10).reset_index()
-                    df_count.columns = ["Emitente", "Qtd"]
-                    st.dataframe(
-                        df_count, width="stretch", hide_index=True, height=250,
-                        column_config={
-                            "Qtd": st.column_config.ProgressColumn("Qtd", format="%d", min_value=0,
-                                max_value=int(df_count["Qtd"].max()) if not df_count.empty else 100, color="#F7941E")
-                        }
-                    )
+            with colE:
+                if "emitente" in df_r.columns and not df_r["emitente"].isna().all():
+                    dc = df_r["emitente"].value_counts().head(10).reset_index()
+                    dc.columns = ["Emitente", "Qtd"]
+                    st.dataframe(dc, width="stretch", hide_index=True, height=250,
+                                 column_config={"Qtd": st.column_config.ProgressColumn(
+                                     "Qtd", format="%d", min_value=0,
+                                     max_value=int(dc["Qtd"].max()) if not dc.empty else 100, color="#F7941E")})
                 else:
                     st.caption("Sem dados de emitente preenchidos.")
-            else:
-                st.caption("Aguardando histórico de requisições.")
+        else:
+            st.caption("Aguardando histórico de requisições.")
 
-        # === CONTAINER 4: Padrões de demanda (v2.10.0 — diagnóstico) ===
+
+def _render_dash_diretoria(vm):
+    """🏛️ Diretoria — retrato financeiro: valor imobilizado, evolução, ABC por valor, savings."""
+    k = vm["kpis"]; vd = vm["valor_detalhe"]
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("💰 Valor imobilizado", _dash_fmt_brl(k["valor_imobilizado"]),
+                  help="Σ(estoque × preço de valoração), em BRL.")
+        st.caption(f"{vd['itens_valorados']} itens valorados · {vd['itens_sem_preco']} com estoque sem preço · "
+                   f"{vd['itens_nao_brl']} em moeda ≠ BRL ({_dash_fmt_brl(vd['total_nao_brl'])}).")
+    with c2:
+        st.metric("💹 Economia (Savings)", "em breve", delta_color="off",
+                  help="Spot Saving (R$4,7M em 2025) depende de ingestão dedicada — planejado para versão futura.")
+        st.caption("Savings ainda não ingerido — transparência: sem dado, sem número inventado.")
+
+    st.markdown("---")
+    colE, colA = st.columns([3, 2])
+
+    with colE:
         with st.container(border=True):
-            st.markdown("#### 🔬 Padrões de demanda")
-            st.caption("Como os itens se comportam na demanda (Syntetos-Boylan), pelas saídas "
-                       "reais. Diagnóstico — não altera a lista de compra. Detalhe na Ficha 360.")
-            from collections import Counter as _Counter
-            _ordem_dem = ["Suave", "Intermitente", "Errático", "Irregular", "Poucos dados"]
-            _cont_dem = _Counter(i.get("padrao_demanda") for i in itens if i.get("padrao_demanda"))
-            _dados_dem = [{"Padrão": p, "Itens": _cont_dem.get(p, 0)}
-                          for p in _ordem_dem if _cont_dem.get(p, 0)]
-            _sem_class = sum(1 for i in itens if not i.get("padrao_demanda"))
-            if _dados_dem:
-                st.bar_chart(pd.DataFrame(_dados_dem).set_index("Padrão"),
-                             color="#F7941E", height=240)
+            st.markdown("#### 📈 Evolução do valor imobilizado")
+            ev = vm["evolucao"]; serie = ev.get("serie") or []
+            n = ev.get("n_snapshots", 0)
+            if len(serie) >= 2:
+                df_ev = pd.DataFrame(serie)
+                df_ev["data"] = pd.to_datetime(df_ev["data"])
+                st.line_chart(df_ev.set_index("data")["valor"], color="#F7941E", height=300)
+                st.caption(f"Baseado em {n} foto(s) diária(s) de estoque (a maturidade cresce com o uso).")
             else:
-                st.caption("Ainda sem consumo real suficiente para classificar padrões.")
-            _cxyz = _Counter(i.get("classe_xyz") for i in itens if i.get("classe_xyz"))
-            if _cxyz:
-                st.caption("XYZ (variabilidade mensal — baixa confiança com poucos meses): "
-                           f"X {_cxyz.get('X', 0)} · Y {_cxyz.get('Y', 0)} · Z {_cxyz.get('Z', 0)}. "
-                           f"{_sem_class} item(ns) sem consumo real para classificar.")
+                st.info(f"Ainda há poucas fotos diárias ({n}) para desenhar a evolução — amadurece com o tempo.")
+
+    with colA:
+        with st.container(border=True):
+            st.markdown("#### 🏆 ABC por valor — onde está o capital")
+            st.caption("Itens que concentram o valor em estoque (classe A = maior).")
+            abc = vm["abc_valor"]
+            if abc:
+                df_a = pd.DataFrame([{
+                    "Classe": x["classe"], "Part Number": x["part_number"],
+                    "Item": str(x["nome_item"])[:24], "Valor (R$)": x["valor"],
+                } for x in abc])
+                st.dataframe(df_a, width="stretch", hide_index=True, height=320,
+                             column_config={"Valor (R$)": st.column_config.NumberColumn(format="R$ %.2f")})
+            else:
+                st.caption("Sem consumo valorado na janela.")
+
+
+if pagina == "📊 Dashboard":
+    st.title("📊 Dashboard — MRO Inventus Power")
+    if not listar_inventario():
+        st.info("Nenhum item cadastrado. Vá em **➕ Gerenciar Itens** para começar.")
+        st.stop()
+
+    # v3.0.0 — seletor de público: cada perfil vê o que importa, sem poluir o menu lateral.
+    publico = st.radio("Visão", PUBLICOS, index=PUBLICOS.index(PUBLICO_GESTAO),
+                       horizontal=True, key="dash_view",
+                       help="Comprador = ação (fila, SCs, aging) · Gestão = saúde (serviço, cobertura, "
+                            "valor, giro) · Diretoria = financeiro (valor, evolução, ABC).")
+    st.markdown("---")
+
+    vm = montar_dashboard(publico)
+    if publico == PUBLICO_COMPRADOR:
+        _render_dash_comprador(vm)
+    elif publico == PUBLICO_DIRETORIA:
+        _render_dash_diretoria(vm)
+    else:
+        _render_dash_gestao(vm)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INVENTÁRIO

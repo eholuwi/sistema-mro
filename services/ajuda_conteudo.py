@@ -78,49 +78,69 @@ def _item(nome, para_que, base, como, crianca):
 MANUAL = [
     {
         "tela": "📊 Dashboard",
-        "intro": "A tela de abertura: um retrato rápido da saúde do estoque e do consumo.",
+        "intro": "A tela de abertura, agora com um **seletor de público** no topo: cada perfil "
+                 "(👤 Comprador · 📊 Gestão · 🏛️ Diretoria) vê só o que importa para o seu trabalho.",
         "itens": [
             _item(
-                "Cartões do topo (KPIs)",
-                "Resumir em números a situação geral: itens totais, materiais OK, perto da "
-                "criticidade, críticos, sem movimentação, zerados e progresso de inventário.",
-                "A lista de itens do inventário (estoque atual, mínimo e o consumo real por "
-                "requisição de cada item).",
-                "Cada cartão conta quantos itens caem numa condição: **OK** (estoque acima do "
-                "mínimo), **Atenção** (chegando no mínimo), **Críticos** (abaixo do mínimo E com "
-                "consumo real), **Sem Movimentação** (nunca teve saída por requisição), "
-                "**Zerados** (estoque = 0). A % é sobre o total de itens.",
-                "São plaquinhas que contam as coisas pra você: 'quantos estão bem', 'quantos "
-                "estão acabando', 'quantos nunca saíram'. O sistema olha item por item e vai "
-                "somando em cada caixinha.",
+                "Seletor de visão (👤 Comprador · 📊 Gestão · 🏛️ Diretoria)",
+                "Trocar o painel inteiro conforme quem está olhando — sem poluir o menu lateral.",
+                "A sua escolha no seletor; o conteúdo é montado só para aquele público.",
+                "Ao clicar num público, o sistema monta os cartões e gráficos daquela visão. "
+                "**Comprador** = ação (o que comprar); **Gestão** = saúde da operação; "
+                "**Diretoria** = retrato financeiro. Começa na visão Gestão.",
+                "É como trocar de canal na TV: o mesmo aparelho, mas cada canal mostra o programa "
+                "certo para quem está assistindo.",
             ),
             _item(
-                "Gráfico 'Curva ABC — Top 10 Consumidores'",
-                "Mostrar os itens que mais pesam em VALOR consumido — onde o dinheiro está indo.",
-                "As saídas reais (por requisição) multiplicadas pelo preço de referência de "
-                "cada item, na janela recente.",
-                "Soma o valor consumido por item (quantidade × preço), ordena do maior para o "
-                "menor. Classe **A** = itens que somam até 80% do valor, **B** até 95%, **C** o "
-                "resto (a clássica regra 80/15/5).",
-                "Imagine gastar numa festa: poucos itens levam quase todo o dinheiro. O gráfico "
-                "mostra esses 'campeões de gasto' — os do grupo A são os que mais custam.",
+                "Visão 👤 Comprador — 'o que fazer agora'",
+                "Dar ao comprador a lista de ação do dia: o que está crítico, atrasado, em ruptura, "
+                "a fila de reposição e as SCs já agrupadas.",
+                "A fila do Assistente de Reposição, as SCs abertas e as saídas reais.",
+                "Os cartões contam **Críticos**, **Comprar até atrasados** (o prazo-limite já "
+                "passou), **SCs abertas** e **Rupturas** (consumo real e estoque = 0). Abaixo, a "
+                "**fila priorizada** com 'Comprar até DD/MM', as **SCs sugeridas** agrupadas por "
+                "natureza e o **aging** (há quantos dias cada SC está aberta).",
+                "É a lista de tarefas do comprador: 'compre isso primeiro, isso está atrasado, "
+                "isso já acabou' — tudo mastigado, é só decidir.",
             ),
             _item(
-                "Gráfico 'Requisições por Setor' e 'Top Emitentes'",
-                "Mostrar QUEM mais pede material (por setor e por pessoa).",
-                "As requisições registradas (setor e emitente de cada uma).",
-                "Conta quantas requisições cada setor/pessoa fez e mostra os maiores.",
-                "É um ranking de quem mais pede coisa no almoxarifado.",
+                "Visão 📊 Gestão — cartões de saúde (Nível de Serviço · Cobertura · Valor · Giro)",
+                "Mostrar a saúde geral da operação em 4 números.",
+                "A lista de itens (estoque, cobertura, consumo) e a valoração do estoque.",
+                "**Nível de Serviço de Estoque** = % dos itens com consumo real que estão fora de "
+                "ruptura (estoque > 0) — é um *proxy* de disponibilidade, **não** o OTIF do "
+                "fornecedor. **Cobertura média** = média de dias que o estoque dura. **Valor "
+                "imobilizado** = Σ(estoque × preço). **Giro médio** = quantas vezes o estoque roda "
+                "no ano (média dos itens com saída em 90 dias).",
+                "São quatro medidores do 'como vai a operação': se falta pouco (serviço alto), por "
+                "quantos dias dá pra durar, quanto dinheiro está parado e se as coisas giram.",
             ),
             _item(
-                "Painel 'Padrões de demanda'",
-                "Mostrar como os itens se comportam: saem sempre, de vez em quando, ou raramente.",
-                "As saídas reais (por requisição), agrupadas por semana e por mês.",
-                "Classifica cada item pelo método Syntetos-Boylan (ver Ficha 360 / Inventário) e "
-                "conta quantos são Suave/Intermitente/Errático/Irregular; abaixo, o resumo XYZ. "
-                "É só **diagnóstico** — não muda a lista de compra.",
-                "Separa os materiais em 'sai sempre igual', 'sai de vez em quando' e 'sai do "
-                "nada'. Ajuda a entender quais são fáceis e quais são difíceis de prever.",
+                "Visão 📊 Gestão — distribuição, Top consumidores, setores e padrões de demanda",
+                "Detalhar a saúde: quantos itens em cada status, quem mais consome e como a "
+                "demanda se comporta.",
+                "As saídas reais (por requisição), os preços de referência e as requisições.",
+                "**Distribuição** conta OK/Atenção/Críticos/Sem Movimentação/Zerados/Inventariado. "
+                "**Top 10 Consumidores** ordena por quantidade consumida no mês anterior. "
+                "**Requisições por Setor / Top Emitentes** mostram quem mais pede. **Padrões de "
+                "demanda** classifica cada item por Syntetos-Boylan (Suave/Intermitente/Errático/"
+                "Irregular) + resumo XYZ — é **diagnóstico**, não muda a lista de compra.",
+                "É o 'raio-x' do estoque: quantos estão em cada cor, quem mais pede material e "
+                "quais itens saem sempre igual ou 'do nada'.",
+            ),
+            _item(
+                "Visão 🏛️ Diretoria — Valor imobilizado · Evolução · ABC por valor · Savings",
+                "Dar à direção o retrato financeiro do estoque: quanto está parado, como evoluiu e "
+                "onde o dinheiro está concentrado.",
+                "A valoração do estoque, as fotos diárias (snapshots) e o consumo valorado.",
+                "**Valor imobilizado** = Σ(estoque × preço), com transparência (itens sem preço "
+                "subestimam; moeda ≠ BRL somada à parte). **Evolução** desenha esse valor ao longo "
+                "dos dias (amadurece com mais fotos). **ABC por valor** = a clássica 80/95: classe "
+                "**A** concentra o capital. **Savings** aparece como **'em breve'** — o dado do "
+                "Spot Saving ainda não é ingerido (nada de número inventado).",
+                "É o resumo pro chefe: quanto dinheiro está guardado em peças, se está subindo ou "
+                "descendo, e quais poucas peças valem quase tudo. A parte de 'economia' ainda está "
+                "sendo preparada.",
             ),
         ],
     },
