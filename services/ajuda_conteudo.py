@@ -358,11 +358,11 @@ MANUAL = [
         "itens": [
             _item(
                 "🎨 Aparência (tema claro/escuro)",
-                "Escolher entre o visual claro (padrão) e o escuro.",
+                "Escolher entre o visual escuro (padrão) e o claro.",
                 "A sua escolha, guardada na URL (?tema=).",
                 "O botão da **barra lateral** troca o tema; fundo, textos, menu e gráficos "
-                "acompanham. As tabelas seguem o tema base (claro) — no escuro podem ficar claras.",
-                "Um botão de 'dia e noite' pro sistema. Começa no claro; se você preferir escuro, "
+                "acompanham. As tabelas seguem o tema base (escuro) — no claro podem ficar escuras.",
+                "Um botão de 'dia e noite' pro sistema. Começa no escuro; se você preferir claro, "
                 "é só clicar.",
             ),
             _item(
