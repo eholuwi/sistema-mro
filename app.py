@@ -61,13 +61,13 @@ st.set_page_config(page_title="MRO Inventus Power 2.11.0", page_icon="🔧", lay
 
 def tema_atual():
     """Tema escolhido pelo usuário ('light'/'dark'), lido da URL (?tema=) para persistir
-    ao recarregar. Padrão CLARO (branco). O Streamlit 1.57 não troca o tema por código, então
+    ao recarregar. Padrão ESCURO. O Streamlit 1.57 não troca o tema por código, então
     o app o controla: um botão na sidebar grava `?tema=` e o CSS/paleta reaplica tudo."""
     try:
-        v = st.query_params.get("tema", "light")
+        v = st.query_params.get("tema", "dark")
     except Exception:
-        v = "light"
-    return "dark" if v == "dark" else "light"
+        v = "dark"
+    return "light" if v == "light" else "dark"
 
 
 # Paleta única do tema escolhido — consumida pelo CSS global, pelo option_menu e pelos
@@ -156,7 +156,7 @@ with st.sidebar:
 
     # 2b. Tema (claro/escuro) — controlado pelo app e lembrado na URL (?tema=).
     # O Streamlit 1.57 não troca o tema por código; aqui gravamos a escolha e o topo do
-    # script reaplica a paleta. Padrão claro. (Tabelas seguem o tema base do config.)
+    # script reaplica a paleta. Padrão escuro. (Tabelas seguem o tema base do config.)
     _op_tema = {"☀️ Claro": "light", "🌙 Escuro": "dark"}
     _lbl_atual = "🌙 Escuro" if PAL["tipo"] == "dark" else "☀️ Claro"
     _escolha_tema = st.radio("Tema", list(_op_tema.keys()),
@@ -2826,12 +2826,12 @@ elif pagina == "⚙️ Configurações":
     with st.container(border=True):
         st.subheader("🎨 Aparência")
         _tema_txt = "🌙 Escuro" if PAL["tipo"] == "dark" else "☀️ Claro"
-        st.markdown(f"**Tema atual:** {_tema_txt}  ·  **Padrão:** ☀️ Claro")
+        st.markdown(f"**Tema atual:** {_tema_txt}  ·  **Padrão:** 🌙 Escuro")
         st.caption("Para alternar entre **claro** e **escuro**, use o botão **Tema** na **barra "
                    "lateral** (abaixo do menu). A escolha é lembrada ao recarregar (fica na URL). "
                    "O fundo, os textos, o menu e os gráficos acompanham. ⚠️ Observação: no modo "
-                   "escuro, as **tabelas** podem continuar claras — é uma limitação do Streamlit "
-                   "(as grades seguem o tema base); no modo claro fica tudo consistente.")
+                   "claro, as **tabelas** podem continuar escuras — é uma limitação do Streamlit "
+                   "(as grades seguem o tema base); no modo escuro fica tudo consistente.")
         st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Importação da base do Neidson — Tipo, Mínimo, Máximo, Lead Time (Item 1) ──
