@@ -174,6 +174,13 @@ def listar_inventario():
     # item) e consistente com a sugestão de conversão (mesma função de mapeamento).
     mapa_uc = mapear_unidade_compra_por_item()
 
+    # v2.10.0 (diagnóstico): padrão de demanda (SBC) e classe XYZ por item, DERIVADOS
+    # na leitura (sem coluna nova) numa única varredura de movimentacoes (evita N+1).
+    # Import local para manter db_functions como camada baixa (classificacao depende
+    # de constants/database, não de db_functions).
+    from services.classificacao import classificar_todos
+    mapa_cls = classificar_todos()
+
     resultado = []
     for r in rows:
         item = dict(r)
@@ -214,6 +221,13 @@ def listar_inventario():
         _uc_dom = mapa_uc.get(item["id"])
         _um_diverge = bool(_uc_dom) and _uc_dom.upper() != (item.get("unidade") or "").upper()
         item["unidade_divergente"] = _um_diverge and _nao_curado
+
+        # v2.10.0 (diagnóstico): padrão de demanda (SBC) e classe XYZ derivados. Itens
+        # sem saída real não aparecem no mapa → ficam None ("sem dados"). Só apoio à
+        # decisão (não altera status/reposição); rótulo de confiança acompanha na Ficha.
+        _cls = mapa_cls.get(item["id"]) or {}
+        item["padrao_demanda"] = _cls.get("padrao_demanda")
+        item["classe_xyz"] = _cls.get("classe_xyz")
 
         # 2. Status da SC (Lógica Refinada v2.3)
         sc_num = item.get("sc_numero")
@@ -1529,7 +1543,7 @@ def exportar_inventario_df():
         "lead_time_dias", "lead_time_calculado", "lead_time_calculado_origem",
         "giro_anual", "tempo_medio_dias", "previsao_ruptura_dias",
         "preco_ref", "preco_origem", "valor_estoque", "valor_consumido_90d",
-        "classe_abc_valor",
+        "classe_abc_valor", "padrao_demanda", "classe_xyz",
         "sc_numero", "status_material", "status_sc",
         "data_inventario",
         "caixa_identificacao" # Campo reutilizado para Obs Operacional
@@ -1571,6 +1585,8 @@ def exportar_inventario_df():
         "valor_estoque": "Valor em Estoque",
         "valor_consumido_90d": "Valor Consumido(90d)",
         "classe_abc_valor": "Classe ABC(valor)",
+        "padrao_demanda": "Padrão Demanda",
+        "classe_xyz": "Classe XYZ",
         "sc_numero": "Última SC",
         "status_material": "Status Material",
         "status_sc": "Status SC",

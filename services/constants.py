@@ -201,3 +201,64 @@ def extrair_fator_embalagem(descricao):
     except (ValueError, TypeError):
         return None
     return valor if valor > 0 else None
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v2.10.0 — Classificação de Demanda (Syntetos-Boylan), XYZ & Sazonalidade
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Classificação de Demanda de Syntetos-Boylan (SBC). Cada item é lido pelo padrão
+# das suas SAÍDAS REAIS (por requisição — mesma fonte de consumo da v2.7.0), NÃO por
+# ajustes/inventário. Dois eixos:
+#   ADI = Average Demand Interval = nº de períodos ÷ nº de períodos COM demanda
+#         (regularidade do TEMPO entre demandas; alto = esporádico).
+#   CV² = (desvio / média das quantidades por período com demanda)²
+#         (variabilidade do TAMANHO da demanda; alto = irregular).
+# Limiares clássicos de Syntetos, Boylan & Croston (2005):
+SBC_ADI_LIMIAR = 1.32
+SBC_CV2_LIMIAR = 0.49
+
+# Período de bucketing para o SBC. Com ~3 meses de histórico, semanas dão ~11 pontos
+# (mês daria só 3, insuficiente p/ ADI/CV²). Isso é apoio à decisão que amadurece —
+# rotulado pela confiança (nº de eventos/semanas), nunca apresentado como verdade final.
+SBC_BUCKET = "semana"
+
+# Padrões de demanda: label + emoji + explicação em 1 frase (transparência do PO —
+# todo indicador explicável em 1 frase). Chave = (adi_alto, cv2_alto).
+PADROES_DEMANDA = {
+    (False, False): {
+        "label": "Suave", "emoji": "🟢",
+        "explicacao": "Sai com regularidade e em quantidades parecidas — o mais previsível de repor.",
+    },
+    (True, False): {
+        "label": "Intermitente", "emoji": "🔵",
+        "explicacao": "Sai de vez em quando, mas em quantidades parecidas — previsível no tamanho, não no tempo.",
+    },
+    (False, True): {
+        "label": "Errático", "emoji": "🟠",
+        "explicacao": "Sai com regularidade, porém em quantidades bem diferentes a cada vez.",
+    },
+    (True, True): {
+        "label": "Irregular", "emoji": "🔴",
+        "explicacao": "Sai raramente e em quantidades imprevisíveis — o mais difícil de planejar (lumpy).",
+    },
+}
+
+# Rótulos/estruturas quando não há saída real suficiente para classificar o PADRÃO.
+# Distingue "nunca consumiu" de "consumiu pouquíssimo" (honestidade — 1 evento é dado,
+# mas não dá para medir intervalo nem variabilidade).
+PADRAO_DEMANDA_SEM_DADOS = {"label": "Sem dados", "emoji": "⚪",
+                            "explicacao": "Ainda não há consumo real registrado para classificar a demanda."}
+PADRAO_DEMANDA_POUCOS = {"label": "Poucos dados", "emoji": "⚪",
+                         "explicacao": "Só houve consumo real em 1 semana — poucos dados para classificar o padrão."}
+
+# Classificação XYZ pela variabilidade do consumo MENSAL (coef. de variação = desvio
+# ÷ média). Rotulada "baixa confiança" enquanto houver poucos meses (ver abaixo):
+#   X (estável) CV ≤ 0.5 · Y (variável) 0.5 < CV ≤ 1.0 · Z (errático) CV > 1.0.
+XYZ_LIMIAR_X = 0.5
+XYZ_LIMIAR_Y = 1.0
+
+# Maturidade de dados: nº de meses distintos de consumo a partir do qual cada
+# indicador de série é considerado confiável. Abaixo disso, a UI mostra o rótulo de
+# maturidade ("baseado em N meses"). Sazonalidade exige o ciclo anual completo.
+XYZ_MIN_MESES_CONFIAVEL = 6         # abaixo → "baixa confiança"
+SAZONALIDADE_MIN_MESES = 12         # perfil sazonal só a partir de 1 ciclo anual

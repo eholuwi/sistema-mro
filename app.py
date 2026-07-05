@@ -54,7 +54,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 2.9.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 2.10.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
 
 inject_custom_css()
 
@@ -110,7 +110,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 2.9.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 2.10.0</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -360,6 +360,28 @@ if pagina == "📊 Dashboard":
             else:
                 st.caption("Aguardando histórico de requisições.")
 
+        # === CONTAINER 4: Padrões de demanda (v2.10.0 — diagnóstico) ===
+        with st.container(border=True):
+            st.markdown("#### 🔬 Padrões de demanda")
+            st.caption("Como os itens se comportam na demanda (Syntetos-Boylan), pelas saídas "
+                       "reais. Diagnóstico — não altera a lista de compra. Detalhe na Ficha 360.")
+            from collections import Counter as _Counter
+            _ordem_dem = ["Suave", "Intermitente", "Errático", "Irregular", "Poucos dados"]
+            _cont_dem = _Counter(i.get("padrao_demanda") for i in itens if i.get("padrao_demanda"))
+            _dados_dem = [{"Padrão": p, "Itens": _cont_dem.get(p, 0)}
+                          for p in _ordem_dem if _cont_dem.get(p, 0)]
+            _sem_class = sum(1 for i in itens if not i.get("padrao_demanda"))
+            if _dados_dem:
+                st.bar_chart(pd.DataFrame(_dados_dem).set_index("Padrão"),
+                             color="#F7941E", height=240)
+            else:
+                st.caption("Ainda sem consumo real suficiente para classificar padrões.")
+            _cxyz = _Counter(i.get("classe_xyz") for i in itens if i.get("classe_xyz"))
+            if _cxyz:
+                st.caption("XYZ (variabilidade mensal — baixa confiança com poucos meses): "
+                           f"X {_cxyz.get('X', 0)} · Y {_cxyz.get('Y', 0)} · Z {_cxyz.get('Z', 0)}. "
+                           f"{_sem_class} item(ns) sem consumo real para classificar.")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # INVENTÁRIO
 # ══════════════════════════════════════════════════════════════════════════════
@@ -443,6 +465,11 @@ elif pagina == "📋 Inventário":
         # v2.9.0: marca visual "⚠️" para itens com unidade a revisar.
         if "unidade_divergente" in df.columns:
             df_exib["Un?"] = df["unidade_divergente"].map(lambda v: "⚠️" if v else "")
+        # v2.10.0 (diagnóstico): padrão de demanda (SBC) e classe XYZ derivados.
+        if "padrao_demanda" in df.columns:
+            df_exib["Demanda"] = df["padrao_demanda"].fillna("—")
+        if "classe_xyz" in df.columns:
+            df_exib["XYZ"] = df["classe_xyz"].fillna("—")
 
         num_linhas = len(df_exib)
         altura_tabela = min(40 + (num_linhas * 35), 320) if num_linhas > 0 else 100
@@ -471,6 +498,12 @@ elif pagina == "📋 Inventário":
                 "caixa_identificacao": st.column_config.TextColumn("Obs. Inventário", width="medium"), # Nova coluna na tabela
                 "Un?": st.column_config.TextColumn("Un?", width="small",
                     help="⚠️ = comprado em unidade diferente da de estoque e ainda sem fator de conversão."),
+                "Demanda": st.column_config.TextColumn("Demanda", width="small",
+                    help="Padrão de demanda (Syntetos-Boylan) pelas saídas reais: Suave/Intermitente/"
+                         "Errático/Irregular. Diagnóstico — não altera a reposição. Detalhe na Ficha 360."),
+                "XYZ": st.column_config.TextColumn("XYZ", width="small",
+                    help="Variabilidade do consumo mensal: X=estável, Y=variável, Z=errático "
+                         "(baixa confiança com poucos meses de histórico)."),
             }
         )
 
@@ -2594,11 +2627,48 @@ elif pagina == "📇 Ficha 360":
                     st.dataframe(pd.DataFrame(ficha["historico_pn"]),
                                  hide_index=True, width="stretch")
 
+            # ── Classificação de demanda / XYZ / Sazonalidade (v2.10.0) ───────
             st.divider()
-            st.caption("🔬 XYZ e sazonalidade: em breve (v2.7). "
-                       f"📅 Indicadores de série baseados em ~{mat['dias']} dias de "
-                       "histórico — amadurecem conforme os dados acumulam. "
-                       "A base do Sr. Neidson (mín/máx/lead time/categoria) permanece intocada.")
+            st.markdown("##### 🔬 Padrão de demanda & variabilidade")
+            cls = ficha.get("classificacao") or {}
+            dem = cls.get("demanda") or {}
+            xyz = cls.get("xyz") or {}
+            saz = cls.get("sazonalidade") or {}
+            cm = cls.get("consumo_mensal") or []
+
+            xd1, xd2 = st.columns(2)
+            with xd1:
+                _emoji = dem.get("emoji") or "⚪"
+                _pad = dem.get("padrao") or "Sem dados"
+                st.markdown(f"**Demanda:** {_emoji} **{_pad}**")
+                st.caption(dem.get("explicacao") or "")
+                if dem.get("adi") is not None:
+                    st.caption(f"ADI {dem['adi']} · CV² {dem['cv2']} · "
+                               f"{dem['n_eventos']} semana(s) com consumo · "
+                               f"confiança {dem.get('confianca', '—')}.")
+            with xd2:
+                _cx = xyz.get("classe")
+                if _cx:
+                    _rot = {"X": "estável", "Y": "variável", "Z": "errático"}.get(_cx, "")
+                    st.markdown(f"**XYZ:** **{_cx}** ({_rot})")
+                    st.caption(f"Coef. de variação mensal {xyz.get('cv')} · "
+                               f"{xyz.get('n_meses')} mês(es) · confiança {xyz.get('confianca', '—')}.")
+                else:
+                    st.markdown("**XYZ:** —")
+                    st.caption("Precisa de ≥2 meses de consumo para medir a variabilidade.")
+
+            if cm:
+                st.markdown("###### 📅 Consumo real por mês")
+                df_cm = pd.DataFrame(cm).set_index("mes")["qtd"]
+                st.bar_chart(df_cm)
+
+            if not saz.get("disponivel"):
+                st.caption(f"🍂 **Sazonalidade:** amadurecendo — "
+                           f"{saz.get('meses_atuais', 0)}/{saz.get('meses_necessarios', 12)} "
+                           "meses (precisa de 1 ciclo anual completo para um perfil confiável).")
+            st.caption(f"📅 Indicadores de série baseados em ~{mat['dias']} dias de histórico — "
+                       "diagnóstico que amadurece conforme os dados acumulam. A base do Sr. "
+                       "Neidson (mín/máx/lead time/categoria) permanece intocada.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FEEDBACK / SUGESTÕES (Item 3 / v2.1.0)
