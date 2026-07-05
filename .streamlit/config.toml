@@ -1,0 +1,8 @@
+# Tema da marca — MRO Inventus Power (v2.11.0)
+# Define o visual PADRÃO (dark) e a cor de marca. O usuário pode alternar
+# Light/Dark/Custom pelo menu embutido (☰ → Settings → Theme); o app se adapta
+# lendo st.context.theme e aplicando services/tema.paleta() nos gráficos/menu.
+[theme]
+base = "dark"
+primaryColor = "#F36F21"
+font = "sans serif"
