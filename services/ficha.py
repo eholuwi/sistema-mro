@@ -29,6 +29,7 @@ from services.db_functions import (
     obter_maturidade_dados,
 )
 from services import planejamento as P
+from services.classificacao import classificar_item
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -221,4 +222,7 @@ def montar_ficha_360(item_id, conn=None):
         "evolucao_preco": obter_evolucao_preco(item_id),
         "historico_pn": listar_historico_part_number(item_id),
         "maturidade": obter_maturidade_dados(),
+        # v2.10.0 (diagnóstico): padrão de demanda (SBC), XYZ, consumo mensal e o
+        # gate de sazonalidade. Só apoio à decisão — não altera a reposição acima.
+        "classificacao": classificar_item(item_id, conn),
     }
