@@ -44,6 +44,7 @@ from services.planejamento import (
 from services.ficha import (
     montar_ficha_360, salvar_imagem_item, remover_imagem_item,
 )
+from services.ajuda_conteudo import GUIAS_PERSONA, MANUAL
 
 setup_logging()
 criar_banco()
@@ -59,17 +60,17 @@ st.set_page_config(page_title="MRO Inventus Power 2.11.0", page_icon="🔧", lay
 
 
 def tema_atual():
-    """Tipo do tema ATIVO ('light'/'dark') lido do Streamlit (☰ → Settings → Theme).
-    Defensivo: qualquer falha/versão sem `st.context.theme` → 'dark' (padrão da marca)."""
+    """Tema escolhido pelo usuário ('light'/'dark'), lido da URL (?tema=) para persistir
+    ao recarregar. Padrão CLARO (branco). O Streamlit 1.57 não troca o tema por código, então
+    o app o controla: um botão na sidebar grava `?tema=` e o CSS/paleta reaplica tudo."""
     try:
-        t = getattr(st.context, "theme", None)
-        tipo = getattr(t, "type", None)
-        return "light" if tipo == "light" else "dark"
+        v = st.query_params.get("tema", "light")
     except Exception:
-        return "dark"
+        v = "light"
+    return "dark" if v == "dark" else "light"
 
 
-# Paleta única do tema ativo — consumida pelo CSS global, pelo option_menu e pelos
+# Paleta única do tema escolhido — consumida pelo CSS global, pelo option_menu e pelos
 # gráficos, para tudo acompanhar claro/escuro (v2.11.0).
 PAL = paleta(tema_atual())
 inject_custom_css(PAL)
@@ -152,6 +153,18 @@ with st.sidebar:
              f"🧾 {escolha_limpa}" if escolha_limpa == "Compras (SC)" else \
              f"❓ {escolha_limpa}" if escolha_limpa == "Ajuda" else \
              f"⚙️ {escolha_limpa}"
+
+    # 2b. Tema (claro/escuro) — controlado pelo app e lembrado na URL (?tema=).
+    # O Streamlit 1.57 não troca o tema por código; aqui gravamos a escolha e o topo do
+    # script reaplica a paleta. Padrão claro. (Tabelas seguem o tema base do config.)
+    _op_tema = {"☀️ Claro": "light", "🌙 Escuro": "dark"}
+    _lbl_atual = "🌙 Escuro" if PAL["tipo"] == "dark" else "☀️ Claro"
+    _escolha_tema = st.radio("Tema", list(_op_tema.keys()),
+                             index=list(_op_tema.keys()).index(_lbl_atual),
+                             horizontal=True, key="sb_tema")
+    if _op_tema[_escolha_tema] != PAL["tipo"]:
+        st.query_params["tema"] = _op_tema[_escolha_tema]
+        st.rerun()
 
     st.markdown("---")
 
@@ -2686,71 +2699,49 @@ elif pagina == "📇 Ficha 360":
 # ══════════════════════════════════════════════════════════════════════════════
 elif pagina == "❓ Ajuda":
     st.title("❓ Central de Ajuda")
-    st.caption("Guias passo-a-passo por perfil, mais o canal de feedback e o backlog do sistema. "
-               "💡 Para trocar entre tema claro/escuro: menu **☰** (canto superior direito) → "
-               "**Settings** → **Theme**.")
+    st.caption("Guias por perfil, o **Manual do Sistema** (tela a tela) e o canal de feedback. "
+               "💡 Tema claro/escuro: botão **Tema** na barra lateral.")
 
-    tab_alm, tab_comp, tab_enviar, tab_gerenciar = st.tabs(
-        ["📖 Assistente de Materiais", "🛒 Comprador", "✍️ Enviar Feedback", "🗂️ Backlog"])
+    tab_inicio, tab_manual, tab_enviar, tab_gerenciar = st.tabs(
+        ["🚀 Começar aqui", "📚 Manual do Sistema", "✍️ Enviar Feedback", "🗂️ Backlog"])
 
-    with tab_alm:
-        st.markdown("""
-### 📖 Guia do Assistente de Materiais
+    with tab_inicio:
+        st.caption("Guias rápidos por perfil. Para o detalhe de cada botão/card/gráfico, veja a "
+                   "aba **📚 Manual do Sistema**.")
+        _perfil = st.radio("Qual é o seu perfil?",
+                           ["📖 Assistente de Materiais (almoxarifado)", "🛒 Comprador"],
+                           horizontal=True, key="ajuda_perfil")
+        _chave = "assistente" if _perfil.startswith("📖") else "comprador"
+        st.markdown(GUIAS_PERSONA[_chave])
 
-Você cuida do **físico no almoxarifado**: dá baixa, recebe, confere e consulta os materiais.
-O sistema é seu **apoio** — a base do Sr. Neidson (mínimo/máximo/categoria) fica intocada.
-
-**1. Dar baixa de material — página `📋 Requisição`**
-- Preencha o cabeçalho (setor, emitente, centro de custo).
-- Em *Adicionar Materiais*, pesquise o item; o card mostra o **DISPONÍVEL** na hora.
-- Informe *Qtd Solicitada* e *Qtd Atendida* e **Adicione à lista**; ao final, **registre a requisição**.
-- Isso conta como **consumo real** (é o que alimenta cobertura, giro e o padrão de demanda).
-
-**2. Receber material de uma SC — página `🧾 Compras (SC)` → aba `📦 Receber Material`**
-- Escolha a SC/item e informe a quantidade **na unidade de compra** (ex.: litros).
-- Se o item tem **conversão** cadastrada, o sistema mostra o preview (ex.: *5 L ÷ 5 = +1 GL*)
-  e soma ao estoque **já convertido** — você não precisa calcular nada.
-- Se aparecer **⚠️ revisar unidade**, avise o comprador para cadastrar o fator.
-
-**3. Contagem física — página `📋 Inventário` → `📦 Realizar Contagem Física`**
-- Selecione o item, informe a **quantidade real** contada e o **local**; salve.
-- A diferença vira um ajuste no histórico (não conta como consumo real).
-
-**4. Consultar um material — página `📇 Ficha 360`**
-- Tudo do item numa tela: estoque, cobertura, quem consome, fornecedores, histórico e imagem.
-
-**5. Entender os status do Inventário**
-- 🔴 **Comprar** · 🟡 **Atenção** (perto do mínimo) · 🟢 **OK** · ⚪ **Sem Movimentação**
-  (nunca teve consumo real — fica fora da lista de compra).
-""")
-
-    with tab_comp:
-        st.markdown("""
-### 🛒 Guia do Comprador
-
-Você **decide e cria as SCs**. O sistema **recomenda**, você confirma — nunca o contrário.
-
-**1. Ver o que repor — página `🧾 Compras (SC)` → aba `🧠 Assistente de Reposição`**
-- Fila **priorizada** (🔴/🟠/🟡) com **"Comprar até DD/MM"** por item.
-- **SCs sugeridas agrupadas** (por natureza + centro de custo) — crie a SC multi-item em 1 clique.
-- Filtros por só-críticos/setor/fornecedor; exporte a fila em Excel.
-
-**2. Acompanhar e cotar — página `🧾 Compras (SC)` (abas de SC e Fornecedores)**
-- Veja fornecedores por item (melhor = menor último preço), lead time e **rascunho de e-mail** de cotação.
-
-**3. Curar conversão de unidades — página `➕ Gerenciar Itens` (novo/editar)**
-- Quando o item é **comprado** numa unidade diferente da de **estoque** (ex.: GL × L), cadastre a
-  **unidade de compra** e o **fator** (o sistema sugere pelo nome/POs; você confirma). Some o aviso ⚠️.
-
-**4. Ler o comportamento da demanda — `📇 Ficha 360` e `📋 Inventário`**
-- **Padrão de demanda** (Suave/Intermitente/Errático/Irregular) e **XYZ** ajudam a decidir a política
-  de reposição. É **diagnóstico** — não muda a lista de compra sozinho.
-
-**5. Atualizar os dados — página `🧾 Compras (SC)` → aba `📥 Importar Relatório de SCs`**
-- Reimporte o **Relatório de SCs** para atualizar SCs, preços, fornecedores e unidades (backup automático).
-
-> **Princípio:** o sistema é **assistente, não piloto automático** — toda SC é sua decisão.
-""")
+    with tab_manual:
+        st.caption("Explica **cada elemento** da interface: para que serve · com base em quê · "
+                   "como o sistema calcula. Ligue o modo abaixo para uma explicação bem simples.")
+        _eli5 = st.toggle("🧒 Explicar como para uma criança", value=False, key="ajuda_eli5",
+                          help="Reescreve tudo em linguagem simples — ótimo para entender os "
+                               "cálculos e os dashboards.")
+        _busca_manual = st.text_input("🔎 Filtrar por palavra (opcional)", key="ajuda_busca",
+                                      placeholder="ex.: cobertura, ABC, conversão, guarda-chuva")
+        _b = (_busca_manual or "").strip().lower()
+        for _sec in MANUAL:
+            _itens = _sec["itens"]
+            if _b:
+                _itens = [it for it in _itens
+                          if _b in (it["nome"] + it["para_que"] + it["base"]
+                                    + it["como"] + it["crianca"] + _sec["tela"]).lower()]
+            if not _itens:
+                continue
+            st.subheader(_sec["tela"])
+            if _sec.get("intro"):
+                st.caption(_sec["intro"])
+            for _it in _itens:
+                with st.expander(_it["nome"]):
+                    if _eli5:
+                        st.markdown(f"🧒 {_it['crianca']}")
+                    else:
+                        st.markdown(f"**Para que serve:** {_it['para_que']}")
+                        st.markdown(f"**Com base em quê:** {_it['base']}")
+                        st.markdown(f"**Como o sistema faz:** {_it['como']}")
 
     with tab_enviar:
         with st.container(border=True):
@@ -2835,11 +2826,12 @@ elif pagina == "⚙️ Configurações":
     with st.container(border=True):
         st.subheader("🎨 Aparência")
         _tema_txt = "🌙 Escuro" if PAL["tipo"] == "dark" else "☀️ Claro"
-        st.markdown(f"**Tema atual:** {_tema_txt}")
-        st.caption("Para alternar entre **claro** e **escuro**, abra o menu **☰** no canto "
-                   "superior direito → **Settings** → **Theme** (Light / Dark / Use system setting). "
-                   "O app se adapta automaticamente — gráficos, menu e cores acompanham. A "
-                   "preferência é lembrada pelo seu navegador.")
+        st.markdown(f"**Tema atual:** {_tema_txt}  ·  **Padrão:** ☀️ Claro")
+        st.caption("Para alternar entre **claro** e **escuro**, use o botão **Tema** na **barra "
+                   "lateral** (abaixo do menu). A escolha é lembrada ao recarregar (fica na URL). "
+                   "O fundo, os textos, o menu e os gráficos acompanham. ⚠️ Observação: no modo "
+                   "escuro, as **tabelas** podem continuar claras — é uma limitação do Streamlit "
+                   "(as grades seguem o tema base); no modo claro fica tudo consistente.")
         st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Importação da base do Neidson — Tipo, Mínimo, Máximo, Lead Time (Item 1) ──

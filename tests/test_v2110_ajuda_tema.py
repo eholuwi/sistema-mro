@@ -55,3 +55,40 @@ def test_css_tokens_presentes_para_styles():
 
 def test_light_e_dark_tem_fundos_diferentes():
     assert paleta("dark")["css"]["bg_main"] != paleta("light")["css"]["bg_main"]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONTEÚDO DA CENTRAL DE AJUDA — completude do Manual e dos guias
+# ══════════════════════════════════════════════════════════════════════════════
+
+from services.ajuda_conteudo import GUIAS_PERSONA, MANUAL
+
+
+def test_guias_persona_tem_ambos_perfis():
+    assert set(GUIAS_PERSONA) == {"assistente", "comprador"}
+    for txt in GUIAS_PERSONA.values():
+        assert isinstance(txt, str) and len(txt.strip()) > 100
+
+
+def test_manual_estrutura_por_tela():
+    assert len(MANUAL) >= 6  # cobre as principais telas do sistema
+    for sec in MANUAL:
+        assert sec.get("tela")
+        assert sec.get("itens"), f"tela sem itens: {sec.get('tela')}"
+
+
+def test_manual_todo_item_tem_explicacao_e_eli5():
+    # Garante que TODO elemento tem as 3 explicações + a versão 'criança' (ELI5),
+    # todas não vazias — é o contrato que a UI (normal vs ELI5) depende.
+    for sec in MANUAL:
+        for it in sec["itens"]:
+            for campo in ("nome", "para_que", "base", "como", "crianca"):
+                assert it.get(campo) and it[campo].strip(), \
+                    f"[{sec['tela']}] item '{it.get('nome')}' sem '{campo}'"
+
+
+def test_manual_cobre_telas_essenciais():
+    telas = " ".join(s["tela"] for s in MANUAL)
+    for chave in ("Dashboard", "Inventário", "Ficha 360", "Requisição",
+                  "Compras", "Gerenciar Itens", "Configurações"):
+        assert chave in telas, f"Manual não cobre: {chave}"
