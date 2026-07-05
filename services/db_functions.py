@@ -9,7 +9,9 @@ from services.constants import (
     JANELAS_CONSUMO, TENDENCIA_LIMIAR_PCT, GIRO_JANELA_DIAS, LEAD_TIME_MAX_DIAS,
     ABC_LIMIAR_A, ABC_LIMIAR_B, VALOR_CONSUMIDO_JANELA_DIAS, MOEDA_PADRAO,
     SAIDA_REAL_WHERE, STATUS_SEM_MOVIMENTACAO,
+    FATOR_CONVERSAO_PADRAO, extrair_fator_embalagem,
 )
+from collections import Counter
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -167,6 +169,11 @@ def listar_inventario():
         i.part_number
         """).fetchall()
 
+    # v2.9.0 (forward-only): UM de compra DOMINANTE por item (a que o fornecedor mais
+    # cobra), para o sinal de "revisar unidade". Uma varredura só (vs. subconsulta por
+    # item) e consistente com a sugestão de conversão (mesma função de mapeamento).
+    mapa_uc = mapear_unidade_compra_por_item()
+
     resultado = []
     for r in rows:
         item = dict(r)
@@ -197,6 +204,16 @@ def listar_inventario():
             item.get("estoque_em_transito", 0) or 0,
             item.get("consumo_medio_diario", 0) or 0,
         )
+
+        # v2.9.0 (forward-only): item cuja UM de compra DOMINANTE difere da de estoque
+        # e que AINDA NÃO FOI CURADO (fator=1 → recebimento soma cru, risco de ledger
+        # corrompido). Sinaliza "⚠️ revisar unidade" na Ficha/Inventário, linkando à
+        # curadoria. Não reescreve nada; some assim que o gestor define o fator (≠1).
+        _fator = item.get("fator_conversao")
+        _nao_curado = _fator is None or abs((_fator or 1) - 1) < 1e-9
+        _uc_dom = mapa_uc.get(item["id"])
+        _um_diverge = bool(_uc_dom) and _uc_dom.upper() != (item.get("unidade") or "").upper()
+        item["unidade_divergente"] = _um_diverge and _nao_curado
 
         # 2. Status da SC (Lógica Refinada v2.3)
         sc_num = item.get("sc_numero")
@@ -255,7 +272,12 @@ def _mov_inline(conn, item_id, tipo, quantidade, saldo_apos, observacao, agora,
 
 def salvar_item(part_number, nome_item, descricao, unidade, importancia,
                 tipo_material, setor, local, caixa,
-                estoque_atual, estoque_minimo, lead_time, item_id=None):
+                estoque_atual, estoque_minimo, lead_time, item_id=None,
+                unidade_compra=None, fator_conversao=None):
+    """Cria/edita um item. v2.9.0: aceita `unidade_compra` e `fator_conversao`
+    (curadoria da conversão) como kwargs — `item_id` permanece o 13º posicional
+    (compat). Na edição, usa COALESCE — só grava o que o gestor confirmar (None
+    preserva o valor atual); nunca sobrescreve automaticamente."""
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         estoque_atual = float(estoque_atual or 0)
@@ -270,11 +292,15 @@ def salvar_item(part_number, nome_item, descricao, unidade, importancia,
                         part_number=?,nome_item=?,descricao=?,unidade=?,
                         importancia=?,tipo_material=?,setor_responsavel=?,
                         local_armazenagem=?,caixa_identificacao=?,
-                        estoque_atual=?,estoque_minimo=?,lead_time_dias=?,data_atualizacao=?
+                        estoque_atual=?,estoque_minimo=?,lead_time_dias=?,
+                        unidade_compra=COALESCE(?, unidade_compra),
+                        fator_conversao=COALESCE(?, fator_conversao),
+                        data_atualizacao=?
                     WHERE id=?
                 """,(part_number,nome_item,descricao,unidade,importancia,
                      tipo_material,setor,local,caixa,
-                     estoque_atual,estoque_minimo,lead_time,agora,item_id))
+                     estoque_atual,estoque_minimo,lead_time,
+                     unidade_compra, fator_conversao, agora, item_id))
                 # Integridade do ledger: se o saldo mudou pela edição, registra o
                 # delta como movimentação (evita alterar o saldo de forma "silenciosa").
                 delta = estoque_atual - estoque_antigo
@@ -286,10 +312,13 @@ def salvar_item(part_number, nome_item, descricao, unidade, importancia,
                     INSERT INTO inventario
                         (part_number,nome_item,descricao,unidade,importancia,
                          tipo_material,setor_responsavel,local_armazenagem,
-                         caixa_identificacao,estoque_atual,estoque_minimo,lead_time_dias)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                         caixa_identificacao,estoque_atual,estoque_minimo,lead_time_dias,
+                         unidade_compra,fator_conversao)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,(part_number,nome_item,descricao,unidade,importancia,
-                     tipo_material,setor,local,caixa,estoque_atual,estoque_minimo,lead_time))
+                     tipo_material,setor,local,caixa,estoque_atual,estoque_minimo,lead_time,
+                     unidade_compra,
+                     fator_conversao if fator_conversao is not None else FATOR_CONVERSAO_PADRAO))
                 novo_id = cur.lastrowid
                 # Saldo inicial vira "entrada" → origem do ledger para snapshots/giro.
                 if estoque_atual > 0:
@@ -1232,20 +1261,35 @@ fornecedor, data_recebimento, obs_nf=""):
                 WHERE id=?
             """,(fornecedor or "", sc_id))
 
-            # (4)+(5) Entrada de estoque INLINE na mesma transacao
+            # (4)+(5) Entrada de estoque INLINE na mesma transacao.
+            # v2.9.0 — CONVERSÃO: `qtd_recebida` chega na UNIDADE DE COMPRA (consistente
+            # com itens_sc.quantidade_pedido, gravada pela ingestão na UM do PO). O
+            # ledger/estoque vive na UNIDADE DE ESTOQUE, então converte:
+            #   incremento_estoque = qtd_recebida / fator_conversao.
+            # itens_sc.quantidade_recebida (nova_rec) segue na UM de compra (item 2 acima).
+            # fator=1 (os ~318 itens de UM única) → incremento == qtd_recebida (no-op).
             r_est = conn.execute(
-                "SELECT estoque_atual FROM inventario WHERE id=?", (item_id,)
+                "SELECT estoque_atual, unidade, unidade_compra, fator_conversao "
+                "FROM inventario WHERE id=?", (item_id,)
             ).fetchone()
             if not r_est:
                 raise ValueError("Item nao encontrado no inventario.")
-            novo_estoque = (r_est["estoque_atual"] or 0) + qtd_recebida
+            _fator = r_est["fator_conversao"]
+            fator = _fator if (_fator and _fator > 0) else 1
+            incremento_estoque = qtd_recebida / fator
+            novo_estoque = (r_est["estoque_atual"] or 0) + incremento_estoque
             obs_mov = f"NF: {nf}" if nf else "Recebimento SC"
+            if fator != 1:
+                _uc = r_est["unidade_compra"] or "?"
+                _ue = r_est["unidade"] or "?"
+                obs_mov += (f" · convertido: {qtd_recebida:g} {_uc} ÷ {fator:g}"
+                            f" = {incremento_estoque:g} {_ue}")
             conn.execute("""
                 INSERT INTO movimentacoes
                     (item_id,tipo,quantidade,saldo_apos,data_hora,
                      centro_custo,setor,solicitante,emitente,observacao,sc_item_id,requisicao_id)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-            """,(item_id,"entrada",qtd_recebida,novo_estoque,data_mov,
+            """,(item_id,"entrada",incremento_estoque,novo_estoque,data_mov,
                 centro_custo,"",solicitante,emitente,obs_mov,item_sc_id,None))
             conn.execute(
                 "UPDATE inventario SET estoque_atual=?,data_atualizacao=? WHERE id=?",
@@ -1651,6 +1695,9 @@ def atualizar_item_inventario(item_id, dados_atualizados):
                 "caixa_identificacao", "consumo_medio_diario", "setor_responsavel",
                 # v2.2.0 — estoque de segurança agora é MANUAL (parâmetro do gestor)
                 "estoque_seguranca",
+                # v2.9.0 — curadoria da conversão de unidades (só grava o que o gestor
+                # confirmar; não sobrescreve automaticamente).
+                "unidade_compra", "fator_conversao",
             ]
             for key in allowed_fields:
                 if key in dados_atualizados:
@@ -1665,6 +1712,84 @@ def atualizar_item_inventario(item_id, dados_atualizados):
         return True, "Item atualizado com sucesso!"
     except Exception as e:
         return False, str(e)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONVERSÃO DE UNIDADES — sugestão da curadoria (v2.9.0)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def mapear_unidade_compra_por_item(item_ids=None, conn=None):
+    """{item_id: UM de compra} = a unidade mais frequente observada em
+    `precos_historico.unidade` (capturada da ingestão SCM/SC7).
+
+    Espelha o padrão de mapear_categoria_sc_por_item / mapear_cc_por_item (v2.8.0):
+    mais frequente, com desempate pela linha de preço MAIS RECENTE. Itens sem UM
+    observada não entram no mapa. Data-driven — não inventa; é a base da sugestão de
+    conversão (a UM que o fornecedor realmente cobra)."""
+    with transaction(conn) as c:
+        rows = c.execute("""
+            SELECT item_id, TRIM(unidade) AS unidade, COALESCE(data, '') AS d
+            FROM precos_historico
+            WHERE unidade IS NOT NULL AND TRIM(unidade) <> ''
+        """).fetchall()
+    filtro = set(item_ids) if item_ids is not None else None
+    por_item = {}
+    for r in rows:
+        if filtro is not None and r["item_id"] not in filtro:
+            continue
+        por_item.setdefault(r["item_id"], []).append((r["unidade"], r["d"]))
+    mapa = {}
+    for iid, lst in por_item.items():
+        cont = Counter(u for u, _ in lst)
+        top = max(cont.values())
+        candidatas = {u for u, n in cont.items() if n == top}
+        # desempate: UM da linha de preço mais recente entre as candidatas
+        mapa[iid] = max((d, u) for u, d in lst if u in candidatas)[1]
+    return mapa
+
+
+def sugerir_conversao(item, unidade_observada=None, conn=None):
+    """Sugestão de conversão para a curadoria (Gerenciar Itens). NÃO persiste — só
+    devolve o que o gestor confirma (assistente, não piloto automático).
+
+    Devolve {unidade_compra_sugerida, fator_sugerido, origem}:
+      - `fator_sugerido`: extraído por regex da DESCRIÇÃO (ex.: 'BOMBONA C/ 5,0 LT'
+        → 5). Só vem preenchido quando há padrão claro; senão None (gestor preenche —
+        o sistema não inventa fator).
+      - `unidade_compra_sugerida`: a UM observada nos POs (SC7/SCM) quando difere da
+        unidade de estoque; senão a própria unidade de estoque.
+      - `origem`: rótulo de transparência de onde veio cada parte da sugestão.
+
+    `item` é um dict de inventário (usa `id`, `nome_item`, `descricao`, `unidade`).
+    `unidade_observada` pode ser passada pelo chamador (evita reconsultar em lote)
+    ou é buscada aqui."""
+    unidade_estoque = (item.get("unidade") or "").strip()
+    if unidade_observada is None and item.get("id"):
+        unidade_observada = mapear_unidade_compra_por_item([item["id"]], conn=conn).get(item["id"])
+    unidade_observada = (unidade_observada or "").strip() or None
+
+    # O padrão de embalagem ("C/ 5,0 LT", "CX C/ 4000PCS") mora no NOME do item na base
+    # do Neidson (`descricao` guarda notas livres como "Consumo: 6 LT/dia"); varre os dois.
+    texto = f"{item.get('nome_item') or ''} {item.get('descricao') or ''}"
+    fator_desc = extrair_fator_embalagem(texto)
+
+    # UM de compra sugerida: a observada nos POs quando diverge da de estoque.
+    if unidade_observada and unidade_observada.upper() != unidade_estoque.upper():
+        unidade_compra_sugerida = unidade_observada
+    else:
+        unidade_compra_sugerida = unidade_estoque or None
+
+    origens = []
+    if fator_desc:
+        origens.append("fator da descrição (padrão “C/…”)")
+    if unidade_observada:
+        origens.append(f"UM observada nos POs: {unidade_observada}")
+    origem = "; ".join(origens) if origens else "sem padrão claro — preencher manualmente"
+
+    return {
+        "unidade_compra_sugerida": unidade_compra_sugerida,
+        "fator_sugerido": fator_desc,   # None quando não há padrão claro
+        "origem": origem,
+    }
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ALTERAÇÃO DE PART NUMBER (Item 2 / v2.1.0)
@@ -2470,6 +2595,7 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
         "preco_unitario":   _coluna(df, ["Prc Unitario", "Preco Unitario", "Preço Unitário"]),
         "valor_total":      _coluna(df, ["Vlr.Total", "Valor Total", "Vlr Total"]),
         "moeda":            _coluna(df, ["Moeda"]),
+        "unidade":          _coluna(df, ["Unidade", "UM", "U.M.", "Um"]),  # v2.9.0: UM de compra
     }
     faltantes = [n for n in ("numero_sc", "solicitante", "produto", "quantidade") if not colunas[n]]
     if faltantes:
@@ -2539,6 +2665,9 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                 preco_unit = _to_float(_valor(row, colunas["preco_unitario"], 0))
                 valor_total = _to_float(_valor(row, colunas["valor_total"], 0))
                 moeda_str = decodificar_moeda(_valor(row, colunas["moeda"], None))
+                # v2.9.0: UM de compra observada nesta linha de PO (fonte da sugestão
+                # de `inventario.unidade_compra`). Capturada, não descartada.
+                unidade_obs = (str(_valor(row, colunas["unidade"], "") or "").strip() or None)
 
                 if prioridade_critica and item["importancia"] != "Parada de Linha":
                     conn.execute("UPDATE inventario SET importancia=?, data_atualizacao=? WHERE id=?",
@@ -2614,10 +2743,16 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                         if not existe:
                             conn.execute("""
                                 INSERT INTO precos_historico
-                                    (item_id,data,preco_unitario,moeda,fornecedor,numero_sc,numero_po,origem)
-                                VALUES (?,?,?,?,?,?,?,?)
-                            """, (item_id, data_abertura, preco_unit, moeda_str, fornecedor or None, numero_sc, numero_po, "SCM"))
+                                    (item_id,data,preco_unitario,moeda,fornecedor,numero_sc,numero_po,origem,unidade)
+                                VALUES (?,?,?,?,?,?,?,?,?)
+                            """, (item_id, data_abertura, preco_unit, moeda_str, fornecedor or None, numero_sc, numero_po, "SCM", unidade_obs))
                             stats["precos_capturados"] += 1
+                        elif unidade_obs:
+                            # v2.9.0: backfill idempotente da UM em linhas gravadas antes
+                            # desta versão (mesmo padrão do lead_time da v2.4.0).
+                            conn.execute(
+                                "UPDATE precos_historico SET unidade=? WHERE id=? AND unidade IS NULL",
+                                (unidade_obs, existe["id"]))
 
                 stats["linhas_importadas"] += 1
                 stats["rupturas"] += 1 if ruptura else 0
@@ -2647,6 +2782,7 @@ def ingerir_sc7_precos(df, nome_arquivo="Relatorio de SCs.xlsx"):
         "preco":      _coluna(df, ["Prc Unitario", "Preco Unitario", "Preço Unitário"]),
         "moeda":      _coluna(df, ["Moeda"]),
         "obs":        _coluna(df, ["Observacoes", "Observações"]),
+        "unidade":    _coluna(df, ["Unidade", "UM", "U.M.", "Um"]),  # v2.9.0: UM de compra
     }
     if not col["produto"] or not col["preco"]:
         return {"erro": "Colunas essenciais ausentes na aba SC7 (Produto/Prc Unitario)."}
@@ -2689,6 +2825,7 @@ def ingerir_sc7_precos(df, nome_arquivo="Relatorio de SCs.xlsx"):
                 pedido = str(_valor(row, col["pedido"], "") or "").strip()
                 data = _to_date_str(_valor(row, col["dt_emissao"], None))
                 moeda_str = decodificar_moeda(_valor(row, col["moeda"], None))
+                unidade_obs = (str(_valor(row, col["unidade"], "") or "").strip() or None)  # v2.9.0
                 obs = str(_valor(row, col["obs"], "") or "")
                 m = re.search(r"SC:\s*(\d+)", obs)
                 numero_sc = m.group(1) if m else None
@@ -2704,12 +2841,17 @@ def ingerir_sc7_precos(df, nome_arquivo="Relatorio de SCs.xlsx"):
                         conn.execute(
                             "UPDATE precos_historico SET lead_time_dias=? WHERE id=? AND lead_time_dias IS NULL",
                             (lead_row, existe["id"]))
+                    # v2.9.0: idem para a UM de compra (linhas gravadas antes desta versão).
+                    if unidade_obs:
+                        conn.execute(
+                            "UPDATE precos_historico SET unidade=? WHERE id=? AND unidade IS NULL",
+                            (unidade_obs, existe["id"]))
                     continue
                 conn.execute("""
                     INSERT INTO precos_historico
-                        (item_id,data,preco_unitario,moeda,fornecedor,numero_sc,numero_po,origem,lead_time_dias)
-                    VALUES (?,?,?,?,?,?,?,?,?)
-                """, (item_id, data, preco, moeda_str, None, numero_sc, pedido or None, "SC7", lead_row))
+                        (item_id,data,preco_unitario,moeda,fornecedor,numero_sc,numero_po,origem,lead_time_dias,unidade)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                """, (item_id, data, preco, moeda_str, None, numero_sc, pedido or None, "SC7", lead_row, unidade_obs))
                 stats["precos_inseridos"] += 1
 
             # Grava o Lead Time calculado (mediana) por item a partir do backfill SC7.

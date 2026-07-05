@@ -4,6 +4,8 @@ Apenas da nome unico a valores numericos que estavam hardcoded no codigo.
 NAO altera logica, enums, schema nem CHECK constraints -- os valores sao
 identicos aos que ja existiam; somente foram extraidos para um unico lugar."""
 
+import re
+
 # --- Status de estoque ---
 MARGEM_ATENCAO = 1.2           # limite da zona ATENCAO = estoque_minimo * 1.2
 FATOR_ESTOQUE_MAXIMO = 2       # estoque_maximo = estoque_minimo * 2
@@ -136,3 +138,66 @@ CC_GENERICOS = frozenset({
 
 # Rótulo quando não há CC significativo (todos os consumos do grupo são genéricos).
 CC_SUGERIDO_PADRAO = "(a definir)"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v2.9.0 — Conversão de Unidades (Fundação + Recebimento)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Fator de conversão padrão (no-op): quantas `unidade_compra` cabem em 1 `unidade`
+# de estoque. 1 = comprado e estocado na mesma unidade — comportamento idêntico ao
+# de hoje para os ~318 itens de UM única. O fator é um NÚMERO que o humano define
+# (generaliza volume/peso/embalagem sem precisar de densidade — resolve GL↔KG).
+# NUNCA é sobrescrito automaticamente: o sistema sugere, o gestor confirma.
+FATOR_CONVERSAO_PADRAO = 1.0
+
+# Unidades de compra sugeridas na curadoria (Gerenciar Itens). LIVRES — apenas
+# atalhos de UI; o gestor pode digitar qualquer valor. Complementam as unidades de
+# estoque com as unidades de fornecedor observadas nos dados reais (solventes em
+# L/KG/BB/BD, luvas em P=par, papel em PT…). Não entram em nenhum CHECK.
+UNIDADES_COMPRA_SUGERIDAS = (
+    "UN", "L", "LT", "KG", "G", "ML", "M", "P", "PAR", "PCS", "PT",
+    "BB", "BD", "BOMBONA", "CX", "RL", "PCT", "RM", "GL",
+)
+
+# Regex que extrai o fator de embalagem da DESCRIÇÃO do item (curadoria assistida).
+# Captura o número após "C/" / "COM" / "CONTÉM" seguido de uma unidade de volume/
+# peso/contagem, cobrindo os padrões reais do cadastro do Sr. Neidson:
+#   "BOMBONA C/ 5,0 LT"  → 5        "CX C/ 4000PCS"    → 4000
+#   "C/ 5L"              → 5        "CAIXA COM 12 UN"  → 12
+# Vírgula decimal PT-BR é aceita (5,0 → 5.0). SÓ sugere quando há padrão claro; do
+# contrário devolve None e o gestor preenche à mão (o sistema não inventa fator).
+REGEX_FATOR_EMBALAGEM = re.compile(
+    r"""C(?:/|OM|ONT[EÉ]M)\s*[.:]?\s*          # conector: C/  COM  CONTÉM/CONTEM
+        (\d+(?:[.,]\d+)?)                        # grupo 1: o número (5 | 5,0 | 4000)
+        \s*
+        (?:UNIDADES|UNIDADE|UNID|UND|UN|         # unidade de embalagem (longest-first)
+           PARES|PAR|PC?S|
+           LTS|LT|L|ML|
+           KGS|KG|GR|G|
+           MTS|MT|M|
+           RLS|RL|FLS|FL|PT|PCT)
+        \b""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def extrair_fator_embalagem(descricao):
+    """Fator de embalagem sugerido a partir da descrição (ou None se não houver
+    padrão claro). Ex.: 'BOMBONA C/ 5,0 LT' → 5.0; 'CX C/ 4000PCS' → 4000.0.
+    Espelha o estilo de `decodificar_moeda`: função pura, tolerante a None/erro."""
+    if not descricao:
+        return None
+    m = REGEX_FATOR_EMBALAGEM.search(str(descricao))
+    if not m:
+        return None
+    bruto = m.group(1)
+    # PT-BR: vírgula = separador decimal; ponto seguido de 3 dígitos = milhar.
+    if "," in bruto:
+        bruto = bruto.replace(".", "").replace(",", ".")
+    elif "." in bruto and len(bruto.split(".")[1]) == 3:
+        bruto = bruto.replace(".", "")
+    try:
+        valor = float(bruto)
+    except (ValueError, TypeError):
+        return None
+    return valor if valor > 0 else None
