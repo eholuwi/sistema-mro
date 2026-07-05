@@ -526,7 +526,7 @@ def criar_banco():
 
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.10.0")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 2.11.0")
 
 
 def _migrar(conn):

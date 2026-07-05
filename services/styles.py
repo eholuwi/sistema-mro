@@ -1,36 +1,44 @@
 import streamlit as st
 
-def inject_custom_css():
+from services.tema import paleta
+
+
+def inject_custom_css(pal=None):
+    """Injeta o CSS global da identidade Inventus Power, AGORA theme-aware (v2.11.0).
+
+    Recebe a paleta de `services.tema.paleta()` e emite as variáveis do `:root` a partir
+    dela; todo o restante do CSS usa `var(--...)`, então a MESMA folha serve para claro e
+    escuro — basta a paleta mudar. Antes o dark ficava preso por `!important`; agora o app
+    acompanha o tema ativo (☰ → Settings → Theme). `pal=None` → dark (compat)."""
+    if pal is None:
+        pal = paleta("dark")
+    c = pal["css"]
+
+    # Apenas o :root é gerado a partir da paleta; o corpo do CSS referencia as variáveis.
+    root = f"""
+        :root {{
+            --primary-orange: {c['accent']};
+            --primary-hover: {c['accent_hover']};
+            --bg-sidebar: {c['bg_sidebar']};
+            --bg-main: {c['bg_main']};
+            --bg-card: {c['bg_card']};
+            --bg-metric: {c['bg_metric']};
+            --bg-grid: {c['bg_grid']};
+            --bg-th: {c['bg_th']};
+            --bg-expander: {c['bg_expander']};
+            --bg-input-focus: {c['bg_input_foco']};
+            --border-color: {c['borda']};
+            --text-white: {c['texto']};
+            --text-gray: {c['texto_suave']};
+        }}
     """
-    Injeta CSS para identidade visual Inventus Power v2.0.1 - Dark Industrial Premium
-    
-    PRESERVADO:
-    - Sidebar Escura (#050505) com Ícones Laranjas e Métricas em Grid.
-    
-    RESTAURADO/ADICIONADO:
-    - Corpo Principal Dark (#0E0E0E).
-    - Cards de Métrica (st.metric) com fundo #121212, borda sutil e hover laranja.
-    - Botões Primários Laranjas (#F36F21).
-    - Inputs com fundo escuro (#1A1A1A) e foco laranja.
-    """
+
     st.markdown("""
     <style>
-        /* --- 1. FONTES E VARIÁVEIS GLOBAIS --- */
+        /* --- 1. FONTES --- */
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
-
-        :root {
-            --primary-orange: #F36F21;
-            --primary-hover: #d65a12;
-            --bg-sidebar: #050505;
-            --bg-main: #0E0E0E;
-            --bg-card: #1A1A1A;
-            --bg-metric: #121212; /* Cor específica para métricas */
-            --border-color: #2A2A2A;
-            --text-white: #FFFFFF;
-            --text-gray: #B3B3B3;
-        }
-
-        /* --- 2. SIDEBAR (MANTIDA CONFORME APROVADO) --- */
+    """ + root + """
+        /* --- 2. SIDEBAR --- */
         section[data-testid="stSidebar"] {
             background-color: var(--bg-sidebar) !important;
             border-right: 1px solid var(--border-color);
@@ -47,7 +55,7 @@ def inject_custom_css():
             align-items: center;
             gap: 10px;
         }
-        
+
         .sidebar-title span { color: var(--primary-orange); }
 
         div[data-testid="stSidebarNav"] ul li a {
@@ -62,12 +70,12 @@ def inject_custom_css():
         }
 
         div[data-testid="stSidebarNav"] ul li a:hover {
-            background-color: #1A1A1A !important;
+            background-color: var(--bg-card) !important;
             color: var(--text-white) !important;
         }
 
         div[data-testid="stSidebarNav"] ul li a[aria-current="page"] {
-            background-color: #1A1A1A !important;
+            background-color: var(--bg-card) !important;
             color: var(--text-white) !important;
             border-left: 4px solid var(--primary-orange);
             font-weight: 600;
@@ -80,7 +88,7 @@ def inject_custom_css():
             margin-top: 20px;
             margin-bottom: 20px;
             padding: 10px;
-            background-color: #0A0A0A;
+            background-color: var(--bg-grid);
             border-radius: 8px;
             border: 1px solid var(--border-color);
         }
@@ -103,16 +111,16 @@ def inject_custom_css():
         .user-info h4 { margin: 0; font-size: 0.95rem; color: var(--text-white); font-weight: 600; }
         .user-info p { margin: 0; font-size: 0.8rem; color: var(--primary-orange); font-weight: 500; }
 
-        section[data-testid="stSidebar"] input, 
+        section[data-testid="stSidebar"] input,
         section[data-testid="stSidebar"] select,
         section[data-testid="stSidebar"] textarea {
-            background-color: #1A1A1A !important;
+            background-color: var(--bg-card) !important;
             border: 1px solid var(--border-color) !important;
-            color: white !important;
+            color: var(--text-white) !important;
         }
 
         /* --- 3. CORPO PRINCIPAL (MAIN) --- */
-        
+
         .stApp {
             background-color: var(--bg-main);
             color: var(--text-white);
@@ -122,18 +130,17 @@ def inject_custom_css():
         h1, h2, h3, h4, h5, h6 { color: var(--text-white) !important; font-weight: 700; }
         p, label, div, span, li { color: var(--text-gray); }
 
-        /* ✅ MÉTRICAS (ST.METRIC) ESTILIZADAS COMO CARDS */
+        /* MÉTRICAS (ST.METRIC) COMO CARDS */
         [data-testid="stMetric"] {
-            background-color: var(--bg-metric) !important; /* #121212 */
+            background-color: var(--bg-metric) !important;
             padding: 15px !important;
             border-radius: 8px !important;
-            border: 1px solid var(--border-color) !important; /* Borda sutil */
+            border: 1px solid var(--border-color) !important;
             text-align: center;
             transition: all 0.2s ease !important;
             box-shadow: 0 2px 4px rgba(0,0,0,0.2);
         }
 
-        /* Hover da Métrica: Borda Laranja e leve elevação */
         [data-testid="stMetric"]:hover {
             border-color: var(--primary-orange) !important;
             transform: translateY(-2px);
@@ -160,25 +167,24 @@ def inject_custom_css():
             font-weight: 600;
         }
 
-        /* ✅ BOTÕES PRIMÁRIOS (ESTILO OUTLINE/CONTORNO) */
+        /* BOTÕES PRIMÁRIOS (OUTLINE LARANJA) */
         div.stButton > button[kind="primary"] {
-            background-color: transparent !important; /* Fundo transparente */
-            color: var(--primary-orange) !important; /* Letra Laranja */
-            border: 2px solid var(--primary-orange) !important; /* Borda Laranja */
+            background-color: transparent !important;
+            color: var(--primary-orange) !important;
+            border: 2px solid var(--primary-orange) !important;
             border-radius: 6px !important;
             font-weight: 700 !important;
             padding: 0.5rem 1.5rem !important;
-            transition: all 0.3s ease !important; /* Transição suave */
+            transition: all 0.3s ease !important;
             box-shadow: none !important;
         }
 
-        /* HOVER: Fundo Laranja Sólido, Letra Branca */
         div.stButton > button[kind="primary"]:hover {
             background-color: var(--primary-orange) !important;
             color: #FFFFFF !important;
             border-color: var(--primary-orange) !important;
             transform: translateY(-2px) !important;
-            box-shadow: 0 4px 12px rgba(243, 111, 33, 0.4) !important; /* Sombra laranja ao passar o mouse */
+            box-shadow: 0 4px 12px rgba(243, 111, 33, 0.4) !important;
         }
 
         div.stButton > button[kind="secondary"] {
@@ -193,14 +199,14 @@ def inject_custom_css():
             color: var(--text-white) !important;
         }
 
-        /* ✅ INPUTS, SELECTS E TEXTAREAS NO CORPO PRINCIPAL */
+        /* INPUTS, SELECTS E TEXTAREAS */
         .stTextInput > div > div > input,
         .stNumberInput > div > div > input,
         .stSelectbox > div > div > div,
         .stTextArea > div > div > textarea,
         .stDateInput > div > div > input,
         .stMultiSelect > div > div > div {
-            background-color: var(--bg-card) !important; /* #1A1A1A */
+            background-color: var(--bg-card) !important;
             border: 1px solid var(--border-color) !important;
             color: var(--text-white) !important;
             border-radius: 6px !important;
@@ -215,12 +221,12 @@ def inject_custom_css():
         .stMultiSelect > div > div > div:focus-within {
             border-color: var(--primary-orange) !important;
             box-shadow: 0 0 0 1px var(--primary-orange) !important;
-            background-color: #222222 !important;
+            background-color: var(--bg-input-focus) !important;
         }
 
-        .stTextInput label, 
-        .stNumberInput label, 
-        .stSelectbox label, 
+        .stTextInput label,
+        .stNumberInput label,
+        .stSelectbox label,
         .stTextArea label,
         .stDateInput label,
         .stMultiSelect label {
@@ -238,13 +244,13 @@ def inject_custom_css():
             border-radius: 8px !important;
             overflow: hidden !important;
         }
-        
+
         .dataframe th {
-            background-color: #252525 !important;
+            background-color: var(--bg-th) !important;
             color: var(--text-white) !important;
             border-bottom: 2px solid var(--border-color) !important;
         }
-        
+
         .dataframe td {
             border-bottom: 1px solid var(--border-color) !important;
             color: var(--text-gray) !important;
@@ -257,9 +263,9 @@ def inject_custom_css():
             border: 1px solid var(--border-color) !important;
             border-radius: 6px !important;
         }
-        
+
         .streamlit-expanderContent {
-            background-color: #121212 !important;
+            background-color: var(--bg-expander) !important;
             border: 1px solid var(--border-color) !important;
             border-top: none !important;
             border-radius: 0 0 6px 6px !important;

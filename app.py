@@ -5,6 +5,7 @@ import json, io, os, sys, time, urllib.parse
 from streamlit_option_menu import option_menu
 from datetime import date, datetime
 from services.styles import inject_custom_css
+from services.tema import paleta
 from services.logging_config import setup_logging
 from services.constants import (
     PREVISAO_RUPTURA_SEM_RISCO, ORDENACAO_RUPTURA_INFINITO,
@@ -43,6 +44,7 @@ from services.planejamento import (
 from services.ficha import (
     montar_ficha_360, salvar_imagem_item, remover_imagem_item,
 )
+from services.ajuda_conteudo import GUIAS_PERSONA, MANUAL
 
 setup_logging()
 criar_banco()
@@ -54,9 +56,24 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 2.10.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 2.11.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
 
-inject_custom_css()
+
+def tema_atual():
+    """Tema escolhido pelo usuário ('light'/'dark'), lido da URL (?tema=) para persistir
+    ao recarregar. Padrão CLARO (branco). O Streamlit 1.57 não troca o tema por código, então
+    o app o controla: um botão na sidebar grava `?tema=` e o CSS/paleta reaplica tudo."""
+    try:
+        v = st.query_params.get("tema", "light")
+    except Exception:
+        v = "light"
+    return "dark" if v == "dark" else "light"
+
+
+# Paleta única do tema escolhido — consumida pelo CSS global, pelo option_menu e pelos
+# gráficos, para tudo acompanhar claro/escuro (v2.11.0).
+PAL = paleta(tema_atual())
+inject_custom_css(PAL)
 
 IMPORTANCIAS = ["Parada de Linha","Importante","Admin"]
 # tipo_material agora é livre (v2.1.0); a lista abaixo são apenas sugestões e inclui
@@ -110,26 +127,21 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 2.10.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 2.11.0</span>
     </div>
     """, unsafe_allow_html=True)
 
     # 2. Navegação (Option Menu)
 
-    opcoes_limpas = ["Dashboard", "Inventário", "Ficha 360", "Gerenciar Itens", "Movimentações", "Requisição", "Compras (SC)", "Feedback", "Configurações"]
+    opcoes_limpas = ["Dashboard", "Inventário", "Ficha 360", "Gerenciar Itens", "Movimentações", "Requisição", "Compras (SC)", "Ajuda", "Configurações"]
 
     escolha_limpa = option_menu(
         menu_title=None,
         options=opcoes_limpas,
-        icons=["bar-chart-fill", "box-seam", "card-image", "plus-circle", "arrow-repeat", "clipboard-check", "receipt", "chat-dots", "gear"],
+        icons=["bar-chart-fill", "box-seam", "card-image", "plus-circle", "arrow-repeat", "clipboard-check", "receipt", "question-circle", "gear"],
         menu_icon="cast",
         default_index=0,
-        styles={
-            "container": {"padding": "0!important", "background-color": "#050505"},
-            "icon": {"color": "#F36F21", "font-size": "18px"}, 
-            "nav-link": {"font-size": "14px", "text-align": "left", "margin": "0px", "--hover-color": "#1A1A1A", "color": "#B3B3B3"},
-            "nav-link-selected": {"background-color": "#1A1A1A", "color": "#FFFFFF", "border-left": "4px solid #F36F21"},
-        }
+        styles=PAL["option_menu_styles"],
     )
 
     # Reconstrói a variável 'pagina' para compatibilidade com seus IFs
@@ -139,8 +151,20 @@ with st.sidebar:
              f"➕ {escolha_limpa}" if escolha_limpa == "Gerenciar Itens" else \
              f"🔄 {escolha_limpa}" if escolha_limpa == "Movimentações" else \
              f"🧾 {escolha_limpa}" if escolha_limpa == "Compras (SC)" else \
-             f"💬 {escolha_limpa}" if escolha_limpa == "Feedback" else \
+             f"❓ {escolha_limpa}" if escolha_limpa == "Ajuda" else \
              f"⚙️ {escolha_limpa}"
+
+    # 2b. Tema (claro/escuro) — controlado pelo app e lembrado na URL (?tema=).
+    # O Streamlit 1.57 não troca o tema por código; aqui gravamos a escolha e o topo do
+    # script reaplica a paleta. Padrão claro. (Tabelas seguem o tema base do config.)
+    _op_tema = {"☀️ Claro": "light", "🌙 Escuro": "dark"}
+    _lbl_atual = "🌙 Escuro" if PAL["tipo"] == "dark" else "☀️ Claro"
+    _escolha_tema = st.radio("Tema", list(_op_tema.keys()),
+                             index=list(_op_tema.keys()).index(_lbl_atual),
+                             horizontal=True, key="sb_tema")
+    if _op_tema[_escolha_tema] != PAL["tipo"]:
+        st.query_params["tema"] = _op_tema[_escolha_tema]
+        st.rerun()
 
     st.markdown("---")
 
@@ -285,37 +309,37 @@ if pagina == "📊 Dashboard":
                 x=df_abc['total_saida'],
                 orientation='h',
                 marker=dict(
-                    color='#F36F21', # Laranja Inventus
-                    line=dict(width=1, color='#0E0E0E'), # Borda escura para contraste
+                    color=PAL["accent"], # Laranja Inventus
+                    line=dict(width=1, color=PAL["accent_borda"]), # borda p/ contraste (tema)
                     # corner_radius removido para evitar erro de compatibilidade
                 ),
                 text=df_abc['total_saida'].apply(lambda x: f'{int(x)} un'),
                 textposition='outside',
-                textfont=dict(size=11, family="Inter", color="#B3B3B3"),
+                textfont=dict(size=11, family="Inter", color=PAL["texto_suave"]),
                 hoverinfo='text',
-                hovertext=[f"<b>{pn}</b><br>{nome}<br>Consumo: {qtd} un" 
+                hovertext=[f"<b>{pn}</b><br>{nome}<br>Consumo: {qtd} un"
                            for pn, nome, qtd in zip(df_abc['part_number'], df_abc['nome_item'], df_abc['total_saida'])]
             )])
 
-            # Layout Premium Dark
+            # Layout — acompanha o tema ativo (claro/escuro) via PAL
             fig.update_layout(
-                template="plotly_dark",
-                font=dict(family="Inter", size=12, color="#FFFFFF"),
+                template=PAL["plotly_template"],
+                font=dict(family="Inter", size=12, color=PAL["texto"]),
                 margin=dict(l=0, r=20, t=10, b=0),
                 height=320,
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor=PAL["paper_bg"],
+                plot_bgcolor=PAL["plot_bg"],
                 showlegend=False,
                 xaxis=dict(
                     showgrid=False,
                     zeroline=False,
-                    tickfont=dict(color="#B3B3B3"),
+                    tickfont=dict(color=PAL["texto_suave"]),
                     title_text="Quantidade Consumida (Un)",
-                    title_font=dict(size=12, color="#B3B3B3")
+                    title_font=dict(size=12, color=PAL["texto_suave"])
                 ),
                 yaxis=dict(
                     showgrid=False,
-                    tickfont=dict(size=11, color="#FFFFFF", family="Inter"),
+                    tickfont=dict(size=11, color=PAL["texto"], family="Inter"),
                     categoryorder='total ascending'
                 )
             )
@@ -1307,10 +1331,10 @@ elif pagina == "📋 Requisição":
             _, item_req_add, _ = sel_material("Pesquise o material para requisitar", "sel_req_add")
             
             if item_req_add:
-                # Card de disponibilidade rápida
+                # Card de disponibilidade rápida (cores acompanham o tema via PAL)
                 st.markdown(f"""
-                    <div style="border: 1px solid #3e424b; padding: 10px; border-radius: 5px; background-color: #1e2130; margin-bottom: 10px;">
-                        <span style="color: #F7941E; font-weight: bold;">DISPONÍVEL:</span> {item_req_add.get('estoque_atual',0)} {item_req_add.get('unidade','UN')}
+                    <div style="border: 1px solid {PAL['painel_borda']}; padding: 10px; border-radius: 5px; background-color: {PAL['painel_bg']}; margin-bottom: 10px;">
+                        <span style="color: {PAL['accent']}; font-weight: bold;">DISPONÍVEL:</span> {item_req_add.get('estoque_atual',0)} {item_req_add.get('unidade','UN')}
                     </div>
                 """, unsafe_allow_html=True)
 
@@ -2673,11 +2697,51 @@ elif pagina == "📇 Ficha 360":
 # ══════════════════════════════════════════════════════════════════════════════
 # FEEDBACK / SUGESTÕES (Item 3 / v2.1.0)
 # ══════════════════════════════════════════════════════════════════════════════
-elif pagina == "💬 Feedback":
-    st.title("💬 Sugestões e Feedback")
-    st.caption("Ajude a evoluir o Sistema MRO: registre sugestões, problemas e ideias.")
+elif pagina == "❓ Ajuda":
+    st.title("❓ Central de Ajuda")
+    st.caption("Guias por perfil, o **Manual do Sistema** (tela a tela) e o canal de feedback. "
+               "💡 Tema claro/escuro: botão **Tema** na barra lateral.")
 
-    tab_enviar, tab_gerenciar = st.tabs(["✍️ Enviar Feedback", "🗂️ Backlog (Gestão)"])
+    tab_inicio, tab_manual, tab_enviar, tab_gerenciar = st.tabs(
+        ["🚀 Começar aqui", "📚 Manual do Sistema", "✍️ Enviar Feedback", "🗂️ Backlog"])
+
+    with tab_inicio:
+        st.caption("Guias rápidos por perfil. Para o detalhe de cada botão/card/gráfico, veja a "
+                   "aba **📚 Manual do Sistema**.")
+        _perfil = st.radio("Qual é o seu perfil?",
+                           ["📖 Assistente de Materiais (almoxarifado)", "🛒 Comprador"],
+                           horizontal=True, key="ajuda_perfil")
+        _chave = "assistente" if _perfil.startswith("📖") else "comprador"
+        st.markdown(GUIAS_PERSONA[_chave])
+
+    with tab_manual:
+        st.caption("Explica **cada elemento** da interface: para que serve · com base em quê · "
+                   "como o sistema calcula. Ligue o modo abaixo para uma explicação bem simples.")
+        _eli5 = st.toggle("🧒 Explicar como para uma criança", value=False, key="ajuda_eli5",
+                          help="Reescreve tudo em linguagem simples — ótimo para entender os "
+                               "cálculos e os dashboards.")
+        _busca_manual = st.text_input("🔎 Filtrar por palavra (opcional)", key="ajuda_busca",
+                                      placeholder="ex.: cobertura, ABC, conversão, guarda-chuva")
+        _b = (_busca_manual or "").strip().lower()
+        for _sec in MANUAL:
+            _itens = _sec["itens"]
+            if _b:
+                _itens = [it for it in _itens
+                          if _b in (it["nome"] + it["para_que"] + it["base"]
+                                    + it["como"] + it["crianca"] + _sec["tela"]).lower()]
+            if not _itens:
+                continue
+            st.subheader(_sec["tela"])
+            if _sec.get("intro"):
+                st.caption(_sec["intro"])
+            for _it in _itens:
+                with st.expander(_it["nome"]):
+                    if _eli5:
+                        st.markdown(f"🧒 {_it['crianca']}")
+                    else:
+                        st.markdown(f"**Para que serve:** {_it['para_que']}")
+                        st.markdown(f"**Com base em quê:** {_it['base']}")
+                        st.markdown(f"**Como o sistema faz:** {_it['como']}")
 
     with tab_enviar:
         with st.container(border=True):
@@ -2757,6 +2821,18 @@ elif pagina == "💬 Feedback":
 elif pagina == "⚙️ Configurações":
     st.title("⚙️ Configurações do Sistema")
     st.caption("Gestão de Listas Mestras e Parâmetros Globais.")
+
+    # ── Aparência / Tema (v2.11.0) ────────────────────────────────────────────
+    with st.container(border=True):
+        st.subheader("🎨 Aparência")
+        _tema_txt = "🌙 Escuro" if PAL["tipo"] == "dark" else "☀️ Claro"
+        st.markdown(f"**Tema atual:** {_tema_txt}  ·  **Padrão:** ☀️ Claro")
+        st.caption("Para alternar entre **claro** e **escuro**, use o botão **Tema** na **barra "
+                   "lateral** (abaixo do menu). A escolha é lembrada ao recarregar (fica na URL). "
+                   "O fundo, os textos, o menu e os gráficos acompanham. ⚠️ Observação: no modo "
+                   "escuro, as **tabelas** podem continuar claras — é uma limitação do Streamlit "
+                   "(as grades seguem o tema base); no modo claro fica tudo consistente.")
+        st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Importação da base do Neidson — Tipo, Mínimo, Máximo, Lead Time (Item 1) ──
     with st.container(border=True):
