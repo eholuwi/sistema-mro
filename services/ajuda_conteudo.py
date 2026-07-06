@@ -18,48 +18,48 @@ renderiza estas estruturas.
 
 GUIAS_PERSONA = {
     "assistente": """
-### 📖 Assistente de Materiais (Almoxarifado)
+### :material/menu_book: Assistente de Materiais (Almoxarifado)
 
 Você cuida do **físico**: dá baixa, recebe, confere e consulta os materiais. O sistema é
 seu **apoio** — a base do Sr. Neidson (mínimo/máximo/categoria) fica intocada.
 
-**1. Dar baixa — `📋 Requisição`**
+**1. Dar baixa — `:material/assignment: Requisição`**
 - Preencha o cabeçalho (setor, emitente, centro de custo).
 - Pesquise o item (o card mostra o **DISPONÍVEL**), informe *Qtd Solicitada/Atendida* e
   **Adicione à lista**; ao final, **registre a requisição**.
 - Isso é o **consumo real** — alimenta cobertura, giro e o padrão de demanda.
 
-**2. Receber de uma SC — `🧾 Compras (SC)` → `📦 Receber Material`**
+**2. Receber de uma SC — `:material/receipt_long: Compras (SC)` → `:material/inventory_2: Receber Material`**
 - Informe a quantidade **na unidade de compra** (ex.: litros). Se houver **conversão**, o
   sistema mostra o preview (ex.: *5 L ÷ 5 = +1 GL*) e soma já convertido.
-- Viu **⚠️ revisar unidade**? Avise o comprador para cadastrar o fator.
+- Viu **:material/warning: revisar unidade**? Avise o comprador para cadastrar o fator.
 
-**3. Contagem física — `📋 Inventário` → `Realizar Contagem Física`**
+**3. Contagem física — `:material/assignment: Inventário` → `Realizar Contagem Física`**
 - Informe a quantidade real e o local; a diferença vira ajuste (não conta como consumo).
 
-**4. Consultar — `📇 Ficha 360`** — tudo do item numa tela.
+**4. Consultar — `:material/badge: Ficha 360`** — tudo do item numa tela.
 
 **5. Status:** 🔴 Comprar · 🟡 Atenção · 🟢 OK · ⚪ Sem Movimentação (nunca consumido).
 """,
     "comprador": """
-### 🛒 Comprador
+### :material/shopping_cart: Comprador
 
 Você **decide e cria as SCs**. O sistema **recomenda**, você confirma — nunca o contrário.
 
-**1. O que repor — `🧾 Compras (SC)` → `🧠 Assistente de Reposição`**
+**1. O que repor — `:material/receipt_long: Compras (SC)` → `:material/psychology: Assistente de Reposição`**
 - Fila **priorizada** (🔴/🟠/🟡) com **"Comprar até DD/MM"** por item.
 - **SCs sugeridas agrupadas** (natureza + centro de custo) — crie multi-item em 1 clique.
 
 **2. Cotar — abas de SC e Fornecedores** — melhor fornecedor (menor último preço), lead
 time e **rascunho de e-mail** de cotação.
 
-**3. Curar conversão — `➕ Gerenciar Itens`** — quando compra em unidade diferente da de
+**3. Curar conversão — `:material/add: Gerenciar Itens`** — quando compra em unidade diferente da de
 estoque (ex.: GL × L), cadastre a **unidade de compra** e o **fator** (o sistema sugere).
 
-**4. Ler a demanda — `📇 Ficha 360` / `📋 Inventário`** — **Padrão de demanda** e **XYZ**
+**4. Ler a demanda — `:material/badge: Ficha 360` / `:material/assignment: Inventário`** — **Padrão de demanda** e **XYZ**
 ajudam a escolher a política de compra. É **diagnóstico**, não muda a lista sozinho.
 
-**5. Atualizar dados — `📥 Importar Relatório de SCs`** — atualiza SCs, preços, fornecedores
+**5. Atualizar dados — `:material/download: Importar Relatório de SCs`** — atualiza SCs, preços, fornecedores
 e unidades (backup automático).
 
 > **Princípio:** o sistema é **assistente, não piloto automático** — toda SC é sua decisão.
@@ -77,12 +77,12 @@ def _item(nome, para_que, base, como, crianca):
 
 MANUAL = [
     {
-        "tela": "📊 Dashboard",
+        "tela": ":material/bar_chart: Dashboard",
         "intro": "A tela de abertura, agora com um **seletor de público** no topo: cada perfil "
-                 "(👤 Comprador · 📊 Gestão · 🏛️ Diretoria) vê só o que importa para o seu trabalho.",
+                 "(:material/person: Comprador · :material/bar_chart: Gestão · :material/account_balance: Diretoria) vê só o que importa para o seu trabalho.",
         "itens": [
             _item(
-                "Seletor de visão (👤 Comprador · 📊 Gestão · 🏛️ Diretoria)",
+                "Seletor de visão (:material/person: Comprador · :material/bar_chart: Gestão · :material/account_balance: Diretoria)",
                 "Trocar o painel inteiro conforme quem está olhando — sem poluir o menu lateral.",
                 "A sua escolha no seletor; o conteúdo é montado só para aquele público.",
                 "Ao clicar num público, o sistema monta os cartões e gráficos daquela visão. "
@@ -92,7 +92,7 @@ MANUAL = [
                 "certo para quem está assistindo.",
             ),
             _item(
-                "Visão 👤 Comprador — 'o que fazer agora'",
+                "Visão :material/person: Comprador — 'o que fazer agora'",
                 "Dar ao comprador a lista de ação do dia: o que está crítico, atrasado, em ruptura, "
                 "a fila de reposição e as SCs já agrupadas.",
                 "A fila do Assistente de Reposição, as SCs abertas e as saídas reais.",
@@ -104,7 +104,7 @@ MANUAL = [
                 "isso já acabou' — tudo mastigado, é só decidir.",
             ),
             _item(
-                "Visão 📊 Gestão — cartões de saúde (Nível de Serviço · Cobertura · Valor · Giro)",
+                "Visão :material/bar_chart: Gestão — cartões de saúde (Nível de Serviço · Cobertura · Valor · Giro)",
                 "Mostrar a saúde geral da operação em 4 números.",
                 "A lista de itens (estoque, cobertura, consumo) e a valoração do estoque.",
                 "**Nível de Serviço de Estoque** = % dos itens com consumo real que estão fora de "
@@ -116,7 +116,7 @@ MANUAL = [
                 "quantos dias dá pra durar, quanto dinheiro está parado e se as coisas giram.",
             ),
             _item(
-                "Visão 📊 Gestão — distribuição, Top consumidores, setores e padrões de demanda",
+                "Visão :material/bar_chart: Gestão — distribuição, Top consumidores, setores e padrões de demanda",
                 "Detalhar a saúde: quantos itens em cada status, quem mais consome e como a "
                 "demanda se comporta.",
                 "As saídas reais (por requisição), os preços de referência e as requisições.",
@@ -129,7 +129,7 @@ MANUAL = [
                 "quais itens saem sempre igual ou 'do nada'.",
             ),
             _item(
-                "Visão 🏛️ Diretoria — Valor imobilizado · Evolução · ABC por valor · Savings",
+                "Visão :material/account_balance: Diretoria — Valor imobilizado · Evolução · ABC por valor · Savings",
                 "Dar à direção o retrato financeiro do estoque: quanto está parado, como evoluiu e "
                 "onde o dinheiro está concentrado.",
                 "A valoração do estoque, as fotos diárias (snapshots) e o consumo valorado.",
@@ -145,7 +145,7 @@ MANUAL = [
         ],
     },
     {
-        "tela": "📋 Inventário",
+        "tela": ":material/assignment: Inventário",
         "intro": "A lista completa dos materiais, com filtros, status e a contagem física.",
         "itens": [
             _item(
@@ -168,12 +168,12 @@ MANUAL = [
             ),
             _item(
                 "Colunas 'Un?', 'Demanda' e 'XYZ'",
-                "Sinalizar unidade a revisar (⚠️) e mostrar o padrão de demanda e a variabilidade.",
+                "Sinalizar unidade a revisar (:material/warning:) e mostrar o padrão de demanda e a variabilidade.",
                 "'Un?' vem da unidade de compra observada nos pedidos vs. a de estoque; 'Demanda' "
                 "e 'XYZ' vêm das saídas reais.",
-                "**Un? ⚠️** = comprado em unidade diferente da de estoque e ainda sem fator de "
+                "**Un? :material/warning:** = comprado em unidade diferente da de estoque e ainda sem fator de "
                 "conversão. **Demanda** e **XYZ** são diagnósticos (detalhe na Ficha 360).",
-                "Um alerta '⚠️' que diz 'confere a unidade desse aqui', e duas etiquetas que "
+                "Um alerta ':material/warning:' que diz 'confere a unidade desse aqui', e duas etiquetas que "
                 "dizem se o item é fácil ou difícil de prever.",
             ),
             _item(
@@ -195,7 +195,7 @@ MANUAL = [
         ],
     },
     {
-        "tela": "📇 Ficha 360",
+        "tela": ":material/badge: Ficha 360",
         "intro": "Toda a vida de um material numa tela só (somente leitura, exceto a imagem).",
         "itens": [
             _item(
@@ -251,7 +251,7 @@ MANUAL = [
         ],
     },
     {
-        "tela": "📋 Requisição",
+        "tela": ":material/assignment: Requisição",
         "intro": "Onde o almoxarifado dá baixa (entrega material para quem pediu).",
         "itens": [
             _item(
@@ -282,7 +282,7 @@ MANUAL = [
         ],
     },
     {
-        "tela": "🧾 Compras (SC)",
+        "tela": ":material/receipt_long: Compras (SC)",
         "intro": "O centro do comprador: solicitações, reposição, fornecedores, recebimento e importação.",
         "itens": [
             _item(
@@ -333,7 +333,7 @@ MANUAL = [
         ],
     },
     {
-        "tela": "➕ Gerenciar Itens",
+        "tela": ":material/add: Gerenciar Itens",
         "intro": "Cadastro e edição de itens, incluindo a curadoria da conversão de unidades.",
         "itens": [
             _item(
@@ -358,7 +358,7 @@ MANUAL = [
         ],
     },
     {
-        "tela": "🔄 Movimentações",
+        "tela": ":material/sync: Movimentações",
         "intro": "O histórico e as análises de tudo que entrou e saiu.",
         "itens": [
             _item(
@@ -373,11 +373,11 @@ MANUAL = [
         ],
     },
     {
-        "tela": "⚙️ Configurações",
+        "tela": ":material/settings: Configurações",
         "intro": "Aparência, importação da base do Neidson e listas mestras.",
         "itens": [
             _item(
-                "🎨 Aparência (tema claro/escuro)",
+                ":material/palette: Aparência (tema claro/escuro)",
                 "Escolher entre o visual escuro (padrão) e o claro.",
                 "A sua escolha, guardada na URL (?tema=).",
                 "O botão da **barra lateral** troca o tema; fundo, textos, menu e gráficos "

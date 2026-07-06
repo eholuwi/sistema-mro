@@ -10,6 +10,7 @@ from services.logging_config import setup_logging
 from services.constants import (
     PREVISAO_RUPTURA_SEM_RISCO, ORDENACAO_RUPTURA_INFINITO,
     AGING_ALERTA_DIAS, AGING_CRITICO_DIAS, RUPTURA_CRISE_DIAS,
+    PADROES_DEMANDA,
 )
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -20,6 +21,7 @@ from services.db_functions import (
     criar_sc, atualizar_sc, registrar_recebimento_sc, listar_scs,
     listar_itens_sc, buscar_scs_por_item, exportar_inventario_df,
     listar_valores, adicionar_valor_lista, remover_valor_lista,
+    listar_setores_conhecidos, sincronizar_setores_config,
     criar_requisicao, listar_requisicoes, listar_itens_requisicao,
     importar_solicitacoes_protheus, listar_recebimentos_sc,
     atualizar_localizacao_e_inventariar, atualizar_item_inventario,
@@ -60,7 +62,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 3.0.0", page_icon="🔧", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 3.0.1", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -131,7 +133,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 3.0.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 3.0.1</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -148,21 +150,14 @@ with st.sidebar:
         styles=PAL["option_menu_styles"],
     )
 
-    # Reconstrói a variável 'pagina' para compatibilidade com seus IFs
-    pagina = f"📊 {escolha_limpa}" if escolha_limpa == "Dashboard" else \
-             f"📋 {escolha_limpa}" if escolha_limpa in ["Inventário", "Requisição"] else \
-             f"📇 {escolha_limpa}" if escolha_limpa == "Ficha 360" else \
-             f"➕ {escolha_limpa}" if escolha_limpa == "Gerenciar Itens" else \
-             f"🔄 {escolha_limpa}" if escolha_limpa == "Movimentações" else \
-             f"🧾 {escolha_limpa}" if escolha_limpa == "Compras (SC)" else \
-             f"❓ {escolha_limpa}" if escolha_limpa == "Ajuda" else \
-             f"⚙️ {escolha_limpa}"
+    # 'pagina' = nome limpo escolhido no menu (o próprio option_menu já mostra o ícone).
+    pagina = escolha_limpa
 
     # 2b. Tema (claro/escuro) — controlado pelo app e lembrado na URL (?tema=).
     # O Streamlit 1.57 não troca o tema por código; aqui gravamos a escolha e o topo do
     # script reaplica a paleta. Padrão escuro. (Tabelas seguem o tema base do config.)
-    _op_tema = {"☀️ Claro": "light", "🌙 Escuro": "dark"}
-    _lbl_atual = "🌙 Escuro" if PAL["tipo"] == "dark" else "☀️ Claro"
+    _op_tema = {"Claro": "light", "Escuro": "dark"}
+    _lbl_atual = "Escuro" if PAL["tipo"] == "dark" else "Claro"
     _escolha_tema = st.radio("Tema", list(_op_tema.keys()),
                              index=list(_op_tema.keys()).index(_lbl_atual),
                              horizontal=True, key="sb_tema")
@@ -242,16 +237,16 @@ def _dash_fmt_brl(v):
 
 
 def _render_dash_comprador(vm):
-    """👤 Comprador — o que fazer agora: KPIs de ação, fila priorizada, SCs sugeridas, aging."""
+    """:material/person: Comprador — o que fazer agora: KPIs de ação, fila priorizada, SCs sugeridas, aging."""
     k = vm["kpis"]
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("🔴 Críticos", k["criticos"],
               help="Itens tier-0 na fila de reposição (abaixo do ponto de pedido, com consumo real).")
-    c2.metric("⏰ Comprar até atrasados", k["comprar_atrasados"], delta_color="inverse",
+    c2.metric(":material/alarm: Comprar até atrasados", k["comprar_atrasados"], delta_color="inverse",
               help="Sugestões cujo prazo-limite de compra (cobertura − lead time − 15d) já passou.")
-    c3.metric("🧾 SCs abertas", k["scs_abertas"],
+    c3.metric(":material/receipt_long: SCs abertas", k["scs_abertas"],
               help="Solicitações de compra com saldo pendente (não recebidas/canceladas).")
-    c4.metric("🚨 Rupturas", k["rupturas"], delta_color="inverse",
+    c4.metric(":material/emergency: Rupturas", k["rupturas"], delta_color="inverse",
               help="Itens com consumo real e estoque físico = 0 (parada iminente).")
 
     st.markdown("---")
@@ -259,8 +254,8 @@ def _render_dash_comprador(vm):
 
     with col_fila:
         with st.container(border=True):
-            st.markdown(f"#### 🧠 Fila de reposição — top {len(vm['fila'])} de {vm['total_fila']}")
-            st.caption("Priorizada por urgência. Ação completa em **Compras (SC) → 🧠 Assistente de Reposição**.")
+            st.markdown(f"#### :material/psychology: Fila de reposição — top {len(vm['fila'])} de {vm['total_fila']}")
+            st.caption("Priorizada por urgência. Ação completa em **Compras (SC) → :material/psychology: Assistente de Reposição**.")
             if vm["fila"]:
                 df = pd.DataFrame([{
                     "Prio": s.get("prioridade"),
@@ -274,11 +269,11 @@ def _render_dash_comprador(vm):
                 } for s in vm["fila"]])
                 st.dataframe(df, width="stretch", hide_index=True, height=400)
             else:
-                st.success("Nenhuma reposição pendente no momento. 🎉")
+                st.success("Nenhuma reposição pendente no momento. :material/celebration:")
 
     with col_lado:
         with st.container(border=True):
-            st.markdown("#### 📦 SCs sugeridas (agrupadas)")
+            st.markdown("#### :material/inventory_2: SCs sugeridas (agrupadas)")
             st.caption("Itens já agrupados por natureza — de 'mão beijada' para o Protheus.")
             if vm["scs_sugeridas"]:
                 for g in vm["scs_sugeridas"][:6]:
@@ -289,7 +284,7 @@ def _render_dash_comprador(vm):
                 st.caption("Sem SCs sugeridas no momento.")
 
         with st.container(border=True):
-            st.markdown("#### ⏱️ Aging das SCs abertas")
+            st.markdown("#### :material/timer: Aging das SCs abertas")
             ag = vm["aging"]
             a1, a2, a3 = st.columns(3)
             a1.metric("0–7 dias", ag["0-7"])
@@ -301,26 +296,26 @@ def _render_dash_comprador(vm):
 
 
 def _render_dash_gestao(vm):
-    """📊 Gestão — saúde da operação: serviço, cobertura, valor, giro, status e demanda."""
+    """:material/bar_chart: Gestão — saúde da operação: serviço, cobertura, valor, giro, status e demanda."""
     k = vm["kpis"]
     c1, c2, c3, c4 = st.columns(4)
     ns = k["nivel_servico"]
-    c1.metric("🎯 Nível de Serviço", f"{ns}%" if ns is not None else "—",
+    c1.metric(":material/ads_click: Nível de Serviço", f"{ns}%" if ns is not None else "—",
               help="% dos itens COM consumo real que estão fora de ruptura (estoque > 0). "
                    "Proxy de disponibilidade — NÃO é OTIF de fornecedor (esse depende de dado ainda ausente).")
     cm = k["cobertura_media"]
-    c2.metric("📅 Cobertura média", f"{cm} d" if cm is not None else "—",
+    c2.metric(":material/calendar_month: Cobertura média", f"{cm} d" if cm is not None else "—",
               help="Média de dias de cobertura (estoque+guarda-chuva ÷ consumo) dos itens com consumo; "
                    "exclui itens sem consumo.")
-    c3.metric("💰 Valor imobilizado", _dash_fmt_brl(k["valor_imobilizado"]),
+    c3.metric(":material/payments: Valor imobilizado", _dash_fmt_brl(k["valor_imobilizado"]),
               help="Σ(estoque × preço de valoração), em BRL. Detalhe logo abaixo.")
     gm = k["giro_medio"]
-    c4.metric("🔄 Giro médio (ano)", f"{gm}x" if gm is not None else "—",
+    c4.metric(":material/sync: Giro médio (ano)", f"{gm}x" if gm is not None else "—",
               help="Média do giro anual dos itens com saída na janela de 90 dias.")
 
     vd = vm["valor_detalhe"]
     st.caption(
-        f"💰 Valor: {vd['itens_valorados']} itens valorados · "
+        f":material/payments: Valor: {vd['itens_valorados']} itens valorados · "
         f"{vd['itens_sem_preco']} com estoque sem preço (subestima o total) · "
         f"{vd['itens_nao_brl']} em moeda ≠ BRL ({_dash_fmt_brl(vd['total_nao_brl'])}, somados à parte)."
     )
@@ -329,20 +324,38 @@ def _render_dash_gestao(vm):
     d = vm["distribuicao"]; total = vm["total"]
     def _pct(n): return f"{round(n / total * 100)}%" if total else "0%"
     s1, s2, s3, s4, s5, s6 = st.columns(6)
-    s1.metric("✅ OK", d["ok"], _pct(d["ok"]))
+    s1.metric(":material/check_circle: OK", d["ok"], _pct(d["ok"]))
     s2.metric("🟡 Atenção", d["atencao"], _pct(d["atencao"]), delta_color="off")
-    s3.metric("⚠️ Críticos", d["comprar"], _pct(d["comprar"]), delta_color="inverse")
+    s3.metric(":material/warning: Críticos", d["comprar"], _pct(d["comprar"]), delta_color="inverse")
     s4.metric("⚪ Sem Mov.", d["sem_mov"], _pct(d["sem_mov"]), delta_color="off",
               help="Nunca tiveram saída por requisição — ficam fora da lista de compra.")
     s5.metric("🔴 Zerados", d["zerados"], _pct(d["zerados"]), delta_color="inverse")
-    s6.metric("🔍 Inventariado", f"{d['inventariado']}/{total}", _pct(d["inventariado"]))
+    s6.metric(":material/search: Inventariado", f"{d['inventariado']}/{total}", _pct(d["inventariado"]))
+
+    st.markdown("---")
+
+    # Saúde física do estoque — conta TODOS os itens (inclusive Sem Movimentação),
+    # pelo nível físico vs. mínimo. Complementa a linha acima (que tira o Sem Mov. da compra).
+    sf = vm["saude_fisica"]
+    st.markdown("#### :material/monitor_heart: Saúde física do estoque")
+    st.caption("Nível físico de **todos** os itens vs. estoque mínimo — inclui também os "
+               "**Sem Movimentação** (por isso o total difere da linha acima, que os separa da compra).")
+    h1, h2, h3, h4 = st.columns(4)
+    h1.metric("🟢 Ok", sf["ok"], _pct(sf["ok"]),
+              help="Acima do nível confortável (mínimo × 1,2).")
+    h2.metric("🟡 Atenção", sf["atencao"], _pct(sf["atencao"]), delta_color="off",
+              help="Perto de ficar abaixo do mínimo (entre o mínimo e mínimo × 1,2).")
+    h3.metric("🔴 Crítico", sf["critico"], _pct(sf["critico"]), delta_color="inverse",
+              help="Abaixo ou no mínimo, mas ainda com saldo (> 0).")
+    h4.metric("⚫ Zerado", sf["zerado"], _pct(sf["zerado"]), delta_color="inverse",
+              help="Estoque atual = 0.")
 
     st.markdown("---")
     colA, colB = st.columns(2)
 
     with colA:
         with st.container(border=True):
-            st.markdown("#### 📉 Top 10 Consumidores (mês anterior)")
+            st.markdown("#### :material/trending_down: Top 10 Consumidores (mês anterior)")
             dados = obter_dados_dashboard()
             st.caption(f"Referência: consumo real de {dados['kpis'].get('periodo_abc', '—')}.")
             df_abc = pd.DataFrame(dados["abc"])
@@ -369,22 +382,44 @@ def _render_dash_gestao(vm):
 
     with colB:
         with st.container(border=True):
-            st.markdown("#### 🔬 Padrões de demanda (SBC)")
-            st.caption("Como os itens se comportam (Syntetos-Boylan), pelas saídas reais. Diagnóstico.")
+            st.markdown("#### :material/science: Padrões de demanda")
+            st.caption("Cada item é lido por duas coisas: **com que regularidade** ele sai e "
+                       "**o quanto o tamanho de cada saída varia**. Juntas, essas medidas "
+                       "indicam o quão previsível é repor cada material.")
             ordem = ["Suave", "Intermitente", "Errático", "Irregular", "Poucos dados"]
             dem = vm["demanda"]
             dados_dem = [{"Padrão": p, "Itens": dem.get(p, 0)} for p in ordem if dem.get(p, 0)]
             if dados_dem:
-                st.bar_chart(pd.DataFrame(dados_dem).set_index("Padrão"), color="#F7941E", height=240)
+                st.bar_chart(pd.DataFrame(dados_dem).set_index("Padrão"), color="#F7941E", height=200)
             else:
                 st.caption("Ainda sem consumo real suficiente para classificar.")
+
+            # Legenda: o que cada padrão significa (frases já validadas em PADROES_DEMANDA),
+            # com a contagem de itens ao lado — para o gestor ler sem precisar do jargão.
+            _expl = {v["label"]: (v["emoji"], v["explicacao"]) for v in PADROES_DEMANDA.values()}
+            st.markdown("**O que cada padrão significa:**")
+            for p in ["Suave", "Intermitente", "Errático", "Irregular"]:
+                emoji, exp = _expl[p]
+                n = dem.get(p, 0)
+                st.markdown(
+                    f"{emoji} **{p}** — {exp} "
+                    f"<span style='opacity:.65'>· {n} {'item' if n == 1 else 'itens'}</span>",
+                    unsafe_allow_html=True)
+
             xyz = vm["xyz"]
             if xyz:
-                st.caption("XYZ (variabilidade mensal — baixa confiança com poucos meses): "
+                st.caption("**XYZ** mede o quanto o consumo varia de mês a mês "
+                           "(X estável · Y variável · Z errático — baixa confiança com poucos meses): "
                            f"X {xyz.get('X', 0)} · Y {xyz.get('Y', 0)} · Z {xyz.get('Z', 0)}.")
 
+            with st.expander("Como é calculado"):
+                st.caption("Método de Syntetos-Boylan (SBC): combina o **intervalo médio entre "
+                           "saídas** (regularidade no tempo) com a **variação das quantidades** "
+                           "(regularidade no tamanho), a partir das saídas reais por requisição. "
+                           "É apoio à decisão — não altera o cálculo de reposição.")
+
     with st.container(border=True):
-        st.markdown("#### 🏭 Requisições por Setor & 👤 Top Emitentes")
+        st.markdown("#### :material/factory: Requisições por Setor & :material/person: Top Emitentes")
         reqs = listar_requisicoes(limit=500)
         if reqs:
             df_r = pd.DataFrame(reqs)
@@ -411,16 +446,16 @@ def _render_dash_gestao(vm):
 
 
 def _render_dash_diretoria(vm):
-    """🏛️ Diretoria — retrato financeiro: valor imobilizado, evolução, ABC por valor, savings."""
+    """:material/account_balance: Diretoria — retrato financeiro: valor imobilizado, evolução, ABC por valor, savings."""
     k = vm["kpis"]; vd = vm["valor_detalhe"]
     c1, c2 = st.columns(2)
     with c1:
-        st.metric("💰 Valor imobilizado", _dash_fmt_brl(k["valor_imobilizado"]),
+        st.metric(":material/payments: Valor imobilizado", _dash_fmt_brl(k["valor_imobilizado"]),
                   help="Σ(estoque × preço de valoração), em BRL.")
         st.caption(f"{vd['itens_valorados']} itens valorados · {vd['itens_sem_preco']} com estoque sem preço · "
                    f"{vd['itens_nao_brl']} em moeda ≠ BRL ({_dash_fmt_brl(vd['total_nao_brl'])}).")
     with c2:
-        st.metric("💹 Economia (Savings)", "em breve", delta_color="off",
+        st.metric(":material/show_chart: Economia (Savings)", "em breve", delta_color="off",
                   help="Spot Saving (R$4,7M em 2025) depende de ingestão dedicada — planejado para versão futura.")
         st.caption("Savings ainda não ingerido — transparência: sem dado, sem número inventado.")
 
@@ -429,7 +464,7 @@ def _render_dash_diretoria(vm):
 
     with colE:
         with st.container(border=True):
-            st.markdown("#### 📈 Evolução do valor imobilizado")
+            st.markdown("#### :material/trending_up: Evolução do valor imobilizado")
             ev = vm["evolucao"]; serie = ev.get("serie") or []
             n = ev.get("n_snapshots", 0)
             if len(serie) >= 2:
@@ -442,7 +477,7 @@ def _render_dash_diretoria(vm):
 
     with colA:
         with st.container(border=True):
-            st.markdown("#### 🏆 ABC por valor — onde está o capital")
+            st.markdown("#### :material/emoji_events: ABC por valor — onde está o capital")
             st.caption("Itens que concentram o valor em estoque (classe A = maior).")
             abc = vm["abc_valor"]
             if abc:
@@ -456,10 +491,10 @@ def _render_dash_diretoria(vm):
                 st.caption("Sem consumo valorado na janela.")
 
 
-if pagina == "📊 Dashboard":
-    st.title("📊 Dashboard — MRO Inventus Power")
+if pagina == "Dashboard":
+    st.title(":material/bar_chart: Dashboard — MRO Inventus Power")
     if not listar_inventario():
-        st.info("Nenhum item cadastrado. Vá em **➕ Gerenciar Itens** para começar.")
+        st.info("Nenhum item cadastrado. Vá em **:material/add: Gerenciar Itens** para começar.")
         st.stop()
 
     # v3.0.0 — seletor de público: cada perfil vê o que importa, sem poluir o menu lateral.
@@ -480,30 +515,30 @@ if pagina == "📊 Dashboard":
 # ══════════════════════════════════════════════════════════════════════════════
 # INVENTÁRIO
 # ══════════════════════════════════════════════════════════════════════════════
-elif pagina == "📋 Inventário":
-    st.title("📋 Inventário MRO")
+elif pagina == "Inventário":
+    st.title(":material/assignment: Inventário MRO")
     itens = listar_inventario()
     if not itens:
-        st.info("Nenhum item cadastrado. Vá em **➕ Gerenciar Itens** para começar.")
+        st.info("Nenhum item cadastrado. Vá em **:material/add: Gerenciar Itens** para começar.")
         st.stop()
 
     # --- CONTAINER 1: FILTROS ---
     with st.container(border=True):
-        with st.expander("🔍 Filtros Avançados", expanded=False):
+        with st.expander(":material/search: Filtros Avançados", expanded=False):
             c1, c2, c3, c4 = st.columns(4)
             
             locais_db = listar_valores("local")
             if not locais_db:
                 locais_db = [f"ARM-{i:02d}" for i in range(1, 6)] + [f"MRO-{i:02d}" for i in range(1, 6)]
                 
-            f_loc    = c1.selectbox("📍 Localização", ["Todas"] + locais_db)
+            f_loc    = c1.selectbox(":material/location_on: Localização", ["Todas"] + locais_db)
             f_imp    = c2.multiselect("Importância", IMPORTANCIAS)
             f_tipo   = c3.multiselect("Tipo", TIPOS)
             f_status = c4.multiselect("Status", ["🟢 OK", "🟡 ATENÇÃO", "🔴 COMPRAR", "⚪ Sem Movimentação"])
             
             c5, c6 = st.columns(2)
-            f_busca  = c5.text_input("🔎 Buscar PN ou Nome")
-            f_inv    = c6.selectbox("Inventariado", ["Todos", "✅ Inventariado", "Não inventariado"])
+            f_busca  = c5.text_input(":material/search: Buscar PN ou Nome")
+            f_inv    = c6.selectbox("Inventariado", ["Todos", "Inventariado", "Não inventariado"])
         
 
         df = pd.DataFrame(itens)
@@ -522,7 +557,7 @@ elif pagina == "📋 Inventário":
             if col_status in df.columns:
                 df = df[df[col_status].isin(f_status)]
             
-        if f_inv == "✅ Inventariado":    
+        if f_inv == "Inventariado":
             df = df[df["data_inventario"].fillna("").str.strip().str.len() > 0]
         if f_inv == "Não inventariado": 
             df = df[~(df["data_inventario"].fillna("").str.strip().str.len() > 0)]
@@ -532,7 +567,7 @@ elif pagina == "📋 Inventário":
             df = df[df["part_number"].str.lower().str.contains(b, na=False) | 
                     df["nome_item"].str.lower().str.contains(b, na=False)]
 
-        st.caption(f"📊 Exibindo **{len(df)}** de **{len(itens)}** itens")
+        st.caption(f":material/bar_chart: Exibindo **{len(df)}** de **{len(itens)}** itens")
 
     # --- CONTAINER 2: TABELA PRINCIPAL ---
     with st.container(border=True):
@@ -541,7 +576,7 @@ elif pagina == "📋 Inventário":
         if "unidade_divergente" in df.columns:
             _n_div = int(df["unidade_divergente"].fillna(False).astype(bool).sum())
             if _n_div:
-                st.warning(f"⚠️ **{_n_div}** item(ns) comprado(s) em unidade diferente da de estoque "
+                st.warning(f":material/warning: **{_n_div}** item(ns) comprado(s) em unidade diferente da de estoque "
                            "e ainda **sem fator de conversão**. Revise em **Gerenciar Itens → "
                            "Conversão de unidades** — até lá o recebimento pode somar quantidade crua.")
 
@@ -559,7 +594,7 @@ elif pagina == "📋 Inventário":
         df_exib["data_inventario"] = df_exib["data_inventario"].apply(lambda v: fmt(v) if v else "—")
         # v2.9.0: marca visual "⚠️" para itens com unidade a revisar.
         if "unidade_divergente" in df.columns:
-            df_exib["Un?"] = df["unidade_divergente"].map(lambda v: "⚠️" if v else "")
+            df_exib["Un?"] = df["unidade_divergente"].map(lambda v: "Revisar" if v else "")
         # v2.10.0 (diagnóstico): padrão de demanda (SBC) e classe XYZ derivados.
         if "padrao_demanda" in df.columns:
             df_exib["Demanda"] = df["padrao_demanda"].fillna("—")
@@ -592,7 +627,7 @@ elif pagina == "📋 Inventário":
                 "sc_po": st.column_config.TextColumn("P.O.", width="small"),
                 "caixa_identificacao": st.column_config.TextColumn("Obs. Inventário", width="medium"), # Nova coluna na tabela
                 "Un?": st.column_config.TextColumn("Un?", width="small",
-                    help="⚠️ = comprado em unidade diferente da de estoque e ainda sem fator de conversão."),
+                    help=":material/warning: = comprado em unidade diferente da de estoque e ainda sem fator de conversão."),
                 "Demanda": st.column_config.TextColumn("Demanda", width="small",
                     help="Padrão de demanda (Syntetos-Boylan) pelas saídas reais: Suave/Intermitente/"
                          "Errático/Irregular. Diagnóstico — não altera a reposição. Detalhe na Ficha 360."),
@@ -604,7 +639,7 @@ elif pagina == "📋 Inventário":
 
     # --- CONTAINER 3: CONTAGEM FÍSICA ---
     with st.container(border=True):
-        st.subheader("📦 Realizar Contagem Física")
+        st.subheader(":material/inventory_2: Realizar Contagem Física")
         _, item_inv, _ = sel_material("Selecione o item para atualizar saldo/localização", "sel_inventario")
 
         if item_inv:
@@ -630,14 +665,14 @@ elif pagina == "📋 Inventário":
             
             # ✅ NOVO CAMPO: Observação Operacional (Texto Livre)
             obs_inventario = st.text_input(
-                "📝 Observação de Inventário", 
+                ":material/edit_note: Observação de Inventário", 
                 value=item_inv.get("caixa_identificacao") or "", 
                 placeholder="Ex: material danificado, sem etiqueta, divergência física, caixa avariada..."
             )
 
             col_btn1, col_btn2, _ = st.columns([1, 1, 2])
             
-            if col_btn1.button("✅ Confirmar Contagem", type="primary", width="stretch"):
+            if col_btn1.button(":material/check_circle: Confirmar Contagem", type="primary", width="stretch"):
                 delta = nova_qtd - item_inv['estoque_atual']
                 
                 # Verifica mudanças operacionais
@@ -647,7 +682,7 @@ elif pagina == "📋 Inventário":
 
                 # Se nada mudou, avisa o usuário
                 if not mudou_qtd and not mudou_local and not mudou_obs:
-                    st.warning("⚠️ Nenhuma alteração detectada. O item já está com esses dados.")
+                    st.warning(":material/warning: Nenhuma alteração detectada. O item já está com esses dados.")
                 else:
                     # 1. Atualiza sempre os metadados (Local e Obs) e marca como inventariado
                     ok_loc, msg_loc = atualizar_localizacao_e_inventariar(item_inv["id"], novo_local, obs_inventario)
@@ -687,13 +722,13 @@ elif pagina == "📋 Inventário":
                                 observacao=obs_final
                             )
 
-                        st.success(f"✅ Contagem registrada! Novo saldo: `{nova_qtd}`")
+                        st.success(f":material/check_circle: Contagem registrada! Novo saldo: `{nova_qtd}`")
                         time.sleep(1.2)
                         st.rerun()
                     else:
-                        st.error(f"❌ Erro ao atualizar localização: {msg_loc}")
+                        st.error(f":material/cancel: Erro ao atualizar localização: {msg_loc}")
 
-            if item_inv.get("data_inventario") and col_btn2.button("❌ Remover Marcação", width="stretch"):
+            if item_inv.get("data_inventario") and col_btn2.button(":material/cancel: Remover Marcação", width="stretch"):
                 desmarcar_inventariado(item_inv["id"])
                 st.warning("Marcação de inventário removida.")
                 time.sleep(1.2)
@@ -718,11 +753,11 @@ elif pagina == "📋 Inventário":
 # ══════════════════════════════════════════════════════════════════════════════
 # GERENCIAR ITENS
 # ══════════════════════════════════════════════════════════════════════════════
-elif pagina == "➕ Gerenciar Itens":
-    st.title("➕ Gerenciar Itens MRO")
+elif pagina == "Gerenciar Itens":
+    st.title(":material/add: Gerenciar Itens MRO")
 
     # --- TABS PARA ORGANIZAÇÃO ---
-    tab_editar, tab_novo = st.tabs(["✏️ Editar Item Existente", "🆕 Cadastrar Novo Item"])
+    tab_editar, tab_novo = st.tabs([":material/edit: Editar Item Existente", ":material/fiber_new: Cadastrar Novo Item"])
 
     # === TAB 1: CADASTRAR NOVO ===
     with tab_novo:
@@ -748,7 +783,7 @@ elif pagina == "➕ Gerenciar Itens":
             est_ini_novo = c4.number_input("Estoque Inicial", min_value=0.0, value=0.0)
 
             # ── Conversão de unidades (curadoria v2.9.0) — opcional ──────────────
-            st.markdown("###### 🔁 Conversão de unidades (se comprado em outra unidade)")
+            st.markdown("###### :material/sync: Conversão de unidades (se comprado em outra unidade)")
             _sug_novo = sugerir_conversao(
                 {"nome_item": nome_novo, "descricao": desc_novo, "unidade": un_novo})
             cvn1, cvn2 = st.columns(2)
@@ -761,9 +796,9 @@ elif pagina == "➕ Gerenciar Itens":
                 value=float(_sug_novo['fator_sugerido'] or 1.0), step=1.0,
                 help="Quantas unidades de compra cabem em 1 de estoque. Ex.: 1 GL = 5 L → 5.")
             if _sug_novo['fator_sugerido']:
-                st.caption(f"💡 Sugestão automática pelo nome do item: {_sug_novo['origem']}.")
+                st.caption(f":material/lightbulb: Sugestão automática pelo nome do item: {_sug_novo['origem']}.")
 
-            if st.button("💾 Salvar Novo Item", type="primary", width="stretch"):
+            if st.button(":material/save: Salvar Novo Item", type="primary", width="stretch"):
                 if not pn_novo or not nome_novo:
                     st.error("Preencha Part Number e Nome.")
                 else:
@@ -805,7 +840,7 @@ elif pagina == "➕ Gerenciar Itens":
                 st.info(f"**Editando:** `{item_sel['part_number']} — {item_sel['nome_item']}`")
                 if item_sel.get("unidade_divergente"):
                     st.warning(
-                        "⚠️ **Revisar unidade:** este item é comprado numa unidade diferente "
+                        ":material/warning: **Revisar unidade:** este item é comprado numa unidade diferente "
                         "da de estoque (visto nos POs), mas ainda **sem fator de conversão** "
                         "(fator = 1). Defina a *unidade de compra* e o *fator* abaixo para que "
                         "o recebimento converta corretamente."
@@ -843,7 +878,7 @@ elif pagina == "➕ Gerenciar Itens":
 
                 # ── Conversão de unidades (curadoria v2.9.0) ─────────────────────
                 st.markdown("---")
-                st.markdown("##### 🔁 Conversão de unidades (compra ↔ estoque)")
+                st.markdown("##### :material/sync: Conversão de unidades (compra ↔ estoque)")
                 _sug = sugerir_conversao(item_sel)
                 _un_est = item_sel.get('unidade') or 'UN'
                 _stored_fator = float(item_sel.get('fator_conversao') or 1.0)
@@ -867,13 +902,13 @@ elif pagina == "➕ Gerenciar Itens":
                          "Ex.: 1 GL = 5 L → fator 5. Fator 1 = mesma unidade (sem conversão).")
                 _uc_txt = (ed_uc or _un_est).strip() or _un_est
                 if abs(ed_fator - 1.0) > 1e-9 and _uc_txt.upper() != _un_est.upper():
-                    st.caption(f"📐 **1 {_un_est}** de estoque = **{ed_fator:g} {_uc_txt}** de compra. "
+                    st.caption(f":material/straighten: **1 {_un_est}** de estoque = **{ed_fator:g} {_uc_txt}** de compra. "
                                f"No recebimento, cada {ed_fator:g} {_uc_txt} recebidos viram 1 {_un_est} no estoque.")
                 else:
-                    st.caption("📐 Sem conversão (compra e estoque na mesma unidade).")
-                st.caption(f"💡 Sugestão do sistema: {_sug['origem']}.")
+                    st.caption(":material/straighten: Sem conversão (compra e estoque na mesma unidade).")
+                st.caption(f":material/lightbulb: Sugestão do sistema: {_sug['origem']}.")
 
-                if st.button("✅ Atualizar Item", type="primary", width="stretch"):
+                if st.button(":material/check_circle: Atualizar Item", type="primary", width="stretch"):
                     dados_edicao = {
                         "descricao": ed_desc,
                         "unidade": ed_un,
@@ -905,7 +940,7 @@ elif pagina == "➕ Gerenciar Itens":
                     st.markdown("---")
                     lc1, lc2 = st.columns([2, 1])
                     lc1.info(
-                        f"⏱️ **Lead Time** — cadastrado (Neidson): **{_lt_cad}d** · "
+                        f":material/timer: **Lead Time** — cadastrado (Neidson): **{_lt_cad}d** · "
                         f"calculado: **{_lt_calc}d** ({_amostras} amostras, origem {_origem}). "
                         f"O calculado é apenas uma sugestão; a base cadastrada não é alterada automaticamente."
                     )
@@ -920,14 +955,14 @@ elif pagina == "➕ Gerenciar Itens":
 
                 # ── Alteração de Part Number (Item 2 / v2.1.0) ───────────────
                 st.markdown("---")
-                st.markdown("##### 🔁 Alterar Part Number")
+                st.markdown("##### :material/sync: Alterar Part Number")
                 st.caption("Use quando o PN for corrigido no Protheus. O histórico (movimentações, "
                            "SCs e requisições) é preservado e o PN antigo continua pesquisável.")
                 cpn1, cpn2 = st.columns([1, 1])
                 novo_pn = cpn1.text_input("Novo Part Number", key="pn_novo", placeholder=item_sel['part_number'])
                 motivo_pn = cpn2.text_input("Motivo da alteração", key="pn_motivo", placeholder="Ex: padronização Protheus")
                 confirma_pn = st.checkbox("Confirmo a alteração do Part Number", key="pn_confirma")
-                if st.button("🔁 Alterar Part Number", key="btn_alterar_pn", width="stretch"):
+                if st.button(":material/sync: Alterar Part Number", key="btn_alterar_pn", width="stretch"):
                     if not confirma_pn:
                         st.warning("Marque a confirmação para prosseguir.")
                     else:
@@ -941,7 +976,7 @@ elif pagina == "➕ Gerenciar Itens":
 
                 hist_pn = listar_historico_part_number(item_sel['id'])
                 if hist_pn:
-                    with st.expander(f"📜 Histórico de Part Numbers ({len(hist_pn)})"):
+                    with st.expander(f":material/history: Histórico de Part Numbers ({len(hist_pn)})"):
                         st.dataframe(
                             pd.DataFrame([{
                                 "Data": fmt(h["data_hora"]), "PN Antigo": h["pn_antigo"],
@@ -954,18 +989,18 @@ elif pagina == "➕ Gerenciar Itens":
 # ══════════════════════════════════════════════════════════════════════════════
 # MOVIMENTAÇÕES
 # ══════════════════════════════════════════════════════════════════════════════
-elif pagina == "🔄 Movimentações":
-    st.title("🔄 Controle de Estoque")
+elif pagina == "Movimentações":
+    st.title(":material/sync: Controle de Estoque")
 
     # --- TABS: AJUSTE, HISTÓRICO E DASHBOARD ---
-    tab_ajuste, tab_hist, tab_dash = st.tabs(["⚖️ Ajuste Rápido", "📜 Histórico Completo", "📊 Analytics"])
+    tab_ajuste, tab_hist, tab_dash = st.tabs([":material/balance: Ajuste Rápido", ":material/history: Histórico Completo", ":material/bar_chart: Analytics"])
 
     centros = listar_valores("centro_custo") or ["Geral"]
 
     # === TAB 1: AJUSTE RÁPIDO DE ESTOQUE ===
     with tab_ajuste:
         with st.container(border=True):
-            st.subheader("⚖️ Ajuste Manual de Saldo")
+            st.subheader(":material/balance: Ajuste Manual de Saldo")
             st.caption("Utilize apenas para correções de inventário, perdas ou sobras não justificadas por SC/Req.")
             
             _, item_aj, _ = sel_material("Selecione o Item para Ajuste", "sel_ajuste_estoque")
@@ -974,14 +1009,14 @@ elif pagina == "🔄 Movimentações":
                 st.info(f"**Item:** `{item_aj['part_number']} — {item_aj['nome_item']}` | **Saldo Atual:** `{item_aj['estoque_atual']}`")
                 
                 c1, c2, c3 = st.columns(3)
-                tipo_aj = c1.radio("Tipo de Ajuste", ["➕ Entrada (Sobra)", "➖ Saída (Perda/Ajuste)"], horizontal=True)
+                tipo_aj = c1.radio("Tipo de Ajuste", ["Entrada (Sobra)", "Saída (Perda/Ajuste)"], horizontal=True)
                 qtd_aj = c2.number_input("Quantidade", min_value=0.01, step=1.0)
                 cc_aj = c3.selectbox("Centro de Custo (Responsável)", centros, index=0)
                 
                 obs_aj = st.text_input("Motivo do Ajuste *", placeholder="Ex: Avaria, erro de contagem anterior...")
                 resp_aj = st.text_input("Responsável pelo Ajuste *")
 
-                if st.button("✅ Confirmar Ajuste", type="primary", width="stretch"):
+                if st.button(":material/check_circle: Confirmar Ajuste", type="primary", width="stretch"):
                     if not resp_aj or not obs_aj:
                         st.error("Preencha o responsável e o motivo para auditoria.")
                     else:
@@ -997,16 +1032,16 @@ elif pagina == "🔄 Movimentações":
                                 observacao=f"AJUSTE: {obs_aj}", data_hora=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             )
                             if ok:
-                                st.success(f"✅ Ajuste registrado! Novo saldo: {msg}")
+                                st.success(f":material/check_circle: Ajuste registrado! Novo saldo: {msg}")
                                 time.sleep(1.2)
                                 st.rerun()
                             else:
-                                st.error(f"❌ Erro: {msg}")
+                                st.error(f":material/cancel: Erro: {msg}")
 
     # === TAB 2: HISTÓRICO COMPLETO ===
     with tab_hist:
         with st.container(border=True):
-            st.subheader("📜 Histórico de Movimentações")
+            st.subheader(":material/history: Histórico de Movimentações")
             
             c1, c2, c3 = st.columns([3, 2, 1])
             f_item = c1.selectbox("Filtrar por Item", ["Todos"] + [f"{i['part_number']} - {i['nome_item']}" for i in listar_inventario()])
@@ -1043,7 +1078,7 @@ elif pagina == "🔄 Movimentações":
                     return ''
 
                 # Opcional: Adicionar uma coluna calculada para identificar "Conferência"
-                df_exib['Tipo Display'] = df_exib.apply(lambda x: '📋 Conferência' if x['Qtd'] == 0 else x['Tipo'], axis=1)
+                df_exib['Tipo Display'] = df_exib.apply(lambda x: 'Conferência' if x['Qtd'] == 0 else x['Tipo'], axis=1)
 
                 st.dataframe(
                     df_exib.style.map(colorir_tipo, subset=['Tipo']), # Mantém a cor original do tipo banco
@@ -1081,13 +1116,13 @@ elif pagina == "🔄 Movimentações":
 
     # === TAB 3: ANALYTICS COMPLETO (VOLUME + DIVERGÊNCIAS + RUPTURA) ===
     with tab_dash:
-        st.subheader("📊 Analytics Operacional Completo")
+        st.subheader(":material/bar_chart: Analytics Operacional Completo")
 
         # v2.2.1 — Rótulo de maturidade do histórico (transparência)
         _mat = obter_maturidade_dados()
         if _mat["dias"] > 0:
             st.caption(
-                f"📅 Indicadores de série (consumo, tendência, giro) baseados em "
+                f":material/calendar_month: Indicadores de série (consumo, tendência, giro) baseados em "
                 f"**{_mat['dias']} dias** de histórico — desde "
                 f"{fmt(_mat['data_inicio']) if _mat['data_inicio'] else '—'} · "
                 f"{_mat['n_snapshots']} fotos de estoque. A confiança aumenta conforme "
@@ -1096,7 +1131,7 @@ elif pagina == "🔄 Movimentações":
 
         # v2.2.1 — Inteligência de Estoque: Cobertura · Tendência · Giro
         with st.container(border=True):
-            st.markdown("#### 🧠 Inteligência de Estoque (Cobertura · Tendência · Giro)")
+            st.markdown("#### :material/psychology: Inteligência de Estoque (Cobertura · Tendência · Giro)")
             try:
                 df_series = exportar_inventario_df()
             except Exception as e:
@@ -1107,15 +1142,15 @@ elif pagina == "🔄 Movimentações":
             else:
                 ca, cb, cc = st.columns(3)
                 with ca:
-                    st.markdown("**📈 Tendência de consumo**")
+                    st.markdown("**:material/trending_up: Tendência de consumo**")
                     if "Tendência" in df_series.columns:
                         vc = df_series["Tendência"].value_counts()
                         st.metric("🔺 Em alta", int(vc.get("Alta", 0)),
                                   help="Consumo dos últimos 30d mais de 15% acima dos 30d anteriores.")
                         st.metric("🔻 Em queda", int(vc.get("Queda", 0)))
-                        st.metric("➖ Estável", int(vc.get("Estável", 0)))
+                        st.metric(":material/remove: Estável", int(vc.get("Estável", 0)))
                 with cb:
-                    st.markdown("**🛡️ Menor cobertura (dias)**")
+                    st.markdown("**:material/shield: Menor cobertura (dias)**")
                     st.caption("(estoque + guarda-chuva) ÷ consumo diário")
                     if "Cobertura(d)" in df_series.columns:
                         _cols_lc = [c for c in ["PN", "Nome", "Cobertura(d)"] if c in df_series.columns]
@@ -1123,7 +1158,7 @@ elif pagina == "🔄 Movimentações":
                                .nsmallest(8, "Cobertura(d)")[_cols_lc])
                         st.dataframe(low, hide_index=True, width="stretch", height=250)
                 with cc:
-                    st.markdown("**🔁 Itens parados (giro 0 c/ estoque)**")
+                    st.markdown("**:material/sync: Itens parados (giro 0 c/ estoque)**")
                     st.caption("Capital imobilizado sem saída no período.")
                     if "Giro(anual)" in df_series.columns:
                         parados = df_series[(df_series["Giro(anual)"] == 0) &
@@ -1137,7 +1172,7 @@ elif pagina == "🔄 Movimentações":
 
         # v2.3.0 — 💰 Financeiro: valor imobilizado · ABC por valor · evolução de preço
         with st.container(border=True):
-            st.markdown("#### 💰 Financeiro (Valoração — estimativas rotuladas)")
+            st.markdown("#### :material/payments: Financeiro (Valoração — estimativas rotuladas)")
             st.caption(
                 "Valores são **estimativas** baseadas no **último preço** conhecido "
                 "(SCM; na falta, último preço de PO/SC7). Não substituem o custo contábil."
@@ -1151,22 +1186,22 @@ elif pagina == "🔄 Movimentações":
             if vi:
                 k1, k2, k3 = st.columns(3)
                 k1.metric(
-                    "💰 Valor imobilizado (BRL)", f"R$ {vi['total_brl']:,.2f}",
+                    ":material/payments: Valor imobilizado (BRL)", f"R$ {vi['total_brl']:,.2f}",
                     help="Σ (estoque atual × preço de valoração) dos itens em BRL. "
                          "Estimativa pelo último preço.",
                 )
                 k2.metric(
-                    "✅ Itens valorados", vi["itens_valorados"],
+                    ":material/check_circle: Itens valorados", vi["itens_valorados"],
                     help="Itens com preço de referência conhecido (SCM ou histórico).",
                 )
                 k3.metric(
-                    "⚠️ Sem preço", vi["itens_sem_preco"],
+                    ":material/warning: Sem preço", vi["itens_sem_preco"],
                     help="Itens COM estoque mas SEM preço conhecido — subestimam o total. "
                          "Aparecem quando o material ainda não foi comprado via SCM/SC7.",
                 )
                 if vi["itens_nao_brl"]:
                     st.caption(
-                        f"🌐 {vi['itens_nao_brl']} item(ns) com moeda ≠ BRL "
+                        f":material/language: {vi['itens_nao_brl']} item(ns) com moeda ≠ BRL "
                         f"(≈ {vi['total_nao_brl']:,.2f} na moeda original) somados à parte — "
                         "sem conversão cambial nesta versão."
                     )
@@ -1175,7 +1210,7 @@ elif pagina == "🔄 Movimentações":
 
             # Evolução do valor imobilizado (fotos diárias)
             with fa:
-                st.markdown("**📈 Evolução do valor imobilizado**")
+                st.markdown("**:material/trending_up: Evolução do valor imobilizado**")
                 st.caption("Soma diária de (estoque × preço) — capital parado ao longo do tempo.")
                 try:
                     ev = obter_evolucao_valor_imobilizado(dias=180)
@@ -1190,7 +1225,7 @@ elif pagina == "🔄 Movimentações":
 
             # Curva ABC por valor
             with fb:
-                st.markdown("**📊 Curva ABC por valor (últimos 90d)**")
+                st.markdown("**:material/bar_chart: Curva ABC por valor (últimos 90d)**")
                 st.caption("Ranking pelo valor consumido = qtd saída × preço. A=80% · B=95% · C=resto.")
                 try:
                     abc = obter_abc_valor(dias=90, limit=15)
@@ -1216,7 +1251,7 @@ elif pagina == "🔄 Movimentações":
             # Top capital parado (valor alto + giro 0) — alvo de redução de imobilizado
             if not df_series.empty and "Valor em Estoque" in df_series.columns \
                     and "Giro(anual)" in df_series.columns:
-                st.markdown("**🧊 Top capital parado (maior valor em estoque, giro 0)**")
+                st.markdown("**:material/ac_unit: Top capital parado (maior valor em estoque, giro 0)**")
                 st.caption("Dinheiro parado sem saída no período — candidatos a reduzir/realocar.")
                 _cols_cap = [c for c in ["PN", "Nome", "Estoque Atual", "Valor em Estoque"]
                              if c in df_series.columns]
@@ -1230,10 +1265,10 @@ elif pagina == "🔄 Movimentações":
                                        st.column_config.NumberColumn(format="R$ %.2f")},
                     )
                 else:
-                    st.success("✅ Nenhum item de valor relevante totalmente parado.")
+                    st.success(":material/check_circle: Nenhum item de valor relevante totalmente parado.")
 
             # Evolução de preço por item (antecipa parte da Ficha 360 v2.6)
-            st.markdown("**🔎 Evolução de preço (por item)**")
+            st.markdown("**:material/search: Evolução de preço (por item)**")
             if not df_series.empty and "PN" in df_series.columns:
                 _map_pn = {i["part_number"]: i["id"] for i in listar_inventario()}
                 pn_sel = st.selectbox("Item", ["—"] + sorted(_map_pn.keys()),
@@ -1263,7 +1298,7 @@ elif pagina == "🔄 Movimentações":
         # 1. VOLUME DE ENTRADAS E SAÍDAS
         with c_vol:
             with st.container(border=True):
-                st.markdown("#### 📦 Volume de Movimentações")
+                st.markdown("#### :material/inventory_2: Volume de Movimentações")
                 periodo_sel = st.selectbox("Agrupar por:", ["Mensal", "Semanal", "Diário"], index=0, key="sel_periodo_vol")
                 periodo_map = {"Mensal": "mensal", "Semanal": "semanal", "Diário": "diario"}
                 df_anal = obter_analitico_movimentacoes(periodo=periodo_map[periodo_sel])
@@ -1276,27 +1311,27 @@ elif pagina == "🔄 Movimentações":
                         for col in ['entrada', 'saida', 'devolucao']:
                             if col not in df_pivot.columns: df_pivot[col] = 0
                         
-                        df_pivot = df_pivot.rename(columns={'entrada': '📥 Entradas', 'saida': '📤 Saídas', 'devolucao': '↩️ Dev'})
+                        df_pivot = df_pivot.rename(columns={'entrada': 'Entradas', 'saida': 'Saídas', 'devolucao': 'Dev'})
                         df_pivot = df_pivot.sort_index(ascending=True)
 
                         t1, t2 = st.columns(2)
-                        t1.metric("Total Entradas", f"{df_pivot['📥 Entradas'].sum():,.0f}")
-                        t2.metric("Total Saídas", f"{df_pivot['📤 Saídas'].sum():,.0f}")
+                        t1.metric("Total Entradas", f"{df_pivot['Entradas'].sum():,.0f}")
+                        t2.metric("Total Saídas", f"{df_pivot['Saídas'].sum():,.0f}")
 
-                        st.bar_chart(df_pivot[['📥 Entradas', '📤 Saídas']], color=["#2ecc71", "#e74c3c"])
+                        st.bar_chart(df_pivot[['Entradas', 'Saídas']], color=["#2ecc71", "#e74c3c"])
                     except Exception as e:
                         st.error(f"Erro ao processar volume: {e}")
 
         # 2. DIVERGÊNCIAS DE INVENTÁRIO
         with c_div:
             with st.container(border=True):
-                st.markdown("#### ⚖️ Top Itens com Divergências")
+                st.markdown("#### :material/balance: Top Itens com Divergências")
                 st.caption("Ajustes manuais frequentes (sem Req/SC) indicam erro de processo.")
                 
                 df_div = obter_analitico_divergencias(days=90)
                 
                 if df_div.empty:
-                    st.success("✅ Nenhuma divergência significativa.")
+                    st.success(":material/check_circle: Nenhuma divergência significativa.")
                 else:
                     df_div_display = df_div.copy()
                     df_div_display.columns = ["PN", "Item", "Nº Ajustes", "Vol. Ajustado"]
@@ -1316,13 +1351,13 @@ elif pagina == "🔄 Movimentações":
 
         # --- LINHA 2: RUPTURA DE ESTOQUE (Destaque Total) ---
         with st.container(border=True):
-            st.markdown("#### 🚨 Ruptura de Estoque (Impacto na Operação)")
+            st.markdown("#### :material/emergency: Ruptura de Estoque (Impacto na Operação)")
             st.caption("Itens que zeraram o estoque durante uma requisição nos últimos 90 dias. Indica falha de abastecimento.")
             
             df_rup = obter_analitico_rupturas(days=90)
             
             if df_rup.empty:
-                st.success("✅ **Operação Fluida:** Nenhuma ruptura registrada no período. O estoque atendeu todas as requisições.")
+                st.success(":material/check_circle: **Operação Fluida:** Nenhuma ruptura registrada no período. O estoque atendeu todas as requisições.")
             else:
                 # Formatar data para exibição
                 df_rup['ultima_ocorrencia'] = df_rup['ultima_ocorrencia'].apply(fmt)
@@ -1358,15 +1393,15 @@ elif pagina == "🔄 Movimentações":
                     }
                 )
                 
-                st.warning("💡 **Ação Recomendada:** Revise o **Estoque Mínimo** e o **Lead Time** destes itens imediatamente para evitar paradas de linha.")
+                st.warning(":material/lightbulb: **Ação Recomendada:** Revise o **Estoque Mínimo** e o **Lead Time** destes itens imediatamente para evitar paradas de linha.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # REQUISIÇÃO
 # ══════════════════════════════════════════════════════════════════════════════
-elif pagina == "📋 Requisição":
-    st.title("📋 Requisição de Material")
+elif pagina == "Requisição":
+    st.title(":material/assignment: Requisição de Material")
     
-    aba_nova, aba_hist_req = st.tabs(["📝 Nova Requisição", "📜 Histórico"])
+    aba_nova, aba_hist_req = st.tabs([":material/edit_note: Nova Requisição", ":material/history: Histórico"])
     
     # Configurações de contexto
     autorizadores_lista = listar_valores("autorizador") or ["Gestor", "Líder", "Reserva"]
@@ -1378,18 +1413,28 @@ elif pagina == "📋 Requisição":
 
         # --- FEEDBACK DE SUCESSO ---
         if st.session_state.req_confirmada:
-            st.success(f"### ✅ Requisição {st.session_state.req_confirmada} enviada!")
+            st.success(f"### :material/check_circle: Requisição {st.session_state.req_confirmada} enviada!")
             st.info("O estoque foi atualizado e o registro foi salvo no histórico.")
             if st.button("Iniciar Nova Requisição", width="stretch"):
                 st.session_state.req_confirmada = None
                 st.rerun()
             st.stop()
 
+        # Padroniza os setores: registra em Configurações os que só existiam no
+        # histórico (uma vez por sessão, idempotente) e monta o select a partir da
+        # união (Configurações + histórico de movimentações/requisições).
+        if not st.session_state.get("_setores_sync"):
+            sincronizar_setores_config()
+            st.session_state["_setores_sync"] = True
+
         # --- BLOCO 1: IDENTIFICAÇÃO ---
         with st.container():
-            st.markdown("##### 1️⃣ Identificação da Demanda")
+            st.markdown("##### 1. Identificação da Demanda")
             c1, c2, c3 = st.columns(3)
-            req_setor = c1.text_input("Setor Solicitante *")
+            req_setor = c1.selectbox(
+                "Setor Solicitante *", options=[""] + listar_setores_conhecidos(),
+                index=0, accept_new_options=True,
+                help="Escolha um setor já usado ou digite um novo para padronizar o cadastro.")
             req_emit  = c2.text_input("Nome do Emitente *")
             opcoes_cc = [""] + (listar_valores("centro_custo") or [])
             req_cc    = c3.selectbox("Centro de Custo *", options=opcoes_cc, index=0)
@@ -1398,7 +1443,7 @@ elif pagina == "📋 Requisição":
 
         # --- BLOCO 2: SELEÇÃO DE MATERIAIS ---
         with st.container():
-            st.markdown("##### 2️⃣ Adicionar Materiais")
+            st.markdown("##### 2. Adicionar Materiais")
             _, item_req_add, _ = sel_material("Pesquise o material para requisitar", "sel_req_add")
             
             if item_req_add:
@@ -1413,13 +1458,13 @@ elif pagina == "📋 Requisição":
                 ci1, ci2 = st.columns(2)
                 qtd_sol = ci1.number_input("Qtd Solicitada *", min_value=1.0, step=1.0, value=1.0)
                 qtd_ate = ci2.number_input("Qtd Atendida *", min_value=0.0, step=1.0, value=1.0)
-                add_item = st.form_submit_button("➕ ADICIONAR À LISTA", width="stretch")
+                add_item = st.form_submit_button(":material/add: ADICIONAR À LISTA", width="stretch")
 
             if add_item:
                 if not item_req_add:
-                    st.warning("⚠️ Selecione um material antes de adicionar.")
+                    st.warning(":material/warning: Selecione um material antes de adicionar.")
                 elif qtd_ate > item_req_add.get("estoque_atual", 0):
-                    st.error(f"❌ Saldo insuficiente! Estoque: {item_req_add.get('estoque_atual', 0)}")
+                    st.error(f":material/cancel: Saldo insuficiente! Estoque: {item_req_add.get('estoque_atual', 0)}")
                 else:
                     st.session_state.itens_req.append({
                         "item_id": item_req_add["id"], "part_number": item_req_add["part_number"],
@@ -1431,7 +1476,7 @@ elif pagina == "📋 Requisição":
 
         # --- LISTA DE ITENS TEMPORÁRIA ---
         if st.session_state.itens_req:
-            st.markdown("###### 📦 Itens na Requisição Atual:")
+            st.markdown("###### :material/inventory_2: Itens na Requisição Atual:")
             for idx, it in enumerate(st.session_state.itens_req):
                 with st.expander(f"{it['part_number']} — {it['nome_item']}", expanded=True):
                     c_info, c_del = st.columns([5, 1])
@@ -1447,28 +1492,28 @@ elif pagina == "📋 Requisição":
 
         # --- BLOCO 3: REGRAS ESPECIAIS ---
         with st.container():
-            st.markdown("##### 3️⃣ Regras de Entrega e SESMT")
+            st.markdown("##### 3. Regras de Entrega e SESMT")
             col_ei, col_sesmt = st.columns(2)
             with col_ei:
-                entrega_ind = st.checkbox("📦 Entrega Individual (EPI/Uniforme)")
+                entrega_ind = st.checkbox(":material/inventory_2: Entrega Individual (EPI/Uniforme)")
                 if entrega_ind:
                     destinatarios_txt = st.text_area("Lista de Destinatários *", 
                         placeholder="MATRÍCULA — NOME (um por linha)", height=100)
             with col_sesmt:
-                is_sesmt = st.checkbox("🦺 Requer Aprovação SESMT")
+                is_sesmt = st.checkbox(":material/engineering: Requer Aprovação SESMT")
                 if is_sesmt:
                     sesmt_resp = st.text_input("Responsável SESMT *")
 
         # --- BLOCO 4: AUTORIZAÇÃO E FINALIZAÇÃO ---
         with st.container():
-            st.markdown("##### 4️⃣ Autorização Final")
+            st.markdown("##### 4. Autorização Final")
             ca1, ca2 = st.columns(2)
             aut_tipo = ca1.selectbox("Tipo de Autorizador *", autorizadores_lista)
             aut_nome = ca2.text_input("Assinatura / Nome do Autorizador *")
             obs_req  = st.text_area("Observações Gerais da Requisição", height=70)
 
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("✅ FINALIZAR E ATUALIZAR ESTOQUE", type="primary", width="stretch"):
+        if st.button(":material/check_circle: FINALIZAR E ATUALIZAR ESTOQUE", type="primary", width="stretch"):
             erros = []
             if not req_setor or not req_emit or not aut_nome: erros.append("Campos obrigatórios com (*) não preenchidos.")
             if not st.session_state.itens_req: erros.append("A lista de materiais está vazia.")
@@ -1503,7 +1548,7 @@ elif pagina == "📋 Requisição":
 
     # --- ABA: HISTÓRICO ---
     with aba_hist_req:
-        st.markdown("### 📜 Histórico de Requisições")
+        st.markdown("### :material/history: Histórico de Requisições")
         reqs = listar_requisicoes(limit=200)
         if not reqs:
             st.info("Nenhuma requisição registrada até o momento.")
@@ -1513,7 +1558,7 @@ elif pagina == "📋 Requisição":
             st.dataframe(df_reqs, width="stretch", hide_index=True)
             
             st.markdown("---")
-            st.markdown("#### 🔍 Detalhes da Requisição")
+            st.markdown("#### :material/search: Detalhes da Requisição")
             opcoes_req = {f"REQ-{r['numero_requisicao']} | {r['setor']} | {r['data_hora'][:10]}": r for r in reqs}
             sel_req = st.selectbox("Escolha uma requisição para ver os detalhes:", [""] + list(opcoes_req.keys()))
             
@@ -1522,9 +1567,9 @@ elif pagina == "📋 Requisição":
                 with st.container():
                     st.markdown(f"**Resumo REQ-{r_det['numero_requisicao']}**")
                     c_a, c_b, c_c = st.columns(3)
-                    c_a.write(f"👤 **Emitente:** {r_det['emitente']}")
-                    c_b.write(f"✍️ **Autorizador:** {r_det['autorizador_nome']}")
-                    c_c.write(f"🏢 **C.Custo:** {r_det['centro_custo']}")
+                    c_a.write(f":material/person: **Emitente:** {r_det['emitente']}")
+                    c_b.write(f":material/edit: **Autorizador:** {r_det['autorizador_nome']}")
+                    c_c.write(f":material/apartment: **C.Custo:** {r_det['centro_custo']}")
                     
                     itens_det = listar_itens_requisicao(r_det["id"])
                     if itens_det:
@@ -1535,31 +1580,31 @@ elif pagina == "📋 Requisição":
 # ══════════════════════════════════════════════════════════════════════════════
 # COMPRAS (SC)
 # ══════════════════════════════════════════════════════════════════════════════
-elif pagina == "🧾 Compras (SC)":
-    st.title("🧾 Gestão de Compras — S.C.")
+elif pagina == "Compras (SC)":
+    st.title(":material/receipt_long: Gestão de Compras — S.C.")
     
     # Estrutura de abas mantida conforme solicitado
     aba_mon, aba_assist, aba_forn, aba_nova_sc, aba_rec, aba_ed, aba_h, aba_import = st.tabs([
-    "📡 Monitor", "🧠 Assistente de Reposição", "🏢 Fornecedores & Cotação", "➕ Nova SC",
-    "📦 Receber Material", "🔄 Atualizar Status", "📜 Histórico", "📥 Importar Relatório de SCs"
+    ":material/sensors: Monitor", ":material/psychology: Assistente de Reposição", ":material/apartment: Fornecedores & Cotação", ":material/add: Nova SC",
+    ":material/inventory_2: Receber Material", ":material/sync: Atualizar Status", ":material/history: Histórico", ":material/download: Importar Relatório de SCs"
     ])
     # ══════════════════════════════════════════════════════════════════════════════
     # 📡 MONITOR DE COMPRAS 
     # ══════════════════════════════════════════════════════════════════════════════
     with aba_mon:
-        st.markdown("### 📡 Monitor de Compras")
+        st.markdown("### :material/sensors: Monitor de Compras")
         st.caption("Acompanhe todas as SCs abertas. Colunas críticas destacadas para leitura rápida.")
         
         # UX: Filtros rápidos
         c_filt1, c_filt2 = st.columns([3, 2])
         with c_filt1:
-            f_busca = st.text_input("🔍 Buscar PN, Nº SC ou Fornecedor", placeholder="Ex: SC-2026, 123456, SKF...", key="busca_monitor_sc")
+            f_busca = st.text_input(":material/search: Buscar PN, Nº SC ou Fornecedor", placeholder="Ex: SC-2026, 123456, SKF...", key="busca_monitor_sc")
         with c_filt2:
-            f_crise = st.checkbox(f"🚨 Focar apenas em Ruptura < {RUPTURA_CRISE_DIAS} dias", value=False, key="filtro_ruptura_sc")
+            f_crise = st.checkbox(f":material/emergency: Focar apenas em Ruptura < {RUPTURA_CRISE_DIAS} dias", value=False, key="filtro_ruptura_sc")
 
         scs = listar_scs(apenas_abertas=True)
         if not scs:
-            st.success("✅ Nenhuma SC aberta! Operação fluida.")
+            st.success(":material/check_circle: Nenhuma SC aberta! Operação fluida.")
         else:
             dados = []
             for sc in scs:
@@ -1605,9 +1650,9 @@ elif pagina == "🧾 Compras (SC)":
                         status_display, cor = "Recebido", "🟢"
                     else:
                         # Fallback visual antigo se status for genérico
-                        if forn != "—": status_display, cor = "🚚 Aguardando Entrega", "🔵"
-                        elif po != "—": status_display, cor = "🔍 Verificar Fornecedor", "🟡"
-                        else: status_display, cor = "⚠️ Abrir Cotação", "🔴"
+                        if forn != "—": status_display, cor = "Aguardando Entrega", "🔵"
+                        elif po != "—": status_display, cor = "Verificar Fornecedor", "🟡"
+                        else: status_display, cor = "Abrir Cotação", "🔴"
 
                     # Cálculo de Aging (Dias desde abertura)
                     dias = item.get('dias_atendimento', 0) 
@@ -1686,47 +1731,47 @@ elif pagina == "🧾 Compras (SC)":
                     row_height=34
                 )
                 
-                st.caption("📊 Ordenado automaticamente por: 1º Dias até Ruptura | 2º Impacto na Produção | 3º Tempo de Espera")
+                st.caption(":material/bar_chart: Ordenado automaticamente por: 1º Dias até Ruptura | 2º Impacto na Produção | 3º Tempo de Espera")
                                     
      # ══════════════════════════════════════════════════════════════════════════════
     #   📥 IMPORTAR PROTHEUS
     # ═══════════════════════════════════════════════════════════════════════════════
     with aba_import:
         with st.container(border=True):
-            st.markdown("### 📥 Importar Relatório de SCs")
+            st.markdown("### :material/download: Importar Relatório de SCs")
             st.caption("Upload da planilha diária dos compradores. Roteia por aba: **SCM** (SCs + preço), "
                        "**SC7** (histórico de preços), **FORNECEDORES** (cadastro + e-mails) e **SCM USERS** "
                        "(solicitantes). Upsert com histórico preservado; backup automático antes de gravar.")
             arquivo = st.file_uploader("Arquivo Excel (.xlsx / .xls)", type=["xlsx", "xls"], key="upload_relatorio_scs")
 
             if arquivo:
-                if st.button("🔄 Processar Relatório de SCs", width="stretch", type="primary"):
+                if st.button(":material/sync: Processar Relatório de SCs", width="stretch", type="primary"):
                     with st.spinner("Processando abas do Relatório de SCs..."):
                         ok, resultado = importar_relatorio_scs(arquivo, arquivo.name)
                     if ok:
                         scm = resultado.get("SCM", {}) or {}
                         if isinstance(scm, dict) and not scm.get("erro"):
-                            st.markdown("**📄 SCM — Solicitações + Preço**")
+                            st.markdown("**:material/description: SCM — Solicitações + Preço**")
                             m1, m2, m3, m4 = st.columns(4)
-                            m1.metric("📥 Importadas", scm.get("linhas_importadas", 0))
-                            m2.metric("🚫 Ignoradas", scm.get("linhas_ignoradas", 0))
-                            m3.metric("💲 Preços", scm.get("precos_capturados", 0))
+                            m1.metric(":material/download: Importadas", scm.get("linhas_importadas", 0))
+                            m2.metric(":material/block: Ignoradas", scm.get("linhas_ignoradas", 0))
+                            m3.metric(":material/attach_money: Preços", scm.get("precos_capturados", 0))
                             m4.metric("🔴 Rupturas", scm.get("rupturas", 0))
                             m5, m6, m7, m8 = st.columns(4)
-                            m5.metric("📄 SCs Criadas", scm.get("scs_criadas", 0))
-                            m6.metric("🔄 SCs Atualizadas", scm.get("scs_atualizadas", 0))
-                            m7.metric("⚠️ Divergências", scm.get("divergencias", 0))
-                            m8.metric("🔥 Críticos", scm.get("criticos", 0))
+                            m5.metric(":material/description: SCs Criadas", scm.get("scs_criadas", 0))
+                            m6.metric(":material/sync: SCs Atualizadas", scm.get("scs_atualizadas", 0))
+                            m7.metric(":material/warning: Divergências", scm.get("divergencias", 0))
+                            m8.metric(":material/local_fire_department: Críticos", scm.get("criticos", 0))
 
-                        st.markdown("**🔗 Demais fontes**")
+                        st.markdown("**:material/link: Demais fontes**")
                         sc7 = resultado.get("SC7", {}) or {}
                         forn = resultado.get("FORNECEDORES", {}) or {}
                         usr = resultado.get("SCM USERS", {}) or {}
                         c1, c2, c3 = st.columns(3)
-                        c1.metric("💲 Preços SC7", sc7.get("precos_inseridos", 0) if isinstance(sc7, dict) else 0)
-                        c2.metric("🏢 Fornecedores", f"{forn.get('upserted', 0)}" if isinstance(forn, dict) else "—",
+                        c1.metric(":material/attach_money: Preços SC7", sc7.get("precos_inseridos", 0) if isinstance(sc7, dict) else 0)
+                        c2.metric(":material/apartment: Fornecedores", f"{forn.get('upserted', 0)}" if isinstance(forn, dict) else "—",
                                   help=f"Com e-mail: {forn.get('com_email', 0)}" if isinstance(forn, dict) else None)
-                        c3.metric("👥 Solicitantes", usr.get("upserted", 0) if isinstance(usr, dict) else 0)
+                        c3.metric(":material/group: Solicitantes", usr.get("upserted", 0) if isinstance(usr, dict) else 0)
 
                         erros = {aba: r.get("erro") for aba, r in resultado.items()
                                  if isinstance(r, dict) and r.get("erro")}
@@ -1735,12 +1780,12 @@ elif pagina == "🧾 Compras (SC)":
                         if isinstance(scm, dict) and scm.get("ignorados_amostra"):
                             with st.expander("Amostra de linhas ignoradas (SCM)"):
                                 st.dataframe(pd.DataFrame(scm["ignorados_amostra"]), width="stretch", hide_index=True)
-                        st.success(f"✅ Importação concluída. Foto de estoque do dia: "
+                        st.success(f":material/check_circle: Importação concluída. Foto de estoque do dia: "
                                    f"{resultado.get('_snapshot_criados', 0)} itens.")
                     else:
                         erros = {aba: r.get("erro") for aba, r in resultado.items()
                                  if isinstance(r, dict) and r.get("erro")}
-                        st.error("❌ Falha ao importar. " +
+                        st.error(":material/cancel: Falha ao importar. " +
                                  ("; ".join(f"{a}: {e}" for a, e in erros.items()) if erros else str(resultado)))
 
             with st.expander("↩️ Importação antiga (export cru do SCM — fallback)"):
@@ -1762,14 +1807,14 @@ elif pagina == "🧾 Compras (SC)":
     #   o comprador decide e cria a SC. Nada sobrescreve a base do Neidson.
     # ══════════════════════════════════════════════════════════════════════════════
     with aba_assist:
-        st.markdown("### 🧠 Assistente de Reposição")
+        st.markdown("### :material/psychology: Assistente de Reposição")
         st.caption("Fila priorizada do que repor — o quê, quando, quanto, por quê e de quem. "
                    "O sistema **recomenda**; o comprador decide e cria a SC. Nada aqui "
                    "sobrescreve a base do Sr. Neidson (mín/máx/lead time/categoria).")
 
         _mat = obter_maturidade_dados()
         st.caption(
-            f"📅 Indicadores de série baseados em ~{_mat['dias']} dias de histórico"
+            f":material/calendar_month: Indicadores de série baseados em ~{_mat['dias']} dias de histórico"
             + (f" (desde {fmt(_mat['data_inicio'])})" if _mat.get('data_inicio') else "")
             + " — amadurecem conforme os dados acumulam."
         )
@@ -1784,7 +1829,7 @@ elif pagina == "🧾 Compras (SC)":
             sugestoes = gerar_sugestoes_reposicao(incluir_sem_movimentacao=incluir_sem_mov)
 
         if not sugestoes:
-            st.success("✅ Nenhuma reposição necessária agora. Estoque + guarda-chuva "
+            st.success(":material/check_circle: Nenhuma reposição necessária agora. Estoque + guarda-chuva "
                        "cobrem o horizonte planejado para todos os itens.")
         else:
             # --- Filtros ---
@@ -1811,17 +1856,17 @@ elif pagina == "🧾 Compras (SC)":
                              if (s["fornecedor_sugerido"] or "Sem fornecedor sugerido") == f_forn]
 
             def _cate(s):
-                """'Comprar até' formatado (⏰ = já atrasado; '—' = sem consumo)."""
+                """'Comprar até' formatado (:material/alarm: = já atrasado; '—' = sem consumo)."""
                 ca = s.get("comprar_ate")
                 if not ca:
                     return "—"
                 dd = datetime.strptime(ca, "%Y-%m-%d").strftime("%d/%m/%Y")
-                return f"⏰ {dd}" if s.get("comprar_atrasado") else dd
+                return f":material/alarm: {dd}" if s.get("comprar_atrasado") else dd
 
             k1, k2, k3 = st.columns(3)
             k1.metric("Itens a repor", len(filtradas))
             k2.metric("🔴 Críticos", sum(1 for s in filtradas if s["prioridade_tier"] == 0))
-            k3.metric("⛔ Parada de Linha", sum(1 for s in filtradas if s["parada_linha"]))
+            k3.metric(":material/block: Parada de Linha", sum(1 for s in filtradas if s["parada_linha"]))
 
             # --- 🔴 Críticos automáticos (versão auto da lista CRÍTICOS manual) ---
             criticos = [s for s in filtradas if s["prioridade_tier"] == 0]
@@ -1877,7 +1922,7 @@ elif pagina == "🧾 Compras (SC)":
                     "Comprar até": st.column_config.TextColumn(
                         help="Data-limite p/ emitir a SC e o material chegar antes de acabar "
                              "(cobertura − lead time − 15 d de antecedência). "
-                             "⏰ = já atrasado; — = sem consumo."),
+                             ":material/alarm: = já atrasado; — = sem consumo."),
                     "ROP": st.column_config.NumberColumn(
                         format="%.1f",
                         help="Ponto de pedido = consumo diário × lead time + estoque de segurança."),
@@ -1901,7 +1946,7 @@ elif pagina == "🧾 Compras (SC)":
 
             # --- 📦 SCs sugeridas (agrupadas por NATUREZA da SC) — "de mão beijada" ---
             st.divider()
-            st.markdown("#### 📦 SCs sugeridas")
+            st.markdown("#### :material/inventory_2: SCs sugeridas")
             st.caption("Itens juntados pela **natureza da SC** (o mesmo vocabulário que a operação "
                        "já usa no Protheus, derivado do histórico de cada item), com título, "
                        "justificativa e **centro de custo** sugeridos. Revise, edite e crie a SC "
@@ -1930,9 +1975,9 @@ elif pagina == "🧾 Compras (SC)":
                         } for s in r["itens"]]),
                         hide_index=True, width="stretch",
                     )
-                    cap = f"🏷️ Centro de custo sugerido: **{r['cc_sugerido']}**"
+                    cap = f":material/sell: Centro de custo sugerido: **{r['cc_sugerido']}**"
                     if r["valor_estimado"] > 0:
-                        cap += f"  ·  💰 Valor estimado: ~R$ {r['valor_estimado']:,.2f}"
+                        cap += f"  ·  :material/payments: Valor estimado: ~R$ {r['valor_estimado']:,.2f}"
                     st.caption(cap)
                     with st.form(f"form_sc_grupo_{gi}", clear_on_submit=False):
                         gc1, gc2 = st.columns([2, 1])
@@ -1950,11 +1995,11 @@ elif pagina == "🧾 Compras (SC)":
                         just_g = st.text_area("Justificativa", value=r["justificativa"],
                                               height=90, key=f"sc_just_{gi}")
                         criar_g = st.form_submit_button(
-                            f"✅ Criar esta SC ({r['n_itens']} itens)", type="primary",
+                            f":material/check_circle: Criar esta SC ({r['n_itens']} itens)", type="primary",
                             width="stretch")
                     if criar_g:
                         if not num_sc_g.strip():
-                            st.warning("⚠️ Informe o número da SC.")
+                            st.warning(":material/warning: Informe o número da SC.")
                         else:
                             itens_g = [sugestao_para_item_sc(s, data_necessidade=str(date.today()))
                                        for s in r["itens"]]
@@ -1964,12 +2009,12 @@ elif pagina == "🧾 Compras (SC)":
                                 sc_id_g = buscar_sc_id_por_numero(num_sc_g.strip())
                                 for s in r["itens"]:
                                     registrar_desfecho_sugestao(s, "criou_sc", sc_id=sc_id_g)
-                                st.success(f"✅ {msg} Desfechos registrados no histórico.")
+                                st.success(f":material/check_circle: {msg} Desfechos registrados no histórico.")
                             else:
-                                st.error(f"❌ {msg}")
+                                st.error(f":material/cancel: {msg}")
 
             st.divider()
-            st.markdown("#### 📝 Detalhe e ação por item")
+            st.markdown("#### :material/edit_note: Detalhe e ação por item")
             opc_rep = {
                 f"{s['prioridade']} · {s['part_number']} — {s['nome_item']} "
                 f"(sugerido {s['qtd_sugerida']} {s['unidade']})": s
@@ -1995,11 +2040,11 @@ elif pagina == "🧾 Compras (SC)":
                 mc4.metric("Qtd sugerida", f"{s['qtd_sugerida']} {s['unidade']}")
                 if abs((s.get('fator_conversao') or 1) - 1) > 1e-9:
                     st.caption(
-                        f"🛒 Pedir ao fornecedor: **{s['qtd_sugerida_compra']} {s['unidade_compra']}** "
+                        f":material/shopping_cart: Pedir ao fornecedor: **{s['qtd_sugerida_compra']} {s['unidade_compra']}** "
                         f"(= {s['qtd_sugerida']} {s['unidade']} de estoque × fator {s['fator_conversao']:g}).")
 
                 if s["lead_time_maturidade"]:
-                    st.caption(f"⚠️ {s['lead_time_maturidade']} — usando lead time "
+                    st.caption(f":material/warning: {s['lead_time_maturidade']} — usando lead time "
                                f"{s['lead_time']}d ({s['lead_time_origem']}).")
                 if s["fornecedor_sugerido"]:
                     preco_txt = (
@@ -2007,7 +2052,7 @@ elif pagina == "🧾 Compras (SC)":
                         if s["fornecedor_ultimo_preco"] is not None else ""
                     )
                     email_txt = f" · {s['fornecedor_email']}" if s["fornecedor_email"] else ""
-                    st.caption(f"🏢 Fornecedor sugerido: **{s['fornecedor_sugerido']}**"
+                    st.caption(f":material/apartment: Fornecedor sugerido: **{s['fornecedor_sugerido']}**"
                                f"{preco_txt}{email_txt}")
 
                 with st.form("form_rep_acao", clear_on_submit=False):
@@ -2023,14 +2068,14 @@ elif pagina == "🧾 Compras (SC)":
                     obs_rep = st.text_area("Observações da SC", value=s["justificativa"],
                                            height=70, key="rep_obs")
                     ba1, ba2, ba3 = st.columns(3)
-                    criar_rep = ba1.form_submit_button("✅ Criar SC", type="primary",
+                    criar_rep = ba1.form_submit_button(":material/check_circle: Criar SC", type="primary",
                                                        width="stretch")
-                    adiar_rep = ba2.form_submit_button("⏸️ Adiar", width="stretch")
-                    ignorar_rep = ba3.form_submit_button("🚫 Ignorar", width="stretch")
+                    adiar_rep = ba2.form_submit_button(":material/pause: Adiar", width="stretch")
+                    ignorar_rep = ba3.form_submit_button(":material/block: Ignorar", width="stretch")
 
                 if criar_rep:
                     if not num_sc_rep.strip():
-                        st.warning("⚠️ Informe o número da SC.")
+                        st.warning(":material/warning: Informe o número da SC.")
                     else:
                         s_final = dict(s)
                         s_final["qtd_sugerida"] = qtd_final
@@ -2039,17 +2084,17 @@ elif pagina == "🧾 Compras (SC)":
                         if ok:
                             sc_id = buscar_sc_id_por_numero(num_sc_rep.strip())
                             registrar_desfecho_sugestao(s_final, "criou_sc", sc_id=sc_id)
-                            st.success(f"✅ {msg} Desfecho registrado no histórico.")
+                            st.success(f":material/check_circle: {msg} Desfecho registrado no histórico.")
                         else:
-                            st.error(f"❌ {msg}")
+                            st.error(f":material/cancel: {msg}")
                 elif adiar_rep:
                     registrar_desfecho_sugestao(s, "adiada", observacao=obs_rep)
-                    st.info("⏸️ Sugestão adiada e registrada no histórico.")
+                    st.info(":material/pause: Sugestão adiada e registrada no histórico.")
                 elif ignorar_rep:
                     registrar_desfecho_sugestao(s, "ignorada", observacao=obs_rep)
-                    st.info("🚫 Sugestão ignorada e registrada no histórico.")
+                    st.info(":material/block: Sugestão ignorada e registrada no histórico.")
 
-            with st.expander("📜 Histórico de decisões de reposição"):
+            with st.expander(":material/history: Histórico de decisões de reposição"):
                 hist = listar_sugestoes(limit=50)
                 if not hist:
                     st.caption("Nenhuma decisão registrada ainda.")
@@ -2067,7 +2112,7 @@ elif pagina == "🧾 Compras (SC)":
                     )
 
     with aba_forn:
-        st.markdown("### 🏢 Fornecedores & Cotação")
+        st.markdown("### :material/apartment: Fornecedores & Cotação")
         st.caption("Busque um material para ver seus fornecedores, último preço e lead time, "
                    "e gerar um e-mail de cotação pronto. O sistema recomenda; o comprador decide.")
 
@@ -2097,7 +2142,7 @@ elif pagina == "🧾 Compras (SC)":
                 melhor = next((f for f in fs if f.get("melhor")), None)
                 if melhor:
                     st.success(
-                        f"⭐ **Melhor fornecedor: {melhor['fornecedor']}** — {melhor['melhor_motivo']}. "
+                        f":material/star: **Melhor fornecedor: {melhor['fornecedor']}** — {melhor['melhor_motivo']}. "
                         f"E-mail: {melhor['email'] or 'sem e-mail no cadastro'}."
                     )
 
@@ -2111,7 +2156,7 @@ elif pagina == "🧾 Compras (SC)":
                     "E-mail": f["email"] or "—",
                     "Contato": f["contato"] or "—",
                     "Telefone": f["telefone"] or "—",
-                    "Cadastro": "✅" if f["no_cadastro"] else "⚠️",
+                    "Cadastro": ":material/check_circle:" if f["no_cadastro"] else ":material/warning:",
                 } for f in fs])
                 st.dataframe(
                     df_fs, hide_index=True, width="stretch",
@@ -2123,11 +2168,11 @@ elif pagina == "🧾 Compras (SC)":
                     },
                 )
                 st.caption("Ordenado por menor último preço. Lead time por fornecedor = mediana do "
-                           "prazo real (SC7) atribuído pelo nº do pedido. ‘⚠️’ = fornecedor sem "
+                           "prazo real (SC7) atribuído pelo nº do pedido. ‘:material/warning:’ = fornecedor sem "
                            "correspondência no cadastro (sem e-mail para cotação).")
 
                 # --- Rascunho de cotação (não envia) ---
-                st.markdown("#### ✉️ Rascunho de cotação")
+                st.markdown("#### :material/mail: Rascunho de cotação")
                 nomes = [f["fornecedor"] for f in fs]
                 default_sel = [melhor["fornecedor"]] if melhor else nomes[:1]
                 sel_forn = st.multiselect("Fornecedores para cotar", nomes,
@@ -2161,7 +2206,7 @@ elif pagina == "🧾 Compras (SC)":
                     mailto = ("mailto:" + ",".join(emails)
                               + "?subject=" + urllib.parse.quote(assunto)
                               + "&body=" + urllib.parse.quote(corpo))
-                    st.link_button("✉️ Abrir e-mail no meu cliente", mailto)
+                    st.link_button(":material/mail: Abrir e-mail no meu cliente", mailto)
                 elif escolhidos:
                     st.warning("Nenhum fornecedor selecionado tem e-mail no cadastro.")
                 if sem_email:
@@ -2176,8 +2221,8 @@ elif pagina == "🧾 Compras (SC)":
         if "sc_criada" not in st.session_state: st.session_state.sc_criada = None
 
         if st.session_state.sc_criada:
-            st.success(f"✅ {st.session_state.sc_criada}")
-            if st.button("➕ Criar outra SC", width="stretch"):
+            st.success(f":material/check_circle: {st.session_state.sc_criada}")
+            if st.button(":material/add: Criar outra SC", width="stretch"):
                 st.session_state.sc_criada = None; st.rerun()
             st.stop()
 
@@ -2185,7 +2230,7 @@ elif pagina == "🧾 Compras (SC)":
         _, item_sc_add, _ = sel_material("Selecionar Material", "sel_sc_add")
 
         with st.form("form_add_isc", clear_on_submit=True):
-            st.markdown("##### 📦 Adicionar Item à Lista ")
+            st.markdown("##### :material/inventory_2: Adicionar Item à Lista ")
             c1, c2 = st.columns(2)
             # Apenas Quantidade e Data de Necessidade na criação
             qtd_i   = c1.number_input("Qtd Solicitada *", min_value=0.01, step=1.0)
@@ -2193,11 +2238,11 @@ elif pagina == "🧾 Compras (SC)":
             
             obs_i    = st.text_area("Justificativa / Urgência", placeholder="Ex: Parada de linha iminente...", height=60)
             
-            add_isc = st.form_submit_button("➕ Adicionar à Lista", width="stretch")
+            add_isc = st.form_submit_button(":material/add: Adicionar à Lista", width="stretch")
 
         if add_isc:
             if not item_sc_add:
-                st.warning("⚠️ Selecione um material antes de adicionar.")
+                st.warning(":material/warning: Selecione um material antes de adicionar.")
             else:
                 st.session_state.itens_nova_sc.append({
                     "item_id": item_sc_add["id"], 
@@ -2214,43 +2259,43 @@ elif pagina == "🧾 Compras (SC)":
                 st.rerun()
                 
         if st.session_state.itens_nova_sc:
-            st.markdown("###### 📋 Itens Pré-cadastrados:")
+            st.markdown("###### :material/assignment: Itens Pré-cadastrados:")
             df_prev_sc = pd.DataFrame(st.session_state.itens_nova_sc)[["part_number", "nome_item", "quantidade_solicitada", "data_necessidade"]]
             df_prev_sc.columns = ["PN", "Nome", "Qtd Solic.", "Data Nec."]
             df_prev_sc["Data Nec."] = df_prev_sc["Data Nec."].apply(fmt)
             st.dataframe(df_prev_sc, width="stretch", hide_index=True)
             
-            if st.button("🗑️ Limpar Lista", type="secondary"):
+            if st.button(":material/delete: Limpar Lista", type="secondary"):
                 st.session_state.itens_nova_sc = []; st.rerun()
 
         st.divider()
         with st.form("form_criar_sc"):
-            st.markdown("##### 📝 Finalizar S.C. (Registro Inicial)")
+            st.markdown("##### :material/edit_note: Finalizar S.C. (Registro Inicial)")
             c1, c2 = st.columns(2)
             num_sc = c1.text_input("Número da SC *", placeholder="Ex: SC-2026-001")
             dt_ab  = c2.date_input("Data de Abertura *", value=date.today())
             obs_sc = st.text_area("Observações Gerais", height=60)
-            criar_b = st.form_submit_button("✅ Criar S.C.", width="stretch", type="primary")
+            criar_b = st.form_submit_button(":material/check_circle: Criar S.C.", width="stretch", type="primary")
             
         if criar_b:
             if not num_sc.strip():
-                st.warning("⚠️ O Número da SC é obrigatório.")
+                st.warning(":material/warning: O Número da SC é obrigatório.")
             elif not st.session_state.itens_nova_sc:
-                st.warning("⚠️ Adicione ao menos um item à lista.")
+                st.warning(":material/warning: Adicione ao menos um item à lista.")
             else:
                 ok, msg = criar_sc(num_sc.strip(), str(dt_ab), st.session_state.itens_nova_sc, obs_sc)
                 if ok:
                     st.session_state.itens_nova_sc = []
                     st.session_state.sc_criada = msg; st.rerun()
                 else:
-                    st.error(f"❌ {msg}")
+                    st.error(f":material/cancel: {msg}")
 
     # ══════════════════════════════════════════════════════════════════════════════
     #  📦 RECEBER MATERIAL (Grid Inteligente + Feedback Visual Aprimorado)
     # ══════════════════════════════════════════════════════════════════════════════
     with aba_rec:
         with st.container(border=True):
-            st.markdown("### 📦 Registrar Recebimento de Material")
+            st.markdown("### :material/inventory_2: Registrar Recebimento de Material")
             st.caption("Vincule a uma SC aberta ou registre como entrada avulsa.")
             
             centros = listar_valores("centro_custo")
@@ -2268,7 +2313,7 @@ elif pagina == "🧾 Compras (SC)":
                 # UX: Card de contexto do item selecionado
                 st.markdown(f"`{item_rec['part_number']}` — **{item_rec['nome_item']}** | Saldo Atual: `{item_rec['estoque_atual']}` {_ue_rec}")
                 if item_rec.get("unidade_divergente"):
-                    st.warning("⚠️ Este item é comprado em unidade diferente da de estoque e ainda "
+                    st.warning(":material/warning: Este item é comprado em unidade diferente da de estoque e ainda "
                                "**não tem fator de conversão** definido — o recebimento somará a "
                                "quantidade crua. Cadastre o fator em **Gerenciar Itens → Conversão "
                                "de unidades** antes de receber.")
@@ -2277,14 +2322,14 @@ elif pagina == "🧾 Compras (SC)":
                 sc_sel = None
 
                 if scs_item:
-                    vincular = st.checkbox("🔗 Vincular a uma S.C. Aberta", value=True)
+                    vincular = st.checkbox(":material/link: Vincular a uma S.C. Aberta", value=True)
                     if vincular:
                         opc_sc = {f"SC {s['numero_sc']} | PO: {s.get('po_item') or '—'} | Saldo: {s['pendente']} {_uc_rec}": s for s in scs_item}
                         sel_sc_str = st.selectbox("Selecionar SC", list(opc_sc.keys()), label_visibility="collapsed")
                         sc_sel = opc_sc[sel_sc_str]
 
                         with st.container(border=True):
-                            st.markdown(f"✅ **SC {sc_sel['numero_sc']}** | PO: `{sc_sel['numero_po'] or '—'}` | Fornecedor: {sc_sel.get('fornecedor_item') or sc_sel['fornecedor'] or '—'}")
+                            st.markdown(f":material/check_circle: **SC {sc_sel['numero_sc']}** | PO: `{sc_sel['numero_po'] or '—'}` | Fornecedor: {sc_sel.get('fornecedor_item') or sc_sel['fornecedor'] or '—'}")
                             st.markdown(f"Solicitado: `{sc_sel['quantidade_solicitada']}` | Negociado: `{sc_sel.get('quantidade_negociada') or sc_sel['quantidade_solicitada']}` | Recebido: `{sc_sel['quantidade_recebida']}` | **Saldo Residual: `{sc_sel['pendente']}` {_uc_rec}**")
                 else:
                     st.info("ℹ️ Nenhuma SC aberta para este material. A entrada será registrada como avulsa.")
@@ -2299,10 +2344,10 @@ elif pagina == "🧾 Compras (SC)":
                     qtd_r = st.number_input(lbl_qtd, min_value=0.01, step=1.0, key="rec_qtd")
                 if _tem_conv:
                     _incr = qtd_r / _fator_rec
-                    st.caption(f"📐 **{qtd_r:g} {_uc_rec}** ÷ fator {_fator_rec:g} = **+{_incr:g} {_ue_rec}** no estoque.")
+                    st.caption(f":material/straighten: **{qtd_r:g} {_uc_rec}** ÷ fator {_fator_rec:g} = **+{_incr:g} {_ue_rec}** no estoque.")
 
                 with st.form("form_rec"):
-                    st.markdown("##### 📥 Dados do Recebimento")
+                    st.markdown("##### :material/download: Dados do Recebimento")
                     c2, c3 = st.columns(2)
                     # v2.7.1: Fornecedor não é obrigatório (pré-preenche da SC quando há).
                     forn   = c2.text_input("Fornecedor", value=(sc_sel.get("fornecedor_item") or sc_sel.get("fornecedor") or "") if sc_sel else "")
@@ -2317,11 +2362,11 @@ elif pagina == "🧾 Compras (SC)":
                                           help="Padrão MRO: Almoxarifado. Ajuste se necessário.")
                     obs_nf = st.text_input("Nota Fiscal / Documento *" if sc_sel else "Obs / Nota Fiscal")
 
-                    rec_b  = st.form_submit_button("📥 Confirmar Recebimento", width="stretch", type="primary")
+                    rec_b  = st.form_submit_button(":material/download: Confirmar Recebimento", width="stretch", type="primary")
 
                 if rec_b:
                     if sc_sel and not obs_nf.strip():
-                        st.warning("⚠️ Informe o número da Nota Fiscal para rastreabilidade.")
+                        st.warning(":material/warning: Informe o número da Nota Fiscal para rastreabilidade.")
                     elif sc_sel:
                         # qtd_r na UM de compra; registrar_recebimento_sc converte ao estoque.
                         ok, msg = registrar_recebimento_sc(
@@ -2330,8 +2375,8 @@ elif pagina == "🧾 Compras (SC)":
                             solicitante="Almoxarifado", emitente="Almoxarifado",
                             fornecedor=forn, data_recebimento=str(dt_r), obs_nf=obs_nf
                         )
-                        if ok: st.success(f"✅ **Recebimento registrado!** {msg}"); time.sleep(2); st.rerun()
-                        else:  st.error(f"❌ {msg}")
+                        if ok: st.success(f":material/check_circle: **Recebimento registrado!** {msg}"); time.sleep(2); st.rerun()
+                        else:  st.error(f":material/cancel: {msg}")
                     else:
                         # v2.9.0: entrada avulsa converte aqui (registrar_movimentacao é
                         # primitivo em unidade de ESTOQUE — a conversão é responsabilidade
@@ -2344,15 +2389,15 @@ elif pagina == "🧾 Compras (SC)":
                             centro_custo=cc_r, solicitante="Almoxarifado", emitente="Almoxarifado",
                             observacao=f"Fornecedor: {forn} | {obs_nf}{_obs_conv}"
                         )
-                        if ok: st.success(f"✅ **Entrada avulsa registrada!** {msg}"); time.sleep(2); st.rerun()
-                        else:  st.error(f"❌ {msg}")
+                        if ok: st.success(f":material/check_circle: **Entrada avulsa registrada!** {msg}"); time.sleep(2); st.rerun()
+                        else:  st.error(f":material/cancel: {msg}")
 
     # ══════════════════════════════════════════════════════════════════════════════
     # 🔄 ATUALIZAR STATUS E DADOS DA S.C. (Corrigido: Variáveis definidas antes do uso)
     # ══════════════════════════════════════════════════════════════════════════════
     with aba_ed:
         with st.container(border=True):
-            st.markdown("### 🔄 Atualizar Status e Dados da S.C.")
+            st.markdown("### :material/sync: Atualizar Status e Dados da S.C.")
             st.caption("Preencha as informações conforme elas chegarem (PO, Fornecedor, Previsões). O status será sugerido automaticamente.")
             
             scs_todas = listar_scs()
@@ -2375,7 +2420,7 @@ elif pagina == "🧾 Compras (SC)":
                 itens_atuais = listar_itens_sc(sc_ed["id"])
 
                 with st.form("form_ed_sc"):
-                    st.markdown("##### 📋 Informações Gerais (Cabeçalho)")
+                    st.markdown("##### :material/assignment: Informações Gerais (Cabeçalho)")
                     
                     c1, c2 = st.columns(2)
                     
@@ -2414,7 +2459,7 @@ elif pagina == "🧾 Compras (SC)":
                     st_ed = st.selectbox("Status Atual (Sugestão Automática)", STATUS_SC, index=STATUS_SC.index(sugestao_status) if sugestao_status in STATUS_SC else 0)
                     
                     st.divider()
-                    st.markdown("##### 📦 Detalhes dos Itens (PO, Fornecedor e Previsões por Item)")
+                    st.markdown("##### :material/inventory_2: Detalhes dos Itens (PO, Fornecedor e Previsões por Item)")
                     
                     itens_editados = []
                     # Loop pelos itens carregados anteriormente
@@ -2450,7 +2495,7 @@ elif pagina == "🧾 Compras (SC)":
                             "observacao_item": item_sc.get("observacao_item") or "",
                         })
                         
-                    salv_sc = st.form_submit_button("💾 Salvar Atualizações", width="stretch", type="primary")
+                    salv_sc = st.form_submit_button(":material/save: Salvar Atualizações", width="stretch", type="primary")
                     
                 if salv_sc:
                     data_aprovacao_str = str(dt_aprovacao) if dt_aprovacao else None
@@ -2460,11 +2505,11 @@ elif pagina == "🧾 Compras (SC)":
                         itens=itens_editados)
                     
                     if ok:  
-                        st.success(f"✅ **SC Atualizada!** Status definido como: `{st_ed}`")
+                        st.success(f":material/check_circle: **SC Atualizada!** Status definido como: `{st_ed}`")
                         time.sleep(2)
                         st.rerun()
                     else:  
-                        st.error(f"❌ {msg}")
+                        st.error(f":material/cancel: {msg}")
     # ══════════════════════════════════════════════════════════════════════════════
     # 📜 HISTÓRICO (Lista Limpa + Detalhes em Caption)
     # ══════════════════════════════════════════════════════════════════════════════
@@ -2472,7 +2517,7 @@ elif pagina == "🧾 Compras (SC)":
     
     with aba_h:
         with st.container(border=True):
-            st.markdown("### 📜 Linha do Tempo de Recebimentos")
+            st.markdown("### :material/history: Linha do Tempo de Recebimentos")
             st.caption("Registro cronológico de entradas vinculadas a S.C.")
             
             recebimentos = listar_recebimentos_sc(limit=300)
@@ -2485,9 +2530,9 @@ elif pagina == "🧾 Compras (SC)":
                         
                         # Linha Secundária: Detalhes em caption para não poluir visual
                         c_meta1, c_meta2, c_meta3 = st.columns([2, 2, 3])
-                        c_meta1.caption(f"📅 **{fmt(r['data_hora'])}**")
-                        c_meta2.caption(f"🧾 **SC:** {r['numero_sc']} | **NF:** {r['documento_nf'] or '—'}")
-                        c_meta3.caption(f"👤 **Recebido por:** {r['emitente']} | {r['observacao']}")
+                        c_meta1.caption(f":material/calendar_month: **{fmt(r['data_hora'])}**")
+                        c_meta2.caption(f":material/receipt_long: **SC:** {r['numero_sc']} | **NF:** {r['documento_nf'] or '—'}")
+                        c_meta3.caption(f":material/person: **Recebido por:** {r['emitente']} | {r['observacao']}")
             else:
                 st.info("ℹ️ Nenhum recebimento vinculado a SC encontrado no histórico.")
 
@@ -2495,8 +2540,8 @@ elif pagina == "🧾 Compras (SC)":
 # 📇 FICHA 360 DO MATERIAL (v2.6.0) — vida útil do item em uma tela (read-only,
 #     exceto a imagem do produto). Montagem de dados já existentes (v2.2–v2.5).
 # ══════════════════════════════════════════════════════════════════════════════
-elif pagina == "📇 Ficha 360":
-    st.title("📇 Ficha 360 do Material")
+elif pagina == "Ficha 360":
+    st.title(":material/badge: Ficha 360 do Material")
     st.caption("Toda a vida útil do material em uma tela — cadastro, estoque, consumo, "
                "compras, utilização, indicadores e recomendação. Somente leitura "
                "(a única escrita é a imagem do produto).")
@@ -2516,6 +2561,9 @@ elif pagina == "📇 Ficha 360":
             def _g(v):  # número curto e seguro (None -> 0)
                 return f"{(v or 0):g}"
 
+            def _g1(v):  # arredonda a 1 casa (4.46667 -> 4.5); inteiros ficam sem ".0"
+                return f"{round(v or 0, 1):g}"
+
             # ── Cabeçalho: imagem + cadastro ──────────────────────────────────
             col_img, col_cad = st.columns([1, 2])
             with col_img:
@@ -2526,12 +2574,12 @@ elif pagina == "📇 Ficha 360":
                         "<div style='border:1px dashed #444;border-radius:8px;"
                         "padding:32px;text-align:center;color:#888;'>Sem imagem</div>",
                         unsafe_allow_html=True)
-                with st.expander("🖼️ Imagem do produto"):
+                with st.expander(":material/image: Imagem do produto"):
                     up = st.file_uploader(
                         "Enviar/atualizar (png/jpg/webp, até 5 MB)",
                         type=["png", "jpg", "jpeg", "webp", "gif"], key="ficha_img_up")
                     cb1, cb2 = st.columns(2)
-                    if cb1.button("💾 Salvar", key="ficha_img_save",
+                    if cb1.button(":material/save: Salvar", key="ficha_img_save",
                                   disabled=up is None, width="stretch"):
                         ok, msg = salvar_imagem_item(it["id"], up.name, up.getvalue())
                         if ok:
@@ -2539,7 +2587,7 @@ elif pagina == "📇 Ficha 360":
                         else:
                             st.error(msg)
                     if ficha["imagem_abs"] and cb2.button(
-                            "🗑️ Remover", key="ficha_img_del", width="stretch"):
+                            ":material/delete: Remover", key="ficha_img_del", width="stretch"):
                         remover_imagem_item(it["id"]); st.rerun()
             with col_cad:
                 st.subheader(f"{it['part_number']} — {it['nome_item']}")
@@ -2568,11 +2616,11 @@ elif pagina == "📇 Ficha 360":
             _fat_f = float(it.get("fator_conversao") or 1.0) or 1.0
             _uc_f = it.get("unidade_compra")
             if it.get("unidade_divergente"):
-                st.warning("⚠️ **Revisar unidade:** comprado em unidade diferente da de estoque "
+                st.warning(":material/warning: **Revisar unidade:** comprado em unidade diferente da de estoque "
                            "(visto nos POs) e ainda **sem fator de conversão**. Cadastre em "
                            "**Gerenciar Itens → Conversão de unidades** para o recebimento converter certo.")
             elif abs(_fat_f - 1.0) > 1e-9 and _uc_f:
-                st.caption(f"🔁 **Conversão:** compra em **{_uc_f}** · **1 {it.get('unidade') or 'UN'}** "
+                st.caption(f":material/sync: **Conversão:** compra em **{_uc_f}** · **1 {it.get('unidade') or 'UN'}** "
                            f"de estoque = **{_fat_f:g} {_uc_f}** (fator {_fat_f:g}).")
 
             # ── Recomendação de reposição (read-only, reusa v2.5) ─────────────
@@ -2582,7 +2630,7 @@ elif pagina == "📇 Ficha 360":
                         "de compra. Revise no **Assistente de Reposição** (opção "
                         "\"Mostrar itens sem movimentação\") se for um spare a manter em estoque.")
             elif rep["precisa"] and rep["qtd_sugerida"] > 0:
-                st.warning(f"🛒 **{rep['prioridade']}** — repor **{rep['qtd_sugerida']} "
+                st.warning(f":material/shopping_cart: **{rep['prioridade']}** — repor **{rep['qtd_sugerida']} "
                            f"{un}**. {rep['justificativa']}")
             elif rep["precisa"]:
                 # v2.7.1: gatilho ativo mas qtd = 0 → o guarda-chuva já cobre o alvo
@@ -2591,7 +2639,7 @@ elif pagina == "📇 Ficha 360":
                         f"(**{_g(it.get('estoque_em_transito'))} {un}** já negociados) cobre o "
                         f"alvo de **{_g(rep['alvo'])} {un}**. Reavaliar quando o material chegar.")
             else:
-                st.success("✅ Sem necessidade de reposição no momento "
+                st.success(":material/check_circle: Sem necessidade de reposição no momento "
                            "(estoque + guarda-chuva cobrem o horizonte).")
 
             # ── Estoque / cobertura / giro ────────────────────────────────────
@@ -2614,7 +2662,7 @@ elif pagina == "📇 Ficha 360":
             tend = it.get("tendencia_label")
             tend_txt = (f"{tend} {'+' if (it.get('tendencia_pct') or 0) >= 0 else ''}"
                         f"{_g(it.get('tendencia_pct'))}%") if tend else None
-            g2.metric("Consumo/dia", _g(it.get("consumo_medio_diario")), delta=tend_txt,
+            g2.metric("Consumo/dia", _g1(it.get("consumo_medio_diario")), delta=tend_txt,
                       delta_color="inverse", help="Média diária de saídas (janela 30d).")
             g3.metric("Giro anual", _g(giro["giro_anual"]),
                       help=f"Tempo médio em estoque: "
@@ -2630,14 +2678,14 @@ elif pagina == "📇 Ficha 360":
             # ── Consumo (30/60/90) + Valor ────────────────────────────────────
             cc1, cc2 = st.columns(2)
             with cc1:
-                st.markdown("##### 📉 Consumo médio/dia por janela")
+                st.markdown("##### :material/trending_down: Consumo médio/dia por janela")
                 st.bar_chart(pd.DataFrame(
-                    {"Consumo/dia": [it.get("consumo_30d") or 0,
-                                     it.get("consumo_60d") or 0,
-                                     it.get("consumo_90d") or 0]},
+                    {"Consumo/dia": [round(it.get("consumo_30d") or 0, 1),
+                                     round(it.get("consumo_60d") or 0, 1),
+                                     round(it.get("consumo_90d") or 0, 1)]},
                     index=["30 dias", "60 dias", "90 dias"]))
             with cc2:
-                st.markdown("##### 💰 Valor")
+                st.markdown("##### :material/payments: Valor")
                 vc = ficha["valor"]["valor_consumido"]
                 st.metric("Valor em estoque",
                           f"R$ {ficha['valor']['valor_estoque']:,.2f}")
@@ -2655,13 +2703,13 @@ elif pagina == "📇 Ficha 360":
             # ── Evolução de preço ─────────────────────────────────────────────
             ep = ficha["evolucao_preco"]
             if ep:
-                st.markdown("##### 📈 Evolução de preço")
+                st.markdown("##### :material/trending_up: Evolução de preço")
                 df_ep = pd.DataFrame(ep)
                 df_ep["data"] = pd.to_datetime(df_ep["data"], errors="coerce")
                 st.line_chart(df_ep.dropna(subset=["data"]).set_index("data")["preco_unitario"])
 
             # ── Quem consome (departamentos / centros de custo) ───────────────
-            st.markdown("##### 👥 Quem consome (últimos 180 dias)")
+            st.markdown("##### :material/group: Quem consome (últimos 180 dias)")
             dep = ficha["departamentos"]
             if dep["total"] <= 0:
                 st.caption("Sem saídas registradas no período.")
@@ -2677,7 +2725,7 @@ elif pagina == "📇 Ficha 360":
                     for r in dep["por_setor"]]), hide_index=True, width="stretch")
 
             # ── Fornecedores ──────────────────────────────────────────────────
-            with st.expander(f"🏢 Fornecedores ({len(ficha['fornecedores'])})"):
+            with st.expander(f":material/apartment: Fornecedores ({len(ficha['fornecedores'])})"):
                 fs = ficha["fornecedores"]
                 if not fs:
                     st.caption("Sem fornecedores vinculados (vêm dos pedidos do Relatório de SCs).")
@@ -2686,11 +2734,11 @@ elif pagina == "📇 Ficha 360":
                         "Fornecedor": f["fornecedor"], "Último Preço": f["ultimo_preco"],
                         "Moeda": f["moeda"], "Nº Compras": f["n_compras"],
                         "Lead Time (d)": f["lead_time_fornecedor"], "E-mail": f["email"] or "—",
-                        "⭐": "⭐" if f.get("melhor") else "",
+                        ":material/star:": ":material/star:" if f.get("melhor") else "",
                     } for f in fs]), hide_index=True, width="stretch")
 
             # ── Histórico de SCs / POs ────────────────────────────────────────
-            with st.expander(f"🧾 Histórico de SCs / POs ({len(ficha['scs_pos'])})"):
+            with st.expander(f":material/receipt_long: Histórico de SCs / POs ({len(ficha['scs_pos'])})"):
                 sp = ficha["scs_pos"]
                 if not sp:
                     st.caption("Nenhuma SC registrada para este item.")
@@ -2704,7 +2752,7 @@ elif pagina == "📇 Ficha 360":
                     } for s in sp]), hide_index=True, width="stretch")
 
             # ── Histórico de movimentações ────────────────────────────────────
-            with st.expander(f"🔄 Movimentações recentes ({len(ficha['movimentacoes'])})"):
+            with st.expander(f":material/sync: Movimentações recentes ({len(ficha['movimentacoes'])})"):
                 mv = ficha["movimentacoes"]
                 if not mv:
                     st.caption("Sem movimentações.")
@@ -2718,13 +2766,13 @@ elif pagina == "📇 Ficha 360":
 
             # ── Histórico de Part Number ──────────────────────────────────────
             if ficha["historico_pn"]:
-                with st.expander(f"🔖 Histórico de Part Number ({len(ficha['historico_pn'])})"):
+                with st.expander(f":material/bookmark: Histórico de Part Number ({len(ficha['historico_pn'])})"):
                     st.dataframe(pd.DataFrame(ficha["historico_pn"]),
                                  hide_index=True, width="stretch")
 
             # ── Classificação de demanda / XYZ / Sazonalidade (v2.10.0) ───────
             st.divider()
-            st.markdown("##### 🔬 Padrão de demanda & variabilidade")
+            st.markdown("##### :material/science: Padrão de demanda & variabilidade")
             cls = ficha.get("classificacao") or {}
             dem = cls.get("demanda") or {}
             xyz = cls.get("xyz") or {}
@@ -2753,45 +2801,45 @@ elif pagina == "📇 Ficha 360":
                     st.caption("Precisa de ≥2 meses de consumo para medir a variabilidade.")
 
             if cm:
-                st.markdown("###### 📅 Consumo real por mês")
+                st.markdown("###### :material/calendar_month: Consumo real por mês")
                 df_cm = pd.DataFrame(cm).set_index("mes")["qtd"]
                 st.bar_chart(df_cm)
 
             if not saz.get("disponivel"):
-                st.caption(f"🍂 **Sazonalidade:** amadurecendo — "
+                st.caption(f":material/eco: **Sazonalidade:** amadurecendo — "
                            f"{saz.get('meses_atuais', 0)}/{saz.get('meses_necessarios', 12)} "
                            "meses (precisa de 1 ciclo anual completo para um perfil confiável).")
-            st.caption(f"📅 Indicadores de série baseados em ~{mat['dias']} dias de histórico — "
+            st.caption(f":material/calendar_month: Indicadores de série baseados em ~{mat['dias']} dias de histórico — "
                        "diagnóstico que amadurece conforme os dados acumulam. A base do Sr. "
                        "Neidson (mín/máx/lead time/categoria) permanece intocada.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FEEDBACK / SUGESTÕES (Item 3 / v2.1.0)
 # ══════════════════════════════════════════════════════════════════════════════
-elif pagina == "❓ Ajuda":
-    st.title("❓ Central de Ajuda")
+elif pagina == "Ajuda":
+    st.title(":material/help: Central de Ajuda")
     st.caption("Guias por perfil, o **Manual do Sistema** (tela a tela) e o canal de feedback. "
-               "💡 Tema claro/escuro: botão **Tema** na barra lateral.")
+               ":material/lightbulb: Tema claro/escuro: botão **Tema** na barra lateral.")
 
     tab_inicio, tab_manual, tab_enviar, tab_gerenciar = st.tabs(
-        ["🚀 Começar aqui", "📚 Manual do Sistema", "✍️ Enviar Feedback", "🗂️ Backlog"])
+        [":material/rocket_launch: Começar aqui", ":material/menu_book: Manual do Sistema", ":material/edit: Enviar Feedback", ":material/folder: Backlog"])
 
     with tab_inicio:
         st.caption("Guias rápidos por perfil. Para o detalhe de cada botão/card/gráfico, veja a "
-                   "aba **📚 Manual do Sistema**.")
+                   "aba **:material/menu_book: Manual do Sistema**.")
         _perfil = st.radio("Qual é o seu perfil?",
-                           ["📖 Assistente de Materiais (almoxarifado)", "🛒 Comprador"],
+                           ["Assistente de Materiais (almoxarifado)", "Comprador"],
                            horizontal=True, key="ajuda_perfil")
-        _chave = "assistente" if _perfil.startswith("📖") else "comprador"
+        _chave = "assistente" if _perfil.startswith("Assistente") else "comprador"
         st.markdown(GUIAS_PERSONA[_chave])
 
     with tab_manual:
         st.caption("Explica **cada elemento** da interface: para que serve · com base em quê · "
                    "como o sistema calcula. Ligue o modo abaixo para uma explicação bem simples.")
-        _eli5 = st.toggle("🧒 Explicar como para uma criança", value=False, key="ajuda_eli5",
+        _eli5 = st.toggle("Explicar em linguagem simples", value=False, key="ajuda_eli5",
                           help="Reescreve tudo em linguagem simples — ótimo para entender os "
                                "cálculos e os dashboards.")
-        _busca_manual = st.text_input("🔎 Filtrar por palavra (opcional)", key="ajuda_busca",
+        _busca_manual = st.text_input(":material/search: Filtrar por palavra (opcional)", key="ajuda_busca",
                                       placeholder="ex.: cobertura, ABC, conversão, guarda-chuva")
         _b = (_busca_manual or "").strip().lower()
         for _sec in MANUAL:
@@ -2808,7 +2856,7 @@ elif pagina == "❓ Ajuda":
             for _it in _itens:
                 with st.expander(_it["nome"]):
                     if _eli5:
-                        st.markdown(f"🧒 {_it['crianca']}")
+                        st.markdown(f" {_it['crianca']}")
                     else:
                         st.markdown(f"**Para que serve:** {_it['para_que']}")
                         st.markdown(f"**Com base em quê:** {_it['base']}")
@@ -2827,7 +2875,7 @@ elif pagina == "❓ Ajuda":
                                          ["—", "Dashboard", "Inventário", "Gerenciar Itens",
                                           "Movimentações", "Requisição", "Compras (SC)",
                                           "Configurações", "Geral"], index=0)
-                enviado = st.form_submit_button("📨 Enviar Feedback", type="primary", width="stretch")
+                enviado = st.form_submit_button(":material/mail: Enviar Feedback", type="primary", width="stretch")
                 if enviado:
                     ok, msg = registrar_feedback(
                         fb_tipo, fb_titulo, fb_desc,
@@ -2873,7 +2921,7 @@ elif pagina == "❓ Ajuda":
                                             if fb.get("prioridade") in ["Baixa", "Média", "Alta", "Crítica"] else 0),
                                      key="fb_up_prio")
             resposta = st.text_area("Resposta / nota interna", value=fb.get("resposta") or "", key="fb_up_resp")
-            if st.button("💾 Salvar atualização", type="primary", key="fb_up_btn"):
+            if st.button(":material/save: Salvar atualização", type="primary", key="fb_up_btn"):
                 ok, msg = atualizar_feedback(
                     fb["id"], status=novo_status,
                     prioridade=(None if nova_prio == "—" else nova_prio),
@@ -2889,31 +2937,31 @@ elif pagina == "❓ Ajuda":
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIGURAÇÕES
 # ══════════════════════════════════════════════════════════════════════════════
-elif pagina == "⚙️ Configurações":
-    st.title("⚙️ Configurações do Sistema")
+elif pagina == "Configurações":
+    st.title(":material/settings: Configurações do Sistema")
     st.caption("Gestão de Listas Mestras e Parâmetros Globais.")
 
     # ── Aparência / Tema (v2.11.0) ────────────────────────────────────────────
     with st.container(border=True):
-        st.subheader("🎨 Aparência")
-        _tema_txt = "🌙 Escuro" if PAL["tipo"] == "dark" else "☀️ Claro"
-        st.markdown(f"**Tema atual:** {_tema_txt}  ·  **Padrão:** 🌙 Escuro")
+        st.subheader(":material/palette: Aparência")
+        _tema_txt = ":material/dark_mode: Escuro" if PAL["tipo"] == "dark" else ":material/light_mode: Claro"
+        st.markdown(f"**Tema atual:** {_tema_txt}  ·  **Padrão:** :material/dark_mode: Escuro")
         st.caption("Para alternar entre **claro** e **escuro**, use o botão **Tema** na **barra "
                    "lateral** (abaixo do menu). A escolha é lembrada ao recarregar (fica na URL). "
-                   "O fundo, os textos, o menu e os gráficos acompanham. ⚠️ Observação: no modo "
+                   "O fundo, os textos, o menu e os gráficos acompanham. :material/warning: Observação: no modo "
                    "claro, as **tabelas** podem continuar escuras — é uma limitação do Streamlit "
                    "(as grades seguem o tema base); no modo escuro fica tudo consistente.")
         st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Importação da base do Neidson — Tipo, Mínimo, Máximo, Lead Time (Item 1) ──
     with st.container(border=True):
-        st.subheader("📥 Importar Base (Tipo/Categoria, Mínimo, Máximo, Lead Time)")
+        st.subheader(":material/download: Importar Base (Tipo/Categoria, Mínimo, Máximo, Lead Time)")
         st.caption("Atualiza itens **existentes** (casados pelo PN) com os dados apurados pelo "
                    "Sr. Neidson. PNs não encontrados são apenas relatados — nenhum item é criado. "
                    "Um backup do banco é criado automaticamente antes de aplicar.")
         arq_neidson = st.file_uploader("Planilha (.xlsx)", type=["xlsx"], key="upl_neidson")
         if arq_neidson is not None:
-            if st.button("🔍 Pré-visualizar (simulação)", key="btn_prev_neidson"):
+            if st.button(":material/search: Pré-visualizar (simulação)", key="btn_prev_neidson"):
                 ok_p, res_p = importar_inventario_neidson(arq_neidson, arq_neidson.name, dry_run=True)
                 st.session_state["prev_neidson"] = (ok_p, res_p, arq_neidson.name)
 
@@ -2939,7 +2987,7 @@ elif pagina == "⚙️ Configurações":
                         st.warning("PNs duplicados na planilha (mantém a última ocorrência): "
                                    + ", ".join(res_p["pns_duplicados_planilha"][:20]))
                     st.warning("Confira os números acima e clique em **Aplicar** para gravar.")
-                    if st.button("✅ Aplicar atualização", type="primary", key="btn_apply_neidson"):
+                    if st.button(":material/check_circle: Aplicar atualização", type="primary", key="btn_apply_neidson"):
                         ok_a, res_a = importar_inventario_neidson(arq_neidson, nome_p, dry_run=False)
                         if ok_a:
                             st.success(f"Importação concluída — atualizados: {res_a['atualizados']} | "
@@ -2953,11 +3001,11 @@ elif pagina == "⚙️ Configurações":
 
     # Definição das categorias de listas
     LISTAS_CONFIG = {
-        "centro_custo": "💼 Centros de Custo",
-        "local": "📍 Locais de Armazenagem",
-        "fornecedor": "🏭 Fornecedores",
-        "autorizador": "🔑 Tipos de Autorizador",
-        "setor": "🏢 Setores Solicitantes" # Adicionado setor se necessário
+        "centro_custo": ":material/work: Centros de Custo",
+        "local": ":material/location_on: Locais de Armazenagem",
+        "fornecedor": ":material/factory: Fornecedores",
+        "autorizador": ":material/key: Tipos de Autorizador",
+        "setor": ":material/apartment: Setores Solicitantes" # Adicionado setor se necessário
     }
 
     for tipo_lista, titulo in LISTAS_CONFIG.items():
@@ -2976,7 +3024,7 @@ elif pagina == "⚙️ Configurações":
                         with st.container(border=True):
                             c_txt, c_btn = st.columns([3, 1])
                             c_txt.markdown(f"**{val}**")
-                            if c_btn.button("✕", key=f"rm_{tipo_lista}_{i}", help="Remover"):
+                            if c_btn.button(":material/close:", key=f"rm_{tipo_lista}_{i}", help="Remover"):
                                 remover_valor_lista(tipo_lista, val)
                                 st.rerun()
             else:
@@ -2992,7 +3040,7 @@ elif pagina == "⚙️ Configurações":
                     placeholder="Digite e pressione Adicionar...",
                     label_visibility="collapsed"
                 )
-                submitted = c_btn.form_submit_button("➕ Adicionar", width="stretch")
+                submitted = c_btn.form_submit_button(":material/add: Adicionar", width="stretch")
 
                 if submitted:
                     if novo_valor.strip():

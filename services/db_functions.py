@@ -97,14 +97,14 @@ def calcular_cobertura(estoque_atual, guarda_chuva, consumo_diario):
 
 def calcular_status_sc(data_aprovacao, numero_po, fornecedor, tem_pendente):
     if not tem_pendente:
-        return "✅ SC Concluída"
+        return "SC Concluída"
     if numero_po and fornecedor:
-        return "🚚 Aguardando Entrega"
+        return "Aguardando Entrega"
     if numero_po and not fornecedor:
-        return "🔍 Verificar Fornecedor"
+        return "Verificar Fornecedor"
     if data_aprovacao and not numero_po:
-        return "⚠️ Cotação"
-    return "📢 Aprovação Gestor"
+        return "Cotação"
+    return "Aprovação Gestor"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LISTAS CONFIGURÁVEIS
@@ -134,6 +134,53 @@ def remover_valor_lista(tipo, valor):
         return True, f"'{valor}' removido."
     except Exception as e:
         return False, str(e)
+
+
+def _setores_do_historico(conn):
+    """Setores distintos já usados no histórico (movimentações + requisições),
+    sem nulos/vazios. Ambas as tabelas têm a coluna `setor` (ver criar_requisicao)."""
+    rows = conn.execute(
+        "SELECT DISTINCT setor FROM ("
+        "  SELECT setor FROM movimentacoes"
+        "  UNION SELECT setor FROM requisicoes"
+        ") WHERE setor IS NOT NULL AND TRIM(setor) <> ''"
+    ).fetchall()
+    return [str(r["setor"]).strip() for r in rows if str(r["setor"]).strip()]
+
+
+def listar_setores_conhecidos():
+    """Setores para o select da Requisição: união (case-insensitive) dos setores
+    cadastrados em Configurações com os já usados no histórico de movimentações e
+    requisições. Padroniza a escolha sem esconder os setores reais que nunca foram
+    formalmente cadastrados. Retorna lista ordenada, sem duplicatas nem vazios."""
+    vistos = {}  # chave normalizada (UPPER) -> forma exibida (primeira vista vence)
+    def _add(v):
+        v = (str(v).strip() if v is not None else "")
+        if v:
+            vistos.setdefault(v.upper(), v)
+    for v in listar_valores("setor"):   # Configurações primeiro (forma cadastrada vence)
+        _add(v)
+    with transaction() as conn:
+        for v in _setores_do_historico(conn):
+            _add(v)
+    return sorted(vistos.values(), key=lambda s: s.upper())
+
+
+def sincronizar_setores_config():
+    """Registra em Configurações (lista 'setor') os setores que já aparecem no
+    histórico mas ainda não foram cadastrados. Idempotente — `adicionar_valor_lista`
+    faz UPPER + dedupe. Retorna a lista dos setores efetivamente adicionados."""
+    cadastrados = {s.upper() for s in listar_valores("setor")}
+    with transaction() as conn:
+        historico = _setores_do_historico(conn)
+    adicionados = []
+    for s in historico:
+        if s.upper() not in cadastrados:
+            ok, _ = adicionar_valor_lista("setor", s)
+            if ok:
+                adicionados.append(s.upper())
+                cadastrados.add(s.upper())
+    return adicionados
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INVENTÁRIO
@@ -237,7 +284,7 @@ def listar_inventario():
         if not sc_num:
             item["status_sc"] = "Sem SC"
         elif sc_status_raw in ["Recebido", "Cancelado"]:
-            item["status_sc"] = "✅ SC Concluída"
+            item["status_sc"] = "SC Concluída"
         elif saldo_transito > 0:
             item["status_sc"] = calcular_status_sc(
                 item["sc_aprovacao"],
@@ -247,9 +294,9 @@ def listar_inventario():
             )
         else:
             if sc_status_raw:
-                item["status_sc"] = f"📄 {sc_status_raw}"
+                item["status_sc"] = f"{sc_status_raw}"
             else:
-                item["status_sc"] = "✅ SC Concluída"
+                item["status_sc"] = "SC Concluída"
 
         # Compatibilidade com código legado
         item["status_display"] = item["status_material"]

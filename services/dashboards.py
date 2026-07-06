@@ -22,9 +22,9 @@ from services.db_functions import (
 from services.planejamento import gerar_scs_sugeridas, gerar_sugestoes_reposicao
 
 # Rótulos dos públicos — fonte única de verdade (app.py e manual de Ajuda consomem).
-PUBLICO_COMPRADOR = "👤 Comprador"
-PUBLICO_GESTAO = "📊 Gestão"
-PUBLICO_DIRETORIA = "🏛️ Diretoria"
+PUBLICO_COMPRADOR = "Comprador"
+PUBLICO_GESTAO = "Gestão"
+PUBLICO_DIRETORIA = "Diretoria"
 PUBLICOS = [PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_DIRETORIA]
 
 
@@ -119,6 +119,11 @@ def montar_visao_gestao():
 
     dist = {"ok": 0, "atencao": 0, "comprar": 0, "sem_mov": 0,
             "zerados": 0, "inventariado": 0}
+    # Saúde FÍSICA do estoque — Ok/Atenção/Crítico/Zerado sobre TODOS os itens,
+    # INCLUSIVE os "Sem Movimentação" (usa `status_estoque_fisico`, que existe em
+    # todo item, em vez de `status_material`, que sobrepõe o status por "Sem Mov.").
+    # Reusa a classificação Mín×1,2 já validada; só destaca "Zerado" (=0) do crítico.
+    saude = {"ok": 0, "atencao": 0, "critico": 0, "zerado": 0}
     com_consumo = 0
     fora_ruptura = 0
     coberturas = []
@@ -134,6 +139,16 @@ def montar_visao_gestao():
             dist["ok"] += 1
         if (i.get("estoque_atual") or 0) <= 0:
             dist["zerados"] += 1
+
+        sf = i.get("status_estoque_fisico", "")
+        if (i.get("estoque_atual") or 0) <= 0:
+            saude["zerado"] += 1           # = 0 (destacado do crítico)
+        elif "COMPRAR" in sf:
+            saude["critico"] += 1          # abaixo/no mínimo, mas > 0
+        elif "ATENÇÃO" in sf:
+            saude["atencao"] += 1          # perto de ficar abaixo do mínimo
+        else:
+            saude["ok"] += 1               # acima do confortável (Mín × 1,2)
         if i.get("data_inventario"):
             dist["inventariado"] += 1
         if not i.get("sem_movimentacao"):
@@ -163,6 +178,7 @@ def montar_visao_gestao():
         },
         "valor_detalhe": valor,
         "distribuicao": dist,
+        "saude_fisica": saude,
         "total": total,
         "com_consumo": com_consumo,
         "demanda": dict(demanda),

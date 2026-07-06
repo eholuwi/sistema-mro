@@ -56,6 +56,10 @@ def test_gestao_distribuicao_e_nivel_servico(db, make_item, registrar_consumo):
     assert d["zerados"] == 1                 # B
     assert d["ok"] == 1                      # A
     assert d["comprar"] == 1                 # B
+    # Saúde física conta TODOS os itens (inclusive Sem Movimentação): A e C físicamente
+    # OK (100>10×1,2 e 50>5×1,2), B zerado. C entra em "ok" apesar de Sem Movimentação.
+    sf = vm["saude_fisica"]
+    assert sf == {"ok": 2, "atencao": 0, "critico": 0, "zerado": 1}
     # Nível de serviço = fora de ruptura / com consumo = 1/2 = 50%.
     assert vm["kpis"]["nivel_servico"] == 50.0
     # Sem preço cadastrado → valor imobilizado zero (mas presente e numérico).
