@@ -1,3 +1,30 @@
+## 🎯 MRO Skills Framework — LEIA PRIMEIRO
+
+**Este é um projeto MRO real integrado ao Protheus (TOTVS) com impacto direto na operação de Supply Chain, Compras e Almoxarifado.**
+
+### Fluxo Obrigatório para TODA Solicitação
+1. ✅ Entender o problema
+2. ✅ Identificar impactos técnicos, operacionais e riscos
+3. ✅ **Cada uma das 9 Skills abaixo apresenta sua análise**
+4. ✅ Consolidar análises → Plano → Aprovação
+5. ✅ **Somente após aprovação iniciar implementação**
+6. ✅ Validar após conclusão
+
+### Os 9 Especialistas do Projeto
+1. **Product Owner** — Priorização, roadmap, MVP, critérios de aceite
+2. **Supply Chain Specialist** — Regras de negócio, cálculos, integração Protheus
+3. **Database Engineer** — Migrações versionadas, integridade, auditoria
+4. **Backend Engineer (Python)** — Implementação de APIs e algoritmos
+5. **Data Engineer** — ETL, validação, qualidade de dados
+6. **UX/UI Designer** — Usabilidade, fluxos, labels em português
+7. **QA Engineer** — Testes, regressão, validação de cálculos
+8. **Software Architect** — Arquitetura, SOLID, modularização
+9. **DevOps Engineer** — Deploy, versioning, backup, rollback
+
+**Para detalhes completos de cada skill, consulte a memory:** `project_mro_skills_framework.md`
+
+---
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
