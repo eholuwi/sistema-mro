@@ -24,3 +24,6 @@ ENV/
 
 # Ficha 360 — imagens de produto (dado operacional, fora do versionamento)
 docs/itens/
+
+# Graphify — grafo de conhecimento gerado localmente
+graphify-out/
