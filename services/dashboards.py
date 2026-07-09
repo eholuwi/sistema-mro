@@ -13,10 +13,11 @@ from collections import Counter
 from datetime import date, datetime
 
 from services.constants import (
-    AGING_ALERTA_DIAS, AGING_CRITICO_DIAS, PREVISAO_RUPTURA_SEM_RISCO,
+    ABC_LIMIAR_A, ABC_LIMIAR_B, AGING_ALERTA_DIAS, AGING_CRITICO_DIAS,
+    CC_GENERICOS, PREVISAO_RUPTURA_SEM_RISCO, SAIDA_REAL_WHERE,
 )
 from services.db_functions import (
-    calcular_giro, listar_inventario, listar_scs, obter_abc_valor,
+    _preco_valoracao, calcular_giro, listar_inventario, listar_scs, obter_abc_valor,
     obter_evolucao_valor_imobilizado, obter_valor_imobilizado, transaction,
 )
 from services.planejamento import gerar_scs_sugeridas, gerar_sugestoes_reposicao
@@ -25,7 +26,8 @@ from services.planejamento import gerar_scs_sugeridas, gerar_sugestoes_reposicao
 PUBLICO_COMPRADOR = "Comprador"
 PUBLICO_GESTAO = "Gestão"
 PUBLICO_DIRETORIA = "Diretoria"
-PUBLICOS = [PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_DIRETORIA]
+PUBLICO_EXECUTIVO = "Mensal"   # v3.2.0 — visão executiva de apresentação (mês a mês)
+PUBLICOS = [PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_DIRETORIA, PUBLICO_EXECUTIVO]
 
 
 def _dias_desde(iso, hoje=None):
@@ -208,10 +210,249 @@ def montar_visao_diretoria(dias_evolucao=180, top_abc=10):
     }
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 📊 EXECUTIVO / MENSAL — panorama do ANO CORRENTE (YTD) p/ apresentação (v3.2.0)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Visão densa de apresentação, sempre do ANO CORRENTE (1º/jan → hoje): foco em VALOR
+# (R$) e em RANKINGS Top 10, além de séries mensais e destaques. Princípios do PO:
+#   • CONSUMO REAL sempre = saída por requisição (`SAIDA_REAL_WHERE`) — ajustes físicos
+#     de inventário (contagens) NÃO entram (era o que inflava a curva ABC).
+#   • Valoração pelo preço de referência (cache SCM) / último preço — mesma base do
+#     Valor Imobilizado. Rótulo honesto na UI.
+#   • Reaproveita Gestão/Comprador para as métricas de estado (nível de serviço, giro,
+#     distribuição, demanda, aging), sem recalcular.
+
+
+def _consumo_ytd_por_item(ano, conn=None):
+    """Consumo REAL do ano (por requisição), por item, com qtd e VALOR (R$ = qtd ×
+    preço de valoração). Uma varredura; base dos rankings por valor, do ABC e da
+    composição por tipo de material."""
+    itens = []
+    with transaction(conn) as c:
+        rows = c.execute(f"""
+            SELECT i.id, i.part_number, i.nome_item, i.tipo_material, i.unidade,
+                   COALESCE(SUM(m.quantidade),0) AS qtd
+            FROM movimentacoes m JOIN inventario i ON i.id = m.item_id
+            WHERE {SAIDA_REAL_WHERE} AND strftime('%Y', m.data_hora)=?
+            GROUP BY i.id HAVING qtd > 0
+        """, (str(ano),)).fetchall()
+        for r in rows:
+            preco, _origem, _moeda = _preco_valoracao(c, r["id"])
+            itens.append({
+                "item_id": r["id"], "part_number": r["part_number"],
+                "nome_item": r["nome_item"], "tipo_material": r["tipo_material"] or "—",
+                "unidade": r["unidade"], "qtd": round(float(r["qtd"]), 2),
+                "preco": preco, "valor": round(float(r["qtd"]) * preco, 2),
+            })
+    return itens
+
+
+def _classificar_abc(itens_consumo):
+    """Curva ABC (classe A/B/C por % acumulada do valor) sobre a lista de consumo YTD.
+    Mesma convenção de `obter_abc_valor`. Devolve (lista ordenada desc, total)."""
+    itens = sorted([dict(x) for x in itens_consumo if x["valor"] > 0],
+                   key=lambda x: x["valor"], reverse=True)
+    total = sum(x["valor"] for x in itens)
+    acc = 0.0
+    for x in itens:
+        prev = (acc / total * 100.0) if total else 0.0
+        acc += x["valor"]
+        x["pct_acumulado"] = round((acc / total * 100.0) if total else 0.0, 1)
+        x["classe"] = "A" if prev < ABC_LIMIAR_A else ("B" if prev < ABC_LIMIAR_B else "C")
+    return itens, round(total, 2)
+
+
+def _composicao_por_tipo(itens_consumo, top=8):
+    """Valor consumido YTD agregado por tipo de material (donut). Junta a cauda longa
+    em 'Outros' para o gráfico não virar confete."""
+    agg = Counter()
+    for x in itens_consumo:
+        agg[x["tipo_material"] or "—"] += x["valor"]
+    ordenado = sorted(agg.items(), key=lambda kv: kv[1], reverse=True)
+    principais = ordenado[:top]
+    outros = sum(v for _, v in ordenado[top:])
+    dados = [{"tipo": t, "valor": round(v, 2)} for t, v in principais if v > 0]
+    if outros > 0:
+        dados.append({"tipo": "Outros", "valor": round(outros, 2)})
+    return dados
+
+
+def _consumo_mensal_ytd(ano, conn=None):
+    """Valor consumido (R$) e quantidade por mês do ano corrente (evolução). Valor via
+    preco_referencia direto no SQL (rápido); coerente com os rankings por valor."""
+    with transaction(conn) as c:
+        rows = c.execute(f"""
+            SELECT strftime('%Y-%m', m.data_hora) AS mes,
+                   COALESCE(SUM(m.quantidade * COALESCE(i.preco_referencia,0)),0) AS valor,
+                   COALESCE(SUM(m.quantidade),0) AS qtd
+            FROM movimentacoes m JOIN inventario i ON i.id = m.item_id
+            WHERE {SAIDA_REAL_WHERE} AND strftime('%Y', m.data_hora)=?
+            GROUP BY mes ORDER BY mes
+        """, (str(ano),)).fetchall()
+    return [{"mes": r["mes"], "valor": round(float(r["valor"] or 0), 2),
+             "qtd": round(float(r["qtd"] or 0), 2)} for r in rows if r["mes"]]
+
+
+def _scs_criadas_por_mes_ytd(ano, conn=None):
+    """SCs criadas por mês no ano corrente (exclui canceladas)."""
+    with transaction(conn) as c:
+        rows = c.execute("""
+            SELECT strftime('%Y-%m', data_abertura) AS mes, COUNT(*) AS n
+            FROM solicitacoes_compra
+            WHERE data_abertura IS NOT NULL AND status NOT IN ('Cancelado')
+              AND strftime('%Y', data_abertura)=?
+            GROUP BY mes ORDER BY mes
+        """, (str(ano),)).fetchall()
+    return [{"mes": r["mes"], "criadas": r["n"]} for r in rows if r["mes"]]
+
+
+def _n_requisicoes_ytd(ano, conn=None):
+    """Nº de requisições distintas com consumo real no ano corrente."""
+    with transaction(conn) as c:
+        r = c.execute(f"""
+            SELECT COUNT(DISTINCT requisicao_id) AS n FROM movimentacoes
+            WHERE {SAIDA_REAL_WHERE} AND strftime('%Y', data_hora)=?
+        """, (str(ano),)).fetchone()
+    return r["n"] or 0
+
+
+def _ranking_cc_ytd(ano, limit=10, conn=None):
+    """Top centros de custo por valor consumido (R$) no ano corrente. Exclui os CCs
+    genéricos/contábeis (99000/INVENTÁRIO/EDIÇÃO), que não indicam setor consumidor."""
+    placeholders = ",".join("?" for _ in CC_GENERICOS)
+    with transaction(conn) as c:
+        rows = c.execute(f"""
+            SELECT COALESCE(NULLIF(TRIM(m.centro_custo),''),'(sem CC)') AS rotulo,
+                   COALESCE(SUM(m.quantidade * COALESCE(i.preco_referencia,0)),0) AS valor
+            FROM movimentacoes m JOIN inventario i ON i.id = m.item_id
+            WHERE {SAIDA_REAL_WHERE} AND strftime('%Y', m.data_hora)=?
+              AND TRIM(COALESCE(m.centro_custo,'')) NOT IN ({placeholders})
+            GROUP BY rotulo HAVING valor > 0 ORDER BY valor DESC LIMIT ?
+        """, (str(ano), *CC_GENERICOS, limit)).fetchall()
+    return [{"rotulo": r["rotulo"], "valor": round(float(r["valor"] or 0), 2)} for r in rows]
+
+
+def _ranking_emitente_ytd(ano, limit=10, conn=None):
+    """Top emitentes por nº de requisições reais no ano corrente."""
+    with transaction(conn) as c:
+        rows = c.execute(f"""
+            SELECT COALESCE(NULLIF(TRIM(emitente),''),'(sem emitente)') AS rotulo,
+                   COUNT(DISTINCT requisicao_id) AS n
+            FROM movimentacoes
+            WHERE {SAIDA_REAL_WHERE} AND strftime('%Y', data_hora)=?
+            GROUP BY rotulo ORDER BY n DESC LIMIT ?
+        """, (str(ano), limit)).fetchall()
+    return [{"rotulo": r["rotulo"], "n": r["n"]} for r in rows]
+
+
+def _ranking_setor_ytd(ano, limit=10, conn=None):
+    """Top setores por nº de requisições reais no ano corrente."""
+    with transaction(conn) as c:
+        rows = c.execute(f"""
+            SELECT COALESCE(NULLIF(TRIM(setor),''),'(sem setor)') AS rotulo,
+                   COUNT(DISTINCT requisicao_id) AS n
+            FROM movimentacoes
+            WHERE {SAIDA_REAL_WHERE} AND strftime('%Y', data_hora)=?
+            GROUP BY rotulo ORDER BY n DESC LIMIT ?
+        """, (str(ano), limit)).fetchall()
+    return [{"rotulo": r["rotulo"], "n": r["n"]} for r in rows]
+
+
+def _top_valor_imobilizado(limit=10, conn=None):
+    """Top itens por capital PARADO em estoque (estoque_atual × preço de referência)."""
+    with transaction(conn) as c:
+        rows = c.execute("""
+            SELECT part_number, nome_item,
+                   estoque_atual * COALESCE(preco_referencia,0) AS valor
+            FROM inventario
+            WHERE COALESCE(preco_referencia,0) > 0 AND COALESCE(estoque_atual,0) > 0
+            ORDER BY valor DESC LIMIT ?
+        """, (limit,)).fetchall()
+    return [{"part_number": r["part_number"], "nome_item": r["nome_item"],
+             "valor": round(float(r["valor"] or 0), 2)} for r in rows]
+
+
+def _top_dead_stock(ano, limit=10, conn=None):
+    """Top itens SEM consumo real no ano corrente com maior valor parado — o 'dinheiro
+    dormindo' (dead stock). História forte de melhoria p/ a apresentação."""
+    with transaction(conn) as c:
+        rows = c.execute(f"""
+            SELECT i.part_number, i.nome_item,
+                   i.estoque_atual * COALESCE(i.preco_referencia,0) AS valor
+            FROM inventario i
+            WHERE COALESCE(i.preco_referencia,0) > 0 AND COALESCE(i.estoque_atual,0) > 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM movimentacoes m
+                  WHERE m.item_id = i.id AND {SAIDA_REAL_WHERE}
+                    AND strftime('%Y', m.data_hora)=?)
+            ORDER BY valor DESC LIMIT ?
+        """, (str(ano), limit)).fetchall()
+    return [{"part_number": r["part_number"], "nome_item": r["nome_item"],
+             "valor": round(float(r["valor"] or 0), 2)} for r in rows]
+
+
+def montar_visao_executiva(hoje=None):
+    """View-model Executivo/Mensal do ANO CORRENTE (YTD): KPIs em R$/serviço, séries
+    mensais, curva ABC e vários rankings Top 10. Reaproveita Gestão/Comprador para as
+    métricas de estado. Consumo sempre REAL (por requisição), valoração pelo preço de
+    referência (rótulo honesto na UI)."""
+    hoje = hoje or date.today()
+    ano = hoje.year
+
+    consumo_itens = _consumo_ytd_por_item(ano)
+    abc, total_consumido = _classificar_abc(consumo_itens)
+    gestao = montar_visao_gestao()
+    comprador = montar_visao_comprador(hoje=hoje)
+    valor_imob = obter_valor_imobilizado()
+
+    return {
+        "ano": ano,
+        "kpis": {
+            "valor_imobilizado": valor_imob["total_brl"],
+            "valor_consumido_ytd": total_consumido,
+            "n_requisicoes_ytd": _n_requisicoes_ytd(ano),
+            "itens_consumidos_ytd": len(consumo_itens),
+            "nivel_servico": gestao["kpis"]["nivel_servico"],
+            "giro_medio": gestao["kpis"]["giro_medio"],
+            "criticos": comprador["kpis"]["criticos"],
+            "rupturas": comprador["kpis"]["rupturas"],
+        },
+        "valor_detalhe": valor_imob,
+        "series": {
+            "consumo_mensal": _consumo_mensal_ytd(ano),
+            "scs_mensal": _scs_criadas_por_mes_ytd(ano),
+        },
+        "abc": {"itens": abc[:12], "classes": dict(Counter(x["classe"] for x in abc)),
+                "total": total_consumido},
+        "composicao_tipo": _composicao_por_tipo(consumo_itens),
+        "rankings": {
+            "top_valor_consumido": abc[:10],                     # já ordenado por valor
+            "top_qtd_consumida": sorted(consumo_itens, key=lambda x: x["qtd"],
+                                        reverse=True)[:10],
+            "top_valor_imobilizado": _top_valor_imobilizado(10),
+            "top_dead_stock": _top_dead_stock(ano, 10),
+            "top_centro_custo": _ranking_cc_ytd(ano, 10),
+            "top_emitente": _ranking_emitente_ytd(ano, 10),
+            "top_setor": _ranking_setor_ytd(ano, 10),
+        },
+        "destaques": {
+            "distribuicao": gestao["distribuicao"],
+            "saude_fisica": gestao["saude_fisica"],
+            "demanda": gestao["demanda"],
+            "xyz": gestao["xyz"],
+            "aging": comprador["aging"],
+            "total": gestao["total"],
+        },
+    }
+
+
 def montar_dashboard(publico):
     """Roteador: devolve o view-model do público pedido (default = Gestão)."""
     if publico == PUBLICO_COMPRADOR:
         return montar_visao_comprador()
     if publico == PUBLICO_DIRETORIA:
         return montar_visao_diretoria()
+    if publico == PUBLICO_EXECUTIVO:
+        return montar_visao_executiva()
     return montar_visao_gestao()

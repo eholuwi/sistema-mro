@@ -88,7 +88,7 @@ Consolidação completa da vida útil de um item em uma tela:
 
 ---
 
-# 🧾 Gestão Inteligente de Compras (SC)
+# 🧾 Gestão Inteligente — Controle de SC
 
 Separação completa entre saúde do estoque e fluxo administrativo da compra:
 

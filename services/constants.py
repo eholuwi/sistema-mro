@@ -129,6 +129,11 @@ REPOSICAO_DESFECHOS = ("gerada", "criou_sc", "adiada", "ignorada")
 # sem histórico caem na categoria padrão abaixo (categoria legítima da taxonomia).
 CATEGORIA_SC_PADRAO = "SOLICITAÇÃO DE COMPRA - OUTROS"
 
+# v3.1.0: as SCs sugeridas passaram a agrupar por Tipo do material (`tipo_material`,
+# campo livre do cadastro) em vez da natureza acima. Itens sem tipo cadastrado caem
+# nesta categoria padrão.
+TIPO_MATERIAL_PADRAO = "Não Classificado"
+
 # Centros de custo genéricos/contábeis que NÃO indicam o setor consumidor real
 # (dominam as saídas por serem conta residual/rótulos de ajuste). São ignorados ao
 # sugerir o CC de uma SC, para não sugerir "99000" em tudo.

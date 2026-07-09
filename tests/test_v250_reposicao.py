@@ -49,7 +49,7 @@ def _set_inv(item_id, **campos):
 def test_lead_time_cadastrado_tem_prioridade():
     lt, origem, mat = P.lead_time_efetivo(_item(lead_time_dias=20, lead_time_calculado=99))
     assert lt == 20
-    assert "Neidson" in origem
+    assert "Compras" in origem
     assert mat is None
 
 
@@ -159,7 +159,7 @@ def test_qtd_neidson_domina():
     q = P.calcular_qtd_sugerida(
         _item(consumo_medio_diario=0.1, estoque_maximo=100, estoque_atual=40))
     assert q["alvo"] == 100
-    assert q["alvo_origem"] == "máx. Neidson"
+    assert q["alvo_origem"] == "máx. Compras"
     assert q["qtd"] == 60  # 100 - 40
 
 

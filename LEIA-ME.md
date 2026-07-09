@@ -47,7 +47,7 @@ streamlit run app.py
 - **Gerenciar Itens** — edição, alteração de Part Number com histórico.
 - **Movimentações** — histórico de entradas/saídas com rastreabilidade.
 - **Requisição** — solicitações operacionais.
-- **Compras (SC)** — gestão de solicitações de compra com **Assistente de Reposição** (v2.5.0): fila priorizada, gatilhos de reposição, quantidade sugerida, decisões auditadas.
+- **Controle de SC** — gestão de solicitações de compra com **Assistente de Reposição** (v2.5.0): fila priorizada, gatilhos de reposição, quantidade sugerida, decisões auditadas.
 - **Feedback** — sugestões e backlog.
 - **Configurações** — importação de base (Tipo, Mín/Máx, Lead Time).
 

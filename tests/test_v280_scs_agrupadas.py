@@ -2,16 +2,17 @@
 
 Cobre: data-limite "Comprar até" derivada da COBERTURA (não do ROP); mapeamento
 item→NATUREZA da SC (do histórico) e item→CENTRO DE CUSTO (do consumo real, sem os
-CCs genéricos); agrupamento das SCs por natureza; título + justificativa + CC
-automáticos por grupo; e a criação de uma SC agrupada multi-item (reusa criar_sc,
-sem migração — observações na própria SC).
+CCs genéricos); agrupamento das SCs — hoje por TIPO DO MATERIAL (v3.1.0; a função
+por natureza continua existindo e testada, mas não é mais o critério padrão); título
++ justificativa + CC automáticos por grupo; e a criação de uma SC agrupada multi-item
+(reusa criar_sc, sem migração — observações na própria SC).
 """
 from datetime import date, timedelta
 
 import database
 from services import db_functions as F
 from services import planejamento as P
-from services.constants import CATEGORIA_SC_PADRAO, CC_SUGERIDO_PADRAO
+from services.constants import CATEGORIA_SC_PADRAO, TIPO_MATERIAL_PADRAO, CC_SUGERIDO_PADRAO
 
 
 # ── Fábrica de item sintético (mesmas chaves de listar_inventario) ──────────────
@@ -170,7 +171,28 @@ def test_agrupar_por_natureza_sem_categoria_usa_padrao():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RESUMO DA SC SUGERIDA (título = natureza; justificativa + CC automáticos)
+# AGRUPAMENTO POR TIPO DO MATERIAL (v3.1.0 — critério padrão do Assistente)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_agrupar_por_tipo_material():
+    sugs = [
+        {"tipo_material": "Consumivel", "prioridade_tier": 1},
+        {"tipo_material": "Consumivel", "prioridade_tier": 2},
+        {"tipo_material": "Spare Parts", "prioridade_tier": 0},
+    ]
+    grupos = P.agrupar_por_tipo_material(sugs)
+    assert len(grupos["Consumivel"]) == 2
+    assert "Spare Parts" in grupos
+    assert list(grupos.keys())[0] == "Spare Parts"   # tier mín 0 vem primeiro
+
+
+def test_agrupar_por_tipo_material_sem_tipo_usa_padrao():
+    grupos = P.agrupar_por_tipo_material([{"prioridade_tier": 2}])
+    assert TIPO_MATERIAL_PADRAO in grupos
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RESUMO DA SC SUGERIDA (título = rótulo do grupo; justificativa + CC automáticos)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def test_resumir_grupo_sc():
@@ -211,20 +233,27 @@ def test_resumir_grupo_sc_vazio_nao_quebra():
     assert r["cc_sugerido"] == CC_SUGERIDO_PADRAO
 
 
+def test_resumir_grupo_sc_criterio_tipo_material():
+    sugs = [{"tipo_material": "Consumivel", "prioridade_tier": 1, "prioridade": "🟡 Atenção",
+             "qtd_sugerida": 10, "consumo_diario": 1.0, "comprar_ate": None,
+             "part_number": "PN-T", "fornecedor_ultimo_preco": None, "cc_sugerido": None}]
+    r = P.resumir_grupo_sc("Consumivel", sugs, criterio="tipo de material")
+    assert "Agrupa 1 item do tipo de material Consumivel" in r["justificativa"]
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-# INTEGRAÇÃO — SC AGRUPADA MULTI-ITEM POR NATUREZA (reusa criar_sc, sem migração)
+# INTEGRAÇÃO — SC AGRUPADA MULTI-ITEM POR TIPO DO MATERIAL (reusa criar_sc, sem migração)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def test_gerar_scs_sugeridas_agrupa_por_natureza(db, make_item, registrar_consumo):
-    a = make_item("PN-G1", estoque=8, minimo=5, lead=10)
-    b = make_item("PN-G2", estoque=8, minimo=5, lead=10)
+def test_gerar_scs_sugeridas_agrupa_por_tipo_material(db, make_item, registrar_consumo):
+    a = make_item("PN-G1", tipo="Consumivel", estoque=8, minimo=5, lead=10)
+    b = make_item("PN-G2", tipo="Consumivel", estoque=8, minimo=5, lead=10)
     for i in (a, b):
         _set_inv(i, consumo_medio_diario=1.0, estoque_maximo=60)
         registrar_consumo(i)                       # consumo real (CC 21106 - MANUTENÇÃO)
-    _sc_historica([a, b], NAT_A, "SC-HIST-A")      # natureza vinda do histórico
 
     scs = P.gerar_scs_sugeridas(incluir_fornecedor=False)
-    grupo = next(s for s in scs if s["label"] == NAT_A)
+    grupo = next(s for s in scs if s["label"] == "Consumivel")
     assert grupo["n_itens"] == 2
     assert {s["part_number"] for s in grupo["itens"]} == {"PN-G1", "PN-G2"}
     assert grupo["cc_sugerido"] == "21106 - MANUTENÇÃO"   # do consumo real
@@ -240,15 +269,15 @@ def test_item_sem_historico_cai_no_padrao(db, make_item, registrar_consumo):
 
 
 def test_criar_sc_agrupada_multi_item(db, make_item, registrar_consumo):
-    a = make_item("PN-SC-A", estoque=8, minimo=5, lead=10)
-    b = make_item("PN-SC-B", estoque=8, minimo=5, lead=10)
+    a = make_item("PN-SC-A", tipo="Spare Parts", estoque=8, minimo=5, lead=10)
+    b = make_item("PN-SC-B", tipo="Spare Parts", estoque=8, minimo=5, lead=10)
     for i in (a, b):
         _set_inv(i, consumo_medio_diario=1.0, estoque_maximo=60)
         registrar_consumo(i)
-    _sc_historica([a, b], NAT_A, "SC-HIST-B")
+    _sc_historica([a, b], NAT_A, "SC-HIST-B")   # histórico de natureza; não afeta o agrupamento (por tipo)
 
     grupo = next(g for g in P.gerar_scs_sugeridas(incluir_fornecedor=False)
-                 if g["label"] == NAT_A)
+                 if g["label"] == "Spare Parts")
     itens = [P.sugestao_para_item_sc(s) for s in grupo["itens"]]
     obs = f"{grupo['titulo']}\nCentro de custo sugerido: {grupo['cc_sugerido']}\n\n{grupo['justificativa']}"
     ok, msg = F.criar_sc("SC-AGRUP-1", "2026-07-04", itens, observacoes=obs)
@@ -262,7 +291,7 @@ def test_criar_sc_agrupada_multi_item(db, make_item, registrar_consumo):
         row = c.execute(
             "SELECT observacoes FROM solicitacoes_compra WHERE id=?", (sc_id,)
         ).fetchone()
-    assert NAT_A in row["observacoes"]
+    assert "Spare Parts" in row["observacoes"]
     assert "Centro de custo sugerido: 21106 - MANUTENÇÃO" in row["observacoes"]
 
     for s in grupo["itens"]:

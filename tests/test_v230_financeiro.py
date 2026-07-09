@@ -88,16 +88,48 @@ def test_valor_consumido_estimativa(db, make_item):
     assert vc["origem"] == "SCM"
 
 
+# ── v3.1.0: Valor Consumido em janela YTD (Year to Date) ─────────────────────
+
+def test_dias_ytd_primeiro_dia_do_ano():
+    from datetime import date
+    assert F.dias_ytd(hoje=date(2026, 1, 1)) == 1
+
+
+def test_dias_ytd_meio_de_julho():
+    from datetime import date
+    # 01/01 a 08/07 (inclusive) = 31+28+31+30+31+30+8 = 189
+    assert F.dias_ytd(hoje=date(2026, 7, 8)) == 189
+
+
+def test_dias_ytd_ultimo_dia_do_ano():
+    from datetime import date
+    assert F.dias_ytd(hoje=date(2026, 12, 31)) == 365
+
+
+def test_valor_consumido_usa_janela_ytd_via_dias_ytd(db, make_item):
+    from datetime import date
+    item_id = make_item("PN-VC-YTD", estoque=1000, minimo=10)
+    _set_preco_ref(item_id, 5.0)
+    F.registrar_movimentacao(item_id, "saida", 20, CC, "x", "x", data_hora=_dias_atras(10))
+    # saída "fora da janela 90d" mas ainda dentro do ano corrente (YTD > 90d na maior
+    # parte do ano) — só valida que dias_ytd() alimenta calcular_valor_consumido.
+    dias = F.dias_ytd(hoje=date.today())
+    vc = F.calcular_valor_consumido(item_id, dias=dias)
+    assert vc["qtd"] == 20.0
+    assert vc["janela_dias"] == dias
+
+
 # ── Curva ABC por valor ───────────────────────────────────────────────────────
 
-def test_abc_valor_classes_a_b_c(db, make_item):
+def test_abc_valor_classes_a_b_c(db, make_item, registrar_consumo):
+    # v3.2.0: ABC usa CONSUMO REAL (saída por requisição), não saída crua.
     # preços = 1 → valor = qtd. Total = 1000. Cumulativo 800/950/1000 → A/B/C.
     a = make_item("PN-A", estoque=1000, minimo=1); _set_preco_ref(a, 1.0)
     b = make_item("PN-B", estoque=1000, minimo=1); _set_preco_ref(b, 1.0)
     c = make_item("PN-C", estoque=1000, minimo=1); _set_preco_ref(c, 1.0)
-    F.registrar_movimentacao(a, "saida", 800, CC, "x", "x", data_hora=_dias_atras(5))
-    F.registrar_movimentacao(b, "saida", 150, CC, "x", "x", data_hora=_dias_atras(5))
-    F.registrar_movimentacao(c, "saida", 50, CC, "x", "x", data_hora=_dias_atras(5))
+    registrar_consumo(a, quantidade=800, data_hora=_dias_atras(5))
+    registrar_consumo(b, quantidade=150, data_hora=_dias_atras(5))
+    registrar_consumo(c, quantidade=50, data_hora=_dias_atras(5))
     abc = F.obter_abc_valor(dias=90)
     por_pn = {x["part_number"]: x for x in abc}
     assert [x["part_number"] for x in abc] == ["PN-A", "PN-B", "PN-C"]  # ordenado por valor desc
@@ -107,9 +139,21 @@ def test_abc_valor_classes_a_b_c(db, make_item):
     assert por_pn["PN-C"]["classe"] == "C"   # acum 100%
 
 
-def test_abc_valor_ignora_item_sem_preco(db, make_item):
+def test_abc_valor_ignora_ajuste_fisico(db, make_item, registrar_consumo):
+    # v3.2.0: um ajuste físico (saída SEM requisição) NÃO entra no ABC — antes
+    # inflava a curva com valores absurdos.
+    a = make_item("PN-AJ", estoque=100000, minimo=1); _set_preco_ref(a, 100.0)
+    registrar_consumo(a, quantidade=10, data_hora=_dias_atras(5))            # consumo real
+    F.registrar_movimentacao(a, "saida", 40000, CC, "x", "x",               # ajuste físico
+                             data_hora=_dias_atras(5))
+    abc = F.obter_abc_valor(dias=90)
+    assert len(abc) == 1
+    assert abc[0]["valor"] == 1000.0     # 10 × 100 — não 4 milhões
+
+
+def test_abc_valor_ignora_item_sem_preco(db, make_item, registrar_consumo):
     a = make_item("PN-SP", estoque=100, minimo=1)  # sem preço → valor 0 → fora do ABC
-    F.registrar_movimentacao(a, "saida", 10, CC, "x", "x", data_hora=_dias_atras(5))
+    registrar_consumo(a, quantidade=10, data_hora=_dias_atras(5))
     assert F.obter_abc_valor(dias=90) == []
 
 
@@ -144,7 +188,7 @@ def test_export_colunas_financeiras(db, make_item):
     F.registrar_movimentacao(item_id, "saida", 2, CC, "x", "x", data_hora=_dias_atras(5))
     df = F.exportar_inventario_df()
     for col in ["Preço Ref", "Origem Preço", "Valor em Estoque",
-                "Valor Consumido(90d)", "Classe ABC(valor)"]:
+                "Valor Consumido(YTD)", "Classe ABC(valor)"]:
         assert col in df.columns
     linha = df[df["PN"] == "PN-EX"].iloc[0]
     assert linha["Valor em Estoque"] == 40.0   # (10-2) × 5

@@ -24,6 +24,7 @@ from services.db_functions import (
     obter_fornecedores_por_item,
     calcular_giro,
     calcular_valor_consumido,
+    dias_ytd,
     obter_abc_valor,
     listar_historico_part_number,
     obter_maturidade_dados,
@@ -159,6 +160,46 @@ def obter_consumo_por_departamento(item_id, dias=180, conn=None):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SALDO RESIDUAL (GUARDA-CHUVA) POR FORNECEDOR — v3.1.0 (fundação)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def agrupar_saldo_residual_por_fornecedor(scs_pos):
+    """Agrupa as linhas de SC/PO do item (já buscadas por `buscar_scs_por_item`,
+    disponíveis em `ficha['scs_pos']`) por fornecedor, somando o saldo pendente —
+    fundação da separação entre "Pedidos com Saldo" (por pedido) e "Saldo Residual
+    (Guarda-Chuva) por Fornecedor" (agregado) na Ficha 360.
+
+    Função pura sobre dados já carregados: NÃO faz nova query, NÃO recalcula nem
+    altera preço — só agrega. `entrega_parcial` marca linhas onde já chegou uma
+    parte e ainda falta saldo (facilita identificar entregas parciais)."""
+    grupos = {}
+    for s in scs_pos:
+        pendente = s.get("pendente") or 0
+        if pendente <= 0:
+            continue
+        fornecedor = s.get("fornecedor_item") or "Sem fornecedor"
+        g = grupos.setdefault(fornecedor, {
+            "fornecedor": fornecedor, "saldo_pendente": 0.0, "n_pedidos": 0, "linhas": [],
+        })
+        recebida = s.get("quantidade_recebida") or 0
+        g["saldo_pendente"] += pendente
+        g["n_pedidos"] += 1
+        g["linhas"].append({
+            "sc": s.get("numero_sc"),
+            "po": s.get("po_item") or s.get("numero_po"),
+            "status": s.get("status"),
+            "quantidade_negociada": s.get("quantidade_negociada"),
+            "quantidade_recebida": recebida,
+            "pendente": pendente,
+            "preco_unitario": s.get("preco_unitario"),
+            "valor_total": s.get("valor_total"),
+            "moeda": s.get("moeda"),
+            "entrega_parcial": recebida > 0 and pendente > 0,
+        })
+    return sorted(grupos.values(), key=lambda g: -g["saldo_pendente"])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ASSEMBLER — reúne todas as seções (read-only) num único dict
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -182,7 +223,10 @@ def montar_ficha_360(item_id, conn=None):
     justificativa = P.montar_justificativa(item, calc, qtd, melhor)
 
     giro = calcular_giro(item_id)
-    vc = calcular_valor_consumido(item_id)
+    # v3.1.0: Valor Consumido passou de janela fixa de 90d para YTD (Year to Date),
+    # a pedido do PO. A Curva ABC (linha abaixo) permanece em janela de 90d rolante
+    # — mudar também distorceria a classificação perto de janeiro; não foi pedido.
+    vc = calcular_valor_consumido(item_id, dias=dias_ytd())
     valor_estoque = round(float(item.get("estoque_atual") or 0) * (vc["preco"] or 0), 2)
     abc = next((x for x in obter_abc_valor() if x["item_id"] == item_id), None)
 
