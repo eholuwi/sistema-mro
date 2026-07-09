@@ -42,15 +42,16 @@ def test_tendencia_estavel(db, make_item):
 # ── Dias de cobertura ─────────────────────────────────────────────────────────
 
 def test_cobertura_formula_e_sentinela():
-    assert F.calcular_cobertura(10, 5, 3) == 5.0                         # (10+5)/3
-    assert F.calcular_cobertura(10, 5, 0) == F.PREVISAO_RUPTURA_SEM_RISCO  # sem consumo
+    # v3.1.0: cobertura = estoque atual / consumo diário (sem somar guarda-chuva).
+    assert F.calcular_cobertura(9, 3) == 3.0
+    assert F.calcular_cobertura(10, 0) == F.PREVISAO_RUPTURA_SEM_RISCO  # sem consumo
 
 
 def test_cobertura_em_listar_inventario(db, make_item):
     item_id = make_item("PN-COV", estoque=60, minimo=10)
     F.registrar_movimentacao(item_id, "saida", 30, CC, "x", "x", data_hora=_dias_atras(5))
     it = {i["part_number"]: i for i in F.listar_inventario()}["PN-COV"]
-    # estoque 30, consumo 30d = 1/dia, guarda-chuva 0 → cobertura 30 dias
+    # estoque 30, consumo 30d = 1/dia → cobertura 30 dias (guarda-chuva não entra mais)
     assert it["dias_cobertura"] == 30.0
 
 

@@ -21,7 +21,7 @@ GUIAS_PERSONA = {
 ### :material/menu_book: Assistente de Materiais (Almoxarifado)
 
 Você cuida do **físico**: dá baixa, recebe, confere e consulta os materiais. O sistema é
-seu **apoio** — a base do Sr. Neidson (mínimo/máximo/categoria) fica intocada.
+seu **apoio** — a base do Compras (mínimo/máximo/categoria) fica intocada.
 
 **1. Dar baixa — `:material/assignment: Requisição`**
 - Preencha o cabeçalho (setor, emitente, centro de custo).
@@ -29,7 +29,7 @@ seu **apoio** — a base do Sr. Neidson (mínimo/máximo/categoria) fica intocad
   **Adicione à lista**; ao final, **registre a requisição**.
 - Isso é o **consumo real** — alimenta cobertura, giro e o padrão de demanda.
 
-**2. Receber de uma SC — `:material/receipt_long: Compras (SC)` → `:material/inventory_2: Receber Material`**
+**2. Receber de uma SC — `:material/receipt_long: Controle de SC` → `:material/inventory_2: Receber Material`**
 - Informe a quantidade **na unidade de compra** (ex.: litros). Se houver **conversão**, o
   sistema mostra o preview (ex.: *5 L ÷ 5 = +1 GL*) e soma já convertido.
 - Viu **:material/warning: revisar unidade**? Avise o comprador para cadastrar o fator.
@@ -46,7 +46,7 @@ seu **apoio** — a base do Sr. Neidson (mínimo/máximo/categoria) fica intocad
 
 Você **decide e cria as SCs**. O sistema **recomenda**, você confirma — nunca o contrário.
 
-**1. O que repor — `:material/receipt_long: Compras (SC)` → `:material/psychology: Assistente de Reposição`**
+**1. O que repor — `:material/receipt_long: Controle de SC` → `:material/psychology: Assistente de Reposição`**
 - Fila **priorizada** (🔴/🟠/🟡) com **"Comprar até DD/MM"** por item.
 - **SCs sugeridas agrupadas** (natureza + centro de custo) — crie multi-item em 1 clique.
 
@@ -199,19 +199,21 @@ MANUAL = [
         "intro": "Toda a vida de um material numa tela só (somente leitura, exceto a imagem).",
         "itens": [
             _item(
-                "Cartões de estoque (Atual/Mínimo/Máximo/Segurança/Guarda-chuva)",
+                "Cartões de estoque (Atual/Mínimo/Máximo/Segurança/Saldo Residual)",
                 "Mostrar de uma vez a posição do item.",
-                "Cadastro do item (base do Neidson) + saldos de SCs abertas.",
-                "**Guarda-chuva** = soma do que já foi negociado em SCs abertas e ainda vai "
-                "chegar. Mínimo/Máximo/Segurança vêm da base do Neidson (o sistema não sobrescreve).",
+                "Cadastro do item (base do Compras) + saldos de SCs abertas.",
+                "**Saldo Residual (Guarda-Chuva)** = soma do que já foi negociado em SCs abertas "
+                "e ainda vai chegar. Clique em 'Ver detalhes' para ver os pedidos com saldo e o "
+                "saldo residual por fornecedor. Mínimo/Máximo/Segurança vêm da base do Compras "
+                "(o sistema não sobrescreve).",
                 "É a 'ficha de saúde' do item: quanto tem, quanto precisa ter no mínimo, e quanto "
-                "já está a caminho (o 'guarda-chuva' que protege da falta).",
+                "já está a caminho (o 'saldo residual' que protege da falta).",
             ),
             _item(
                 "Cobertura, Consumo/dia, Giro e Lead time",
                 "Dizer por quantos dias o estoque dura e o ritmo de consumo.",
                 "Saídas reais (por requisição) e as fotos diárias de estoque (snapshots).",
-                "**Cobertura** = (estoque + guarda-chuva) ÷ consumo por dia. **Consumo/dia** = "
+                "**Cobertura** = estoque atual ÷ consumo por dia. **Consumo/dia** = "
                 "média das saídas na janela (30 dias). **Giro anual** = quantas vezes o estoque "
                 "'roda' no ano (pelas fotos). **Lead time** = prazo do fornecedor.",
                 "Cobertura é 'quantos dias ainda dá pra durar'. Consumo/dia é 'quanto sai por "
@@ -223,7 +225,7 @@ MANUAL = [
                 "Consumo, lead time, estoque de segurança, estoque e guarda-chuva.",
                 "Dispara quando (estoque + guarda-chuva) fica perto do **ponto de reposição** = "
                 "consumo/dia × lead time + segurança, com 15 dias de antecedência. A quantidade "
-                "mira um alvo = max(máximo do Neidson, consumo × 60 dias).",
+                "mira um alvo = max(máximo do Compras, consumo × 60 dias).",
                 "O sistema calcula 'quando vai faltar' e avisa com antecedência: 'compre até tal "
                 "dia, mais ou menos essa quantidade' — mas quem decide é você.",
             ),
@@ -282,7 +284,7 @@ MANUAL = [
         ],
     },
     {
-        "tela": ":material/receipt_long: Compras (SC)",
+        "tela": ":material/receipt_long: Controle de SC",
         "intro": "O centro do comprador: solicitações, reposição, fornecedores, recebimento e importação.",
         "itens": [
             _item(
@@ -296,12 +298,12 @@ MANUAL = [
             ),
             _item(
                 "Aba 'Assistente' — SCs sugeridas agrupadas",
-                "Juntar itens numa SC pronta, por natureza e centro de custo, em 1 clique.",
-                "O histórico de SCs de cada item (natureza mais frequente) e o consumo por CC.",
-                "Agrupa os itens da fila pela **natureza** real da SC (vocabulário do Protheus) e "
+                "Juntar itens numa SC pronta, por Tipo do material e centro de custo, em 1 clique.",
+                "O Tipo do material cadastrado em cada item e o consumo por CC.",
+                "Agrupa os itens da fila pelo **Tipo do material** (campo do cadastro) e "
                 "sugere o centro de custo; você cria a SC multi-item de uma vez.",
                 "Em vez de montar pedido item por item, o sistema já monta 'cestinhas' prontas "
-                "por assunto pra você só confirmar.",
+                "por tipo de material pra você só confirmar.",
             ),
             _item(
                 "Aba 'Fornecedores & Cotação'",
@@ -339,7 +341,7 @@ MANUAL = [
             _item(
                 "Cadastro / edição do item",
                 "Criar ou ajustar os dados de um material.",
-                "O que você preenche + a base do Neidson (na edição, preservada).",
+                "O que você preenche + a base do Compras (na edição, preservada).",
                 "Salva os campos; na edição, campos sensíveis usam COALESCE (só grava o que você "
                 "confirmar, sem apagar o que já existe).",
                 "É a ficha do produto: nome, unidade, categoria, local. Editar não apaga o que "
@@ -374,7 +376,7 @@ MANUAL = [
     },
     {
         "tela": ":material/settings: Configurações",
-        "intro": "Aparência, importação da base do Neidson e listas mestras.",
+        "intro": "Aparência, importação da base do Compras e listas mestras.",
         "itens": [
             _item(
                 ":material/palette: Aparência (tema claro/escuro)",
@@ -387,8 +389,8 @@ MANUAL = [
             ),
             _item(
                 "Importar Base (Tipo/Mínimo/Máximo/Lead Time)",
-                "Atualizar os itens com os dados apurados pelo Sr. Neidson.",
-                "A planilha do Neidson (casada pelo Part Number).",
+                "Atualizar os itens com os dados apurados pelo Compras.",
+                "A planilha do Compras (casada pelo Part Number).",
                 "Atualiza apenas itens **existentes** (PNs não encontrados são só relatados); faz "
                 "**backup** antes. Tem prévia (simulação) antes de aplicar.",
                 "Sobe a planilha do especialista e o sistema atualiza os números certos, "

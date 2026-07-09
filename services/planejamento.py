@@ -27,6 +27,7 @@ from services.constants import (
     REPOSICAO_DESFECHOS,
     SAIDA_REAL_WHERE,
     CATEGORIA_SC_PADRAO,
+    TIPO_MATERIAL_PADRAO,
     CC_GENERICOS,
     CC_SUGERIDO_PADRAO,
 )
@@ -104,7 +105,7 @@ def lead_time_efetivo(item):
     Retorna (dias:int, origem:str, maturidade:str|None)."""
     lt = _num(item.get("lead_time_dias"))
     if lt > 0:
-        return int(round(lt)), "cadastrado (Neidson)", None
+        return int(round(lt)), "cadastrado (Compras)", None
     ltc = _num(item.get("lead_time_calculado"))
     if ltc > 0:
         amostras = int(_num(item.get("lead_time_calculado_amostras")))
@@ -184,7 +185,7 @@ def calcular_qtd_sugerida(item):
         "alvo_neidson": round(est_max, 2),
         "alvo_horizonte": round(base_horizonte, 2),
         "alvo_origem": (
-            "máx. Neidson" if est_max >= base_horizonte
+            "máx. Compras" if est_max >= base_horizonte
             else f"horizonte {HORIZONTE_REPOSICAO_DIAS}d"
         ),
         "horizonte_dias": HORIZONTE_REPOSICAO_DIAS,
@@ -233,7 +234,7 @@ def montar_justificativa(item, calc=None, qtd=None, fornecedor=None):
             f"+ {ANTECEDENCIA_REPOSICAO_DIAS} d de antecedência"
         )
     else:
-        partes.append("Estoque no/abaixo do mínimo do Neidson")
+        partes.append("Estoque no/abaixo do mínimo cadastrado por Compras")
 
     if consumo > 0:
         cons_txt = f"consumo {_fmt_num(consumo)}/dia"
@@ -467,10 +468,29 @@ def agrupar_por_natureza(sugestoes):
     — base das "SCs de mão beijada" (v2.8.0). Junta itens que a operação historicamente
     comprou sob a mesma natureza (vocabulário real do Protheus, ex.: 'CONSUMÍVEIS
     PRODUÇÃO'), reduzindo o nº de SCs a aprovar. Itens sem histórico caem em
-    CATEGORIA_SC_PADRAO. Grupos ordenados pela prioridade do item mais urgente."""
+    CATEGORIA_SC_PADRAO. Grupos ordenados pela prioridade do item mais urgente.
+
+    Mantida para reaproveitamento futuro; o agrupamento usado hoje pelo Assistente
+    de Reposição é `agrupar_por_tipo_material` (v3.1.0)."""
     grupos = {}
     for s in sugestoes:
         chave = s.get("categoria_sc") or CATEGORIA_SC_PADRAO
+        grupos.setdefault(chave, []).append(s)
+    return dict(sorted(
+        grupos.items(),
+        key=lambda kv: min(x["prioridade_tier"] for x in kv[1]),
+    ))
+
+
+def agrupar_por_tipo_material(sugestoes):
+    """Agrupa as sugestões pelo TIPO DO MATERIAL (`tipo_material`, campo livre do
+    cadastro) — v3.1.0. Substitui o agrupamento por natureza da SC como critério
+    padrão das "SCs sugeridas" no Assistente de Reposição. Itens sem tipo cadastrado
+    caem em TIPO_MATERIAL_PADRAO. Grupos ordenados pela prioridade do item mais
+    urgente (mesmo critério de ordenação de `agrupar_por_natureza`)."""
+    grupos = {}
+    for s in sugestoes:
+        chave = s.get("tipo_material") or TIPO_MATERIAL_PADRAO
         grupos.setdefault(chave, []).append(s)
     return dict(sorted(
         grupos.items(),
@@ -485,12 +505,15 @@ def _cc_sugerido_grupo(sugs):
     return cont.most_common(1)[0][0] if cont else CC_SUGERIDO_PADRAO
 
 
-def resumir_grupo_sc(label, sugs):
-    """Título + justificativa + CC + agregados de um grupo (natureza) de sugestões (v2.8.0).
+def resumir_grupo_sc(label, sugs, criterio="natureza"):
+    """Título + justificativa + CC + agregados de um grupo de sugestões (v2.8.0).
 
     Determinístico e transparente (sem NLP): o comprador edita tudo antes de criar a SC.
-    Título = a própria natureza (vocabulário real das SCs). Justificativa responde
-    'por quê' agrupar (natureza), volume/consumo, prioridade, data-limite e o CC sugerido."""
+    Título = o próprio rótulo do grupo (natureza ou tipo do material, conforme o
+    agrupamento escolhido). `criterio` só ajusta o texto da justificativa (ex.:
+    "da natureza X" vs. "do tipo de material X") — v3.1.0 passou a agrupar por
+    tipo do material por padrão (`agrupar_por_tipo_material`), mas a função
+    continua genérica para reaproveitar com `agrupar_por_natureza` se necessário."""
     if not sugs:
         return {
             "label": label, "titulo": label, "justificativa": "", "n_itens": 0,
@@ -499,7 +522,7 @@ def resumir_grupo_sc(label, sugs):
             "prioridade": "—", "itens": [],
         }
     n = len(sugs)
-    natureza_curta = _natureza_curta(label)
+    rotulo_curto = _natureza_curta(label)
     n_criticos = sum(1 for s in sugs if s.get("prioridade_tier") == 0)
     tier_min = min(s.get("prioridade_tier", 2) for s in sugs)
     prio_max = next(
@@ -523,7 +546,7 @@ def resumir_grupo_sc(label, sugs):
 
     unid = "item" if n == 1 else "itens"
     linhas = [
-        f"Agrupa {n} {unid} da natureza {natureza_curta}.",
+        f"Agrupa {n} {unid} d{'a' if criterio == 'natureza' else 'o'} {criterio} {rotulo_curto}.",
         f"{n_criticos} crítico(s); prioridade máxima: {prio_max}; "
         f"consumo agregado ~{_fmt_num(soma_consumo)} un/dia.",
     ]
@@ -532,7 +555,7 @@ def resumir_grupo_sc(label, sugs):
     linhas.append(f"Centro de custo sugerido: {cc_sugerido}.")
     return {
         "label": label,
-        "titulo": label,                       # a natureza É o título
+        "titulo": label,                       # o rótulo do grupo É o título
         "justificativa": " ".join(linhas),
         "n_itens": n,
         "qtd_total": qtd_total,
@@ -546,15 +569,17 @@ def resumir_grupo_sc(label, sugs):
 
 
 def gerar_scs_sugeridas(incluir_fornecedor=True, incluir_sem_movimentacao=False):
-    """SCs sugeridas prontas (agrupadas por natureza, com título/justificativa/CC) — v2.8.0.
-    Encadeia gerar_sugestoes_reposicao → agrupar_por_natureza → resumir_grupo_sc.
+    """SCs sugeridas prontas (agrupadas por Tipo do material, com título/justificativa/CC).
+    v2.8.0 agrupava por natureza da SC; v3.1.0 passou a agrupar por `tipo_material`
+    (pedido do PO — mais estável e conhecido pelo comprador que a natureza do Protheus).
+    Encadeia gerar_sugestoes_reposicao → agrupar_por_tipo_material → resumir_grupo_sc.
     Lista já ordenada pela prioridade do grupo mais urgente."""
     sugestoes = gerar_sugestoes_reposicao(
         incluir_fornecedor=incluir_fornecedor,
         incluir_sem_movimentacao=incluir_sem_movimentacao,
     )
-    grupos = agrupar_por_natureza(sugestoes)
-    return [resumir_grupo_sc(label, sugs) for label, sugs in grupos.items()]
+    grupos = agrupar_por_tipo_material(sugestoes)
+    return [resumir_grupo_sc(label, sugs, criterio="tipo de material") for label, sugs in grupos.items()]
 
 
 # ══════════════════════════════════════════════════════════════════════════════

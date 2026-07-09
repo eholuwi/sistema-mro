@@ -199,3 +199,37 @@ def test_sc7_reimport_backfill_lead_time(db, make_item):
             (item_id,)).fetchall()
     assert len(rows) == 1               # dedup: não duplicou
     assert rows[0]["lead_time_dias"] == 10   # backfill idempotente
+
+
+# ── v3.1.0: busca de materiais em Fornecedores & Cotação (PN, nome ou descrição) ──
+
+_ITENS_BUSCA = [
+    {"part_number": "10PP0001", "nome_item": "BOBINA TERMICA TAM.76X30M", "descricao": ""},
+    {"part_number": "10PP0008", "nome_item": "PAPEL OFICIO BRANCO A4",
+     "descricao": "Consumo: 4 resma por dia"},
+    {"part_number": "20AB0002", "nome_item": "LUVA DE PROCEDIMENTO", "descricao": None},
+]
+
+
+def test_filtrar_itens_por_busca_vazio_retorna_tudo():
+    assert F.filtrar_itens_por_busca(_ITENS_BUSCA, "") == _ITENS_BUSCA
+
+
+def test_filtrar_itens_por_busca_por_part_number():
+    r = F.filtrar_itens_por_busca(_ITENS_BUSCA, "10pp0001")
+    assert [i["part_number"] for i in r] == ["10PP0001"]
+
+
+def test_filtrar_itens_por_busca_por_nome():
+    r = F.filtrar_itens_por_busca(_ITENS_BUSCA, "luva")
+    assert [i["part_number"] for i in r] == ["20AB0002"]
+
+
+def test_filtrar_itens_por_busca_por_descricao():
+    # só encontrável pela descrição (não aparece no PN nem no nome do item)
+    r = F.filtrar_itens_por_busca(_ITENS_BUSCA, "resma")
+    assert [i["part_number"] for i in r] == ["10PP0008"]
+
+
+def test_filtrar_itens_por_busca_sem_match():
+    assert F.filtrar_itens_por_busca(_ITENS_BUSCA, "inexistente") == []

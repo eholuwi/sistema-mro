@@ -206,3 +206,44 @@ def test_montar_ficha_item_cheio(db, make_item, make_sc):
     assert len(f["evolucao_preco"]) >= 1
     assert f["imagem_abs"] is not None
     assert f["reposicao"]["precisa"] is True     # estoque 8 < mínimo 10
+
+
+# ── Saldo Residual (Guarda-Chuva) por Fornecedor — v3.1.0 (fundação) ─────────
+
+def test_agrupar_saldo_residual_ignora_pedidos_sem_saldo():
+    scs_pos = [
+        {"numero_sc": "SC-1", "fornecedor_item": "Fornecedor A", "pendente": 0,
+         "quantidade_recebida": 10},
+    ]
+    assert ficha.agrupar_saldo_residual_por_fornecedor(scs_pos) == []
+
+
+def test_agrupar_saldo_residual_soma_por_fornecedor():
+    scs_pos = [
+        {"numero_sc": "SC-1", "numero_po": "PO-1", "status": "Parcial",
+         "fornecedor_item": "Fornecedor A", "quantidade_negociada": 10,
+         "quantidade_recebida": 4, "pendente": 6,
+         "preco_unitario": 12.5, "valor_total": 125.0, "moeda": "BRL"},
+        {"numero_sc": "SC-2", "numero_po": "PO-2", "status": "Aberto",
+         "fornecedor_item": "Fornecedor A", "quantidade_negociada": 20,
+         "quantidade_recebida": 0, "pendente": 20,
+         "preco_unitario": 12.5, "valor_total": 250.0, "moeda": "BRL"},
+        {"numero_sc": "SC-3", "numero_po": "PO-3", "status": "Aberto",
+         "fornecedor_item": "Fornecedor B", "quantidade_negociada": 5,
+         "quantidade_recebida": 0, "pendente": 5,
+         "preco_unitario": 8.0, "valor_total": 40.0, "moeda": "BRL"},
+    ]
+    grupos = ficha.agrupar_saldo_residual_por_fornecedor(scs_pos)
+    assert [g["fornecedor"] for g in grupos] == ["Fornecedor A", "Fornecedor B"]  # maior saldo primeiro
+    a = grupos[0]
+    assert a["saldo_pendente"] == 26
+    assert a["n_pedidos"] == 2
+    assert any(l["entrega_parcial"] for l in a["linhas"])   # SC-1 recebeu parte
+    assert not any(l["entrega_parcial"] for l in grupos[1]["linhas"])  # Fornecedor B: nada recebido ainda
+
+
+def test_agrupar_saldo_residual_sem_fornecedor_usa_rotulo_padrao():
+    scs_pos = [{"numero_sc": "SC-9", "fornecedor_item": None,
+                "quantidade_recebida": 0, "pendente": 3}]
+    grupos = ficha.agrupar_saldo_residual_por_fornecedor(scs_pos)
+    assert grupos[0]["fornecedor"] == "Sem fornecedor"
