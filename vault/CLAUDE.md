@@ -18,7 +18,7 @@ Este arquivo é a memória operacional do Claude Code quando o trabalho é feito
 
 ## Escopo deste vault
 
-Dedicado **só ao MRO System** — não é um segundo cérebro genérico do usuário (ele tem outros projetos em `Tarefas Diárias\` que não entram aqui). Fica dentro do repositório do MRO System (`vault/`) mas é **ignorado pelo git** (ver `.gitignore` da raiz) por ser pasta de trabalho pessoal, não parte do produto.
+Dedicado **só ao MRO System** — não é um segundo cérebro genérico do usuário (ele tem outros projetos em `Tarefas Diárias\` que não entram aqui). Fica dentro do repositório do MRO System (`vault/`) e é **versionado no git** (decisão revertida em relação à ideia inicial de ignorá-lo) justamente para sincronizar entre máquinas diferentes — ver `CLAUDE.md` da raiz, seção "Segundo Cérebro (Obsidian)".
 
 ## Estrutura do vault
 
@@ -29,6 +29,7 @@ Dedicado **só ao MRO System** — não é um segundo cérebro genérico do usu�
   - [[MRO System - Catálogo de KPIs]]
   - [[MRO System - Histórico de Versões]]
   - [[Referência - Estilo Dashboard KPI Indireto]]
+  - [[MRO System - Contexto, Origem e Pessoas]]
 - `Archive/` — o que sair de escopo (ex.: depois que a apresentação acontecer).
 - `AI/Sessions/` — um arquivo por sessão de trabalho relevante (o que foi feito, decisões, próximos passos).
 - `AI/Summaries/` — resumos de leituras/pesquisas maiores (ex.: se o usuário trouxer PDFs/artigos para embasar a apresentação).

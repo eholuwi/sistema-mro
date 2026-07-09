@@ -63,6 +63,6 @@ Reunião multissetorial de KPI mensal (não é uma apresentação só para TI/de
 
 ## Decisões já tomadas
 
-- Segundo cérebro criado dentro do repo (`vault/`), dedicado só ao MRO System, ignorado pelo git — ver Session Log de 2026-07-08.
+- Segundo cérebro criado dentro do repo (`vault/`), dedicado só ao MRO System — ver Session Log de 2026-07-08. Decisão inicial era ignorá-lo no git; revertida logo em seguida para versioná-lo e sincronizá-lo entre máquinas (ver `CLAUDE.md` da raiz).
 - **É PRIMEIRA APRESENTAÇÃO do sistema** (não mensal recorrente) → foco em "problema → solução MVP → resultados reais já alcançados → roadmap futuro".
 - **Não gerar slides/roteiro ainda** — esperar dados reais de impacto e contexto da reunião (data/duração/público).
