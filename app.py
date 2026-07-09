@@ -35,21 +35,23 @@ from services.db_functions import (
     obter_valor_imobilizado, obter_evolucao_valor_imobilizado,
     obter_evolucao_preco, obter_abc_valor,
     obter_fornecedores_por_item,
+    filtrar_itens_por_busca,
     sugerir_conversao,
 )
 from services.constants import UNIDADES_COMPRA_SUGERIDAS, FATOR_CONVERSAO_PADRAO
 from services.planejamento import (
     gerar_sugestoes_reposicao, sugestao_para_item_sc,
     registrar_desfecho_sugestao, listar_sugestoes, buscar_sc_id_por_numero,
-    agrupar_por_natureza, resumir_grupo_sc,
+    agrupar_por_tipo_material, resumir_grupo_sc,
 )
 from services.ficha import (
     montar_ficha_360, salvar_imagem_item, remover_imagem_item,
+    agrupar_saldo_residual_por_fornecedor,
 )
 from services.ajuda_conteudo import GUIAS_PERSONA, MANUAL
 from services.dashboards import (
     montar_dashboard, PUBLICOS,
-    PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_DIRETORIA,
+    PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_DIRETORIA, PUBLICO_EXECUTIVO,
 )
 
 setup_logging()
@@ -62,7 +64,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 3.0.1", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 3.2.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -133,13 +135,13 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 3.0.1</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 3.2.0</span>
     </div>
     """, unsafe_allow_html=True)
 
     # 2. Navegação (Option Menu)
 
-    opcoes_limpas = ["Dashboard", "Inventário", "Ficha 360", "Gerenciar Itens", "Movimentações", "Requisição", "Compras (SC)", "Ajuda", "Configurações"]
+    opcoes_limpas = ["Dashboard", "Inventário", "Ficha 360", "Gerenciar Itens", "Movimentações", "Requisição", "Controle de SC", "Ajuda", "Configurações"]
 
     escolha_limpa = option_menu(
         menu_title=None,
@@ -255,7 +257,7 @@ def _render_dash_comprador(vm):
     with col_fila:
         with st.container(border=True):
             st.markdown(f"#### :material/psychology: Fila de reposição — top {len(vm['fila'])} de {vm['total_fila']}")
-            st.caption("Priorizada por urgência. Ação completa em **Compras (SC) → :material/psychology: Assistente de Reposição**.")
+            st.caption("Priorizada por urgência. Ação completa em **Controle de SC → :material/psychology: Assistente de Reposição**.")
             if vm["fila"]:
                 df = pd.DataFrame([{
                     "Prio": s.get("prioridade"),
@@ -305,7 +307,7 @@ def _render_dash_gestao(vm):
                    "Proxy de disponibilidade — NÃO é OTIF de fornecedor (esse depende de dado ainda ausente).")
     cm = k["cobertura_media"]
     c2.metric(":material/calendar_month: Cobertura média", f"{cm} d" if cm is not None else "—",
-              help="Média de dias de cobertura (estoque+guarda-chuva ÷ consumo) dos itens com consumo; "
+              help="Média de dias de cobertura (estoque atual ÷ consumo) dos itens com consumo; "
                    "exclui itens sem consumo.")
     c3.metric(":material/payments: Valor imobilizado", _dash_fmt_brl(k["valor_imobilizado"]),
               help="Σ(estoque × preço de valoração), em BRL. Detalhe logo abaixo.")
@@ -491,6 +493,253 @@ def _render_dash_diretoria(vm):
                 st.caption("Sem consumo valorado na janela.")
 
 
+_MESES_PT = ["", "jan", "fev", "mar", "abr", "mai", "jun",
+             "jul", "ago", "set", "out", "nov", "dez"]
+
+
+def _mes_label(ym):
+    """'2026-07' → 'jul/26' (rótulo curto pt-BR para eixos de gráfico)."""
+    try:
+        a, m = str(ym).split("-")[:2]
+        return f"{_MESES_PT[int(m)]}/{a[2:]}"
+    except (ValueError, IndexError):
+        return str(ym)
+
+
+def _brl_compact(v):
+    """R$ compacto p/ rótulo de barra: 18800 → 'R$ 18,8k'; 1250000 → 'R$ 1,3M'."""
+    try:
+        v = float(v)
+    except (ValueError, TypeError):
+        return "R$ —"
+    if abs(v) >= 1_000_000:
+        return f"R$ {v/1_000_000:.1f}M".replace(".", ",")
+    if abs(v) >= 1_000:
+        return f"R$ {v/1_000:.1f}k".replace(".", ",")
+    return f"R$ {v:.0f}"
+
+
+# Paleta de série p/ donuts (laranja da marca → tons de apoio).
+_SERIE_CORES = ["#F36F21", "#F7941E", "#FFB65C", "#6C7A89", "#8E44AD",
+                "#2E86C1", "#27AE60", "#C0392B", "#B3B3B3"]
+
+
+def _barh(labels, values, textos, cor=None, height=300):
+    """Gráfico de barras horizontais (ranking). `labels`/`values`/`textos` já na ordem
+    de exibição (maior no topo = último da lista, convenção do Plotly horizontal)."""
+    import plotly.graph_objects as go
+    fig = go.Figure(go.Bar(
+        y=labels, x=values, orientation="h",
+        marker=dict(color=cor or PAL["accent"], line=dict(width=1, color=PAL["accent_borda"])),
+        text=textos, textposition="auto",
+        textfont=dict(size=11, color=PAL["texto"]), hoverinfo="skip"))
+    fig.update_layout(
+        template=PAL["plotly_template"], height=height,
+        margin=dict(l=0, r=16, t=6, b=0), paper_bgcolor=PAL["paper_bg"],
+        plot_bgcolor=PAL["plot_bg"], showlegend=False,
+        font=dict(family="Inter", color=PAL["texto"]),
+        xaxis=dict(showgrid=False, zeroline=False, visible=False),
+        yaxis=dict(showgrid=False, tickfont=dict(size=11, color=PAL["texto"])))
+    return fig
+
+
+def _donut(labels, values, height=300, fmt=None):
+    """Donut de composição com legenda e % nas fatias."""
+    import plotly.graph_objects as go
+    txt = [(fmt(v) if fmt else str(v)) for v in values]
+    fig = go.Figure(go.Pie(
+        labels=labels, values=values, hole=0.58, sort=False,
+        marker=dict(colors=_SERIE_CORES[:len(labels)] or None,
+                    line=dict(color=PAL["paper_bg"], width=1)),
+        textinfo="percent", textfont=dict(size=11, color="#111"),
+        customdata=txt, hovertemplate="%{label}: %{customdata} (%{percent})<extra></extra>"))
+    fig.update_layout(
+        template=PAL["plotly_template"], height=height,
+        margin=dict(l=0, r=0, t=6, b=0), paper_bgcolor=PAL["paper_bg"],
+        plot_bgcolor=PAL["plot_bg"],
+        font=dict(family="Inter", color=PAL["texto"], size=11),
+        legend=dict(orientation="v", x=1, y=0.5, font=dict(size=10)))
+    return fig
+
+
+def _bloco_top(titulo, itens, label_fn, value_key, value_fmt, cor=None,
+               height=300, caption=None):
+    """Renderiza um card com um ranking Top N em barras horizontais (maior no topo)."""
+    with st.container(border=True):
+        st.markdown(f"#### {titulo}")
+        if caption:
+            st.caption(caption)
+        if not itens:
+            st.caption("Sem dados para o período.")
+            return
+        labels = [label_fn(x) for x in itens][::-1]
+        values = [x[value_key] for x in itens][::-1]
+        textos = [value_fmt(x[value_key]) for x in itens][::-1]
+        st.plotly_chart(_barh(labels, values, textos, cor, height),
+                        width="stretch", config={"displayModeBar": False})
+
+
+def _render_dash_executivo(vm):
+    """:material/insights: Mensal — panorama do ano corrente (YTD): KPIs em R$/serviço, séries, ABC e vários Top 10."""
+    ano = vm["ano"]
+    st.subheader(f":material/insights: Panorama {ano} — visão executiva")
+    st.caption(f"Tudo nesta tela é do **ano corrente ({ano})**, de 1º de janeiro até hoje. "
+               "Consumo = saídas reais por requisição (ajustes de inventário não entram). "
+               "Valores em R$ pela valoração de referência (último preço negociado).")
+
+    k = vm["kpis"]; vd = vm["valor_detalhe"]
+    # ── Faixa 1: financeiro / volume ──
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(":material/payments: Valor imobilizado", _dash_fmt_brl(k["valor_imobilizado"]),
+              help="Capital parado em estoque hoje: Σ(estoque × preço de referência).")
+    c2.metric(":material/shopping_cart: Consumido no ano (YTD)", _dash_fmt_brl(k["valor_consumido_ytd"]),
+              help="Valor total consumido de 1º/jan até hoje (saídas reais × preço).")
+    c3.metric(":material/assignment: Requisições (YTD)", f"{k['n_requisicoes_ytd']:,}".replace(",", "."),
+              help="Nº de requisições atendidas no ano corrente.")
+    c4.metric(":material/inventory_2: Itens movimentados (YTD)", k["itens_consumidos_ytd"],
+              help="Quantos itens diferentes tiveram consumo real no ano.")
+    st.caption(f":material/info: Valoração: {vd['itens_valorados']} itens com preço · "
+               f"{vd['itens_sem_preco']} com estoque sem preço (subestima o total).")
+
+    # ── Faixa 2: operação / serviço ──
+    o1, o2, o3, o4 = st.columns(4)
+    ns = k["nivel_servico"]
+    o1.metric(":material/ads_click: Nível de serviço", f"{ns}%" if ns is not None else "—",
+              help="% dos itens com consumo real fora de ruptura. Proxy de disponibilidade.")
+    gm = k["giro_medio"]
+    o2.metric(":material/sync: Giro médio (ano)", f"{gm}x" if gm is not None else "—",
+              help="Quantas vezes o estoque se renova por ano, em média.")
+    o3.metric("🔴 Críticos", k["criticos"], delta_color="off",
+              help="Itens que já precisam de compra agora (abaixo do ponto de pedido).")
+    o4.metric(":material/emergency: Rupturas", k["rupturas"], delta_color="off",
+              help="Itens com consumo real e estoque zerado — risco imediato.")
+
+    st.markdown("---")
+
+    # ── Evolução mensal (R$) + composição por tipo (donut) ──
+    s = vm["series"]
+    colE, colC = st.columns([3, 2])
+    with colE:
+        with st.container(border=True):
+            st.markdown(f"#### :material/trending_up: Consumo mês a mês em {ano} (R$)")
+            cm = s["consumo_mensal"]
+            if cm:
+                df = pd.DataFrame([{"Mês": _mes_label(x["mes"]), "Valor (R$)": x["valor"]} for x in cm])
+                st.bar_chart(df.set_index("Mês"), color="#F36F21", height=300)
+            else:
+                st.caption("Sem consumo real no ano ainda.")
+    with colC:
+        with st.container(border=True):
+            st.markdown("#### :material/donut_large: Consumo por tipo de material")
+            comp = vm["composicao_tipo"]
+            if comp:
+                st.plotly_chart(_donut([x["tipo"] for x in comp], [x["valor"] for x in comp],
+                                       height=300, fmt=_brl_compact),
+                                width="stretch", config={"displayModeBar": False})
+            else:
+                st.caption("Sem consumo valorado no ano.")
+
+    # ── Curva ABC ──
+    with st.container(border=True):
+        abc = vm["abc"]; classes = abc["classes"]
+        st.markdown("#### :material/emoji_events: Curva ABC por valor consumido (ano corrente)")
+        st.caption("Poucos itens concentram a maior parte do gasto — classe A = os que mais pesam.")
+        ca, cb, cc = st.columns(3)
+        ca.metric("🅰️ Classe A", classes.get("A", 0), help="Itens que somam até 80% do valor consumido.")
+        cb.metric("🅱️ Classe B", classes.get("B", 0), delta_color="off", help="De 80% a 95% do valor.")
+        cc.metric("🅲 Classe C", classes.get("C", 0), delta_color="off", help="Os 5% finais do valor.")
+        if abc["itens"]:
+            st.plotly_chart(
+                _barh([f"{x['part_number']} · {str(x['nome_item'])[:18]}" for x in abc["itens"]][::-1],
+                      [x["valor"] for x in abc["itens"]][::-1],
+                      [_brl_compact(x["valor"]) for x in abc["itens"]][::-1], height=380),
+                width="stretch", config={"displayModeBar": False})
+
+    st.markdown("---")
+    st.markdown("### :material/leaderboard: Rankings Top 10 — ano corrente")
+    r = vm["rankings"]
+
+    # Linha 1: valor consumido | quantidade
+    t1, t2 = st.columns(2)
+    with t1:
+        _bloco_top(":material/shopping_cart: Top 10 — valor consumido (R$)", r["top_valor_consumido"],
+                   lambda x: f"{x['part_number']} · {str(x['nome_item'])[:16]}", "valor", _brl_compact,
+                   caption="Onde o dinheiro foi gasto no ano.")
+    with t2:
+        _bloco_top(":material/format_list_numbered: Top 10 — quantidade consumida", r["top_qtd_consumida"],
+                   lambda x: f"{x['part_number']} · {str(x['nome_item'])[:16]}", "qtd",
+                   lambda v: f"{v:g}", cor="#F7941E",
+                   caption="Maior volume de saída (cada item na sua unidade).")
+
+    # Linha 2: valor imobilizado | dead stock
+    t3, t4 = st.columns(2)
+    with t3:
+        _bloco_top(":material/warehouse: Top 10 — capital parado em estoque", r["top_valor_imobilizado"],
+                   lambda x: f"{x['part_number']} · {str(x['nome_item'])[:16]}", "valor", _brl_compact,
+                   cor="#6C7A89", caption="Itens que mais imobilizam capital hoje.")
+    with t4:
+        _bloco_top(":material/bedtime: Top 10 — dinheiro dormindo (sem consumo no ano)", r["top_dead_stock"],
+                   lambda x: f"{x['part_number']} · {str(x['nome_item'])[:16]}", "valor", _brl_compact,
+                   cor="#C0392B", caption="Estoque parado que NÃO teve saída no ano — candidato a revisão.")
+
+    # Linha 3: centro de custo | emitente
+    t5, t6 = st.columns(2)
+    with t5:
+        _bloco_top(":material/account_tree: Top 10 — centros de custo (R$)", r["top_centro_custo"],
+                   lambda x: str(x["rotulo"])[:26], "valor", _brl_compact, cor="#2E86C1",
+                   caption="Áreas que mais consomem, em R$ (exclui CCs contábeis genéricos).")
+    with t6:
+        _bloco_top(":material/person: Top 10 — emitentes (nº requisições)", r["top_emitente"],
+                   lambda x: str(x["rotulo"])[:22], "n", lambda v: f"{v}", cor="#27AE60",
+                   caption="Quem mais abre requisições.")
+
+    # Linha 4: setor | padrões de demanda
+    t7, t8 = st.columns(2)
+    with t7:
+        _bloco_top(":material/factory: Top 10 — setores (nº requisições)", r["top_setor"],
+                   lambda x: str(x["rotulo"])[:22], "n", lambda v: f"{v}", cor="#8E44AD",
+                   caption="Setores que mais requisitam material.")
+    with t8:
+        with st.container(border=True):
+            st.markdown("#### :material/science: Padrões de demanda (SBC)")
+            st.caption("Quão previsível é repor cada material.")
+            ordem = ["Suave", "Intermitente", "Errático", "Irregular", "Poucos dados"]
+            dem = vm["destaques"]["demanda"]
+            dados_dem = [{"Padrão": p, "Itens": dem.get(p, 0)} for p in ordem if dem.get(p, 0)]
+            if dados_dem:
+                st.bar_chart(pd.DataFrame(dados_dem).set_index("Padrão"), color="#F7941E", height=240)
+            else:
+                st.caption("Sem consumo real suficiente para classificar.")
+            xyz = vm["destaques"]["xyz"]
+            if xyz:
+                st.caption(f"XYZ: X {xyz.get('X',0)} · Y {xyz.get('Y',0)} · Z {xyz.get('Z',0)}.")
+
+    st.markdown("---")
+
+    # ── Distribuição do inventário + aging ──
+    d = vm["destaques"]
+    colD, colA = st.columns([3, 2])
+    with colD:
+        with st.container(border=True):
+            st.markdown("#### :material/donut_large: Distribuição do inventário hoje")
+            dist = d["distribuicao"]
+            labels = ["OK", "Atenção", "Comprar", "Sem Mov.", "Zerados"]
+            vals = [dist["ok"], dist["atencao"], dist["comprar"], dist["sem_mov"], dist["zerados"]]
+            st.plotly_chart(_donut(labels, vals, height=270, fmt=lambda v: f"{v} itens"),
+                            width="stretch", config={"displayModeBar": False})
+    with colA:
+        with st.container(border=True):
+            st.markdown("#### :material/timer: Aging das SCs abertas")
+            st.caption("Há quanto tempo as SCs abertas estão paradas.")
+            ag = d["aging"]
+            a1, a2, a3 = st.columns(3)
+            a1.metric("0–7 d", ag["0-7"], delta_color="off")
+            a2.metric("8–15 d", ag["8-15"], delta_color="off")
+            a3.metric("15+ d", ag["15+"], delta_color="inverse", help="SCs paradas há mais de 15 dias.")
+            if ag.get("sem_data"):
+                st.caption(f"{ag['sem_data']} SC(s) sem data de abertura.")
+
+
 if pagina == "Dashboard":
     st.title(":material/bar_chart: Dashboard — MRO Inventus Power")
     if not listar_inventario():
@@ -501,7 +750,8 @@ if pagina == "Dashboard":
     publico = st.radio("Visão", PUBLICOS, index=PUBLICOS.index(PUBLICO_GESTAO),
                        horizontal=True, key="dash_view",
                        help="Comprador = ação (fila, SCs, aging) · Gestão = saúde (serviço, cobertura, "
-                            "valor, giro) · Diretoria = financeiro (valor, evolução, ABC).")
+                            "valor, giro) · Diretoria = financeiro (valor, evolução, ABC) · "
+                            "Mensal = apresentação (variação mês a mês + séries).")
     st.markdown("---")
 
     vm = montar_dashboard(publico)
@@ -509,6 +759,8 @@ if pagina == "Dashboard":
         _render_dash_comprador(vm)
     elif publico == PUBLICO_DIRETORIA:
         _render_dash_diretoria(vm)
+    elif publico == PUBLICO_EXECUTIVO:
+        _render_dash_executivo(vm)
     else:
         _render_dash_gestao(vm)
 
@@ -940,7 +1192,7 @@ elif pagina == "Gerenciar Itens":
                     st.markdown("---")
                     lc1, lc2 = st.columns([2, 1])
                     lc1.info(
-                        f":material/timer: **Lead Time** — cadastrado (Neidson): **{_lt_cad}d** · "
+                        f":material/timer: **Lead Time** — cadastrado (Compras): **{_lt_cad}d** · "
                         f"calculado: **{_lt_calc}d** ({_amostras} amostras, origem {_origem}). "
                         f"O calculado é apenas uma sugestão; a base cadastrada não é alterada automaticamente."
                     )
@@ -1151,7 +1403,7 @@ elif pagina == "Movimentações":
                         st.metric(":material/remove: Estável", int(vc.get("Estável", 0)))
                 with cb:
                     st.markdown("**:material/shield: Menor cobertura (dias)**")
-                    st.caption("(estoque + guarda-chuva) ÷ consumo diário")
+                    st.caption("Estoque atual ÷ consumo diário")
                     if "Cobertura(d)" in df_series.columns:
                         _cols_lc = [c for c in ["PN", "Nome", "Cobertura(d)"] if c in df_series.columns]
                         low = (df_series[df_series["Cobertura(d)"] < 900]
@@ -1578,10 +1830,10 @@ elif pagina == "Requisição":
                         st.table(df_det)
                         
 # ══════════════════════════════════════════════════════════════════════════════
-# COMPRAS (SC)
+# CONTROLE DE SC
 # ══════════════════════════════════════════════════════════════════════════════
-elif pagina == "Compras (SC)":
-    st.title(":material/receipt_long: Gestão de Compras — S.C.")
+elif pagina == "Controle de SC":
+    st.title(":material/receipt_long: Controle de SC")
     
     # Estrutura de abas mantida conforme solicitado
     aba_mon, aba_assist, aba_forn, aba_nova_sc, aba_rec, aba_ed, aba_h, aba_import = st.tabs([
@@ -1810,7 +2062,7 @@ elif pagina == "Compras (SC)":
         st.markdown("### :material/psychology: Assistente de Reposição")
         st.caption("Fila priorizada do que repor — o quê, quando, quanto, por quê e de quem. "
                    "O sistema **recomenda**; o comprador decide e cria a SC. Nada aqui "
-                   "sobrescreve a base do Sr. Neidson (mín/máx/lead time/categoria).")
+                   "sobrescreve a base do Compras (mín/máx/lead time/categoria).")
 
         _mat = obter_maturidade_dados()
         st.caption(
@@ -1823,14 +2075,14 @@ elif pagina == "Compras (SC)":
             "⚪ Mostrar itens sem movimentação (revisão)", value=False, key="rep_incl_semmov",
             help="Por padrão, itens que nunca tiveram consumo real ficam fora da fila. "
                  "Marque para revisá-los — inclui os spares 'Parada de Linha' que o "
-                 "Neidson estoca sem giro.")
+                 "Compras estoca sem giro.")
 
         with st.spinner("Calculando sugestões de reposição…"):
             sugestoes = gerar_sugestoes_reposicao(incluir_sem_movimentacao=incluir_sem_mov)
 
         if not sugestoes:
-            st.success(":material/check_circle: Nenhuma reposição necessária agora. Estoque + guarda-chuva "
-                       "cobrem o horizonte planejado para todos os itens.")
+            st.success(":material/check_circle: Nenhuma reposição necessária agora. Estoque + saldo "
+                       "residual (guarda-chuva) cobrem o horizonte planejado para todos os itens.")
         else:
             # --- Filtros ---
             cflt1, cflt2, cflt3 = st.columns(3)
@@ -1904,7 +2156,7 @@ elif pagina == "Compras (SC)":
                 "Comprar até": _cate(s),
                 "ROP": s["rop"],
                 "Estoque": s["estoque_atual"],
-                "Guarda-Chuva": s["guarda_chuva"],
+                "Saldo Residual": s["guarda_chuva"],
                 "Qtd Sugerida": s["qtd_sugerida"],
                 "Un": s["unidade"],
                 **({"Qtd (compra)": (f"{s['qtd_sugerida_compra']} {s['unidade_compra']}"
@@ -1917,7 +2169,7 @@ elif pagina == "Compras (SC)":
                 column_config={
                     "Cobertura(d)": st.column_config.NumberColumn(
                         format="%.1f",
-                        help="(estoque + guarda-chuva) ÷ consumo diário. "
+                        help="Estoque atual ÷ consumo diário. "
                              "Vazio = sem consumo registrado no período."),
                     "Comprar até": st.column_config.TextColumn(
                         help="Data-limite p/ emitir a SC e o material chegar antes de acabar "
@@ -1928,12 +2180,12 @@ elif pagina == "Compras (SC)":
                         help="Ponto de pedido = consumo diário × lead time + estoque de segurança."),
                     "Qtd Sugerida": st.column_config.NumberColumn(
                         format="%d",
-                        help="alvo − estoque − guarda-chuva. "
-                             "Alvo = máx(máx. Neidson, consumo × 60 d)."),
+                        help="alvo − estoque − saldo residual (guarda-chuva). "
+                             "Alvo = máx(máx. Compras, consumo × 60 d)."),
                 },
             )
-            st.caption("Ordem: urgência → Parada de Linha → menor cobertura. Guarda-Chuva = "
-                       "qtd já negociada que ainda falta chegar (não pede em duplicidade).")
+            st.caption("Ordem: urgência → Parada de Linha → menor cobertura. Saldo Residual "
+                       "(Guarda-Chuva) = qtd já negociada que ainda falta chegar (não pede em duplicidade).")
 
             buf_rep = io.BytesIO()
             with pd.ExcelWriter(buf_rep, engine="openpyxl") as w:
@@ -1944,19 +2196,17 @@ elif pagina == "Compras (SC)":
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="rep_export")
 
-            # --- 📦 SCs sugeridas (agrupadas por NATUREZA da SC) — "de mão beijada" ---
+            # --- 📦 SCs sugeridas (agrupadas por TIPO DO MATERIAL) — "de mão beijada" ---
             st.divider()
             st.markdown("#### :material/inventory_2: SCs sugeridas")
-            st.caption("Itens juntados pela **natureza da SC** (o mesmo vocabulário que a operação "
-                       "já usa no Protheus, derivado do histórico de cada item), com título, "
-                       "justificativa e **centro de custo** sugeridos. Revise, edite e crie a SC "
-                       "agrupada em um clique — o sistema recomenda, você decide.")
-            grupos_sc = agrupar_por_natureza(filtradas)
-            resumos = [resumir_grupo_sc(label, sugs) for label, sugs in grupos_sc.items()]
+            st.caption("Itens juntados pelo **Tipo do material** (campo do cadastro do item), com "
+                       "título, justificativa e **centro de custo** sugeridos. Revise, edite e crie "
+                       "a SC agrupada em um clique — o sistema recomenda, você decide.")
+            grupos_sc = agrupar_por_tipo_material(filtradas)
+            resumos = [resumir_grupo_sc(label, sugs, criterio="tipo de material") for label, sugs in grupos_sc.items()]
             for gi, r in enumerate(resumos):
-                nat_curta = (r["label"].replace("SOLICITAÇÃO DE COMPRA - ", "")
-                             .replace("SOLICITAÇÃO DE COMPRA – ", ""))
-                cabecalho = f"{nat_curta} · {r['n_itens']} itens · {r['prioridade']}"
+                label_curto = r["label"]
+                cabecalho = f"{label_curto} · {r['n_itens']} itens · {r['prioridade']}"
                 if r["comprar_ate_min"]:
                     cabecalho += (" · comprar até "
                                   + datetime.strptime(r["comprar_ate_min"], "%Y-%m-%d").strftime("%d/%m"))
@@ -1981,7 +2231,7 @@ elif pagina == "Compras (SC)":
                     st.caption(cap)
                     with st.form(f"form_sc_grupo_{gi}", clear_on_submit=False):
                         gc1, gc2 = st.columns([2, 1])
-                        titulo_g = gc1.text_input("Título da SC (natureza)", value=r["titulo"],
+                        titulo_g = gc1.text_input("Título da SC (tipo do material)", value=r["titulo"],
                                                   key=f"sc_tit_{gi}")
                         num_sc_g = gc2.text_input(
                             "Número da SC *",
@@ -2035,7 +2285,7 @@ elif pagina == "Compras (SC)":
                                 f"({s['lead_time_origem']}) + segurança {s['estoque_seguranca']:g} "
                                 f"({s['estoque_seguranca_origem']})")
                 mc3.metric("Alvo", f"{s['alvo']:g}",
-                           help=f"{s['alvo_origem']} · máx. Neidson {s['alvo_neidson']:g} · "
+                           help=f"{s['alvo_origem']} · máx. Compras {s['alvo_neidson']:g} · "
                                 f"horizonte {s['horizonte_dias']}d = {s['alvo_horizonte']:g}")
                 mc4.metric("Qtd sugerida", f"{s['qtd_sugerida']} {s['unidade']}")
                 if abs((s.get('fator_conversao') or 1) - 1) > 1e-9:
@@ -2116,7 +2366,13 @@ elif pagina == "Compras (SC)":
         st.caption("Busque um material para ver seus fornecedores, último preço e lead time, "
                    "e gerar um e-mail de cotação pronto. O sistema recomenda; o comprador decide.")
 
-        _, item_forn, _ = sel_material("Busque o material (PN ou nome)", "forn_item")
+        busca_forn = st.text_input(":material/search: Buscar material (PN, nome ou descrição)",
+                                    key="busca_forn")
+        itens_forn = filtrar_itens_por_busca(listar_inventario(), busca_forn)
+        opcoes_forn = {f"{i['part_number']} — {i['nome_item']}": i for i in itens_forn}
+        lista_forn = [" "] + list(opcoes_forn.keys())
+        sel_forn = st.selectbox("Selecione o material", lista_forn, index=0, key="forn_item_sel")
+        item_forn = opcoes_forn.get(sel_forn) if sel_forn != " " else None
         if not item_forn:
             st.info("Selecione um material para consultar os fornecedores.")
         else:
@@ -2131,7 +2387,7 @@ elif pagina == "Compras (SC)":
                 f"**{item_forn['part_number']} — {item_forn['nome_item']}**  \n"
                 f"Saldo: {(item_forn.get('estoque_atual') or 0):g} {item_forn.get('unidade', '')} · "
                 f"Mínimo: {(item_forn.get('estoque_minimo') or 0):g} · "
-                f"Lead time cadastrado (Neidson): {lt_cad}d{lt_calc_txt}"
+                f"Lead time cadastrado (Compras): {lt_cad}d{lt_calc_txt}"
             )
 
             fs = obter_fornecedores_por_item(item_forn["id"])
@@ -2633,14 +2889,14 @@ elif pagina == "Ficha 360":
                 st.warning(f":material/shopping_cart: **{rep['prioridade']}** — repor **{rep['qtd_sugerida']} "
                            f"{un}**. {rep['justificativa']}")
             elif rep["precisa"]:
-                # v2.7.1: gatilho ativo mas qtd = 0 → o guarda-chuva já cobre o alvo
+                # v2.7.1: gatilho ativo mas qtd = 0 → o saldo residual já cobre o alvo
                 # (antes aparecia "repor 0", confuso).
-                st.info(f"🟡 **{rep['prioridade']}** — **sem compra agora**: o guarda-chuva "
-                        f"(**{_g(it.get('estoque_em_transito'))} {un}** já negociados) cobre o "
-                        f"alvo de **{_g(rep['alvo'])} {un}**. Reavaliar quando o material chegar.")
+                st.info(f"🟡 **{rep['prioridade']}** — **sem compra agora**: o saldo residual "
+                        f"(guarda-chuva) (**{_g(it.get('estoque_em_transito'))} {un}** já negociados) "
+                        f"cobre o alvo de **{_g(rep['alvo'])} {un}**. Reavaliar quando o material chegar.")
             else:
                 st.success(":material/check_circle: Sem necessidade de reposição no momento "
-                           "(estoque + guarda-chuva cobrem o horizonte).")
+                           "(estoque + saldo residual cobrem o horizonte).")
 
             # ── Estoque / cobertura / giro ────────────────────────────────────
             st.divider()
@@ -2650,26 +2906,62 @@ elif pagina == "Ficha 360":
             e3.metric("Máximo", _g(it.get("estoque_maximo")))
             e4.metric("Segurança", _g(it.get("estoque_seguranca")),
                       help=f"Origem: {rep['estoque_seguranca_origem']}.")
-            e5.metric("Guarda-chuva", _g(it.get("estoque_em_transito")),
+            e5.metric("Saldo Residual (Guarda-Chuva)", _g(it.get("estoque_em_transito")),
                       help="Qtd já negociada que ainda falta chegar (SCs abertas).")
+
+            ver_saldo_key = f"ver_saldo_{item_f['id']}"
+            if st.button(":material/visibility: Ver detalhes do Saldo Residual",
+                         key=f"btn_{ver_saldo_key}"):
+                st.session_state[ver_saldo_key] = not st.session_state.get(ver_saldo_key, False)
+            if st.session_state.get(ver_saldo_key):
+                pedidos_com_saldo = [s for s in ficha["scs_pos"] if (s.get("pendente") or 0) > 0]
+                cont1, cont2 = st.columns(2)
+                with cont1:
+                    st.markdown("**:material/receipt_long: Pedidos com Saldo**")
+                    if not pedidos_com_saldo:
+                        st.caption("Nenhum pedido com saldo em aberto para este item.")
+                    else:
+                        st.dataframe(pd.DataFrame([{
+                            "SC": s["numero_sc"], "PO": s.get("po_item") or s.get("numero_po") or "—",
+                            "Status": s.get("status"),
+                            "Solic.": s.get("quantidade_solicitada"),
+                            "Receb.": s.get("quantidade_recebida"),
+                            "Pendente": s.get("pendente"),
+                        } for s in pedidos_com_saldo]), hide_index=True, width="stretch")
+                with cont2:
+                    st.markdown("**:material/apartment: Saldo Residual por Fornecedor**")
+                    grupos_saldo = agrupar_saldo_residual_por_fornecedor(ficha["scs_pos"])
+                    if not grupos_saldo:
+                        st.caption("Sem saldo residual por fornecedor para este item.")
+                    else:
+                        st.dataframe(pd.DataFrame([{
+                            "Fornecedor": g["fornecedor"],
+                            "Saldo Pendente": g["saldo_pendente"],
+                            "Nº Pedidos": g["n_pedidos"],
+                            "Entrega Parcial": ("Sim" if any(l["entrega_parcial"] for l in g["linhas"])
+                                                else "Não"),
+                        } for g in grupos_saldo]), hide_index=True, width="stretch")
+                st.caption(":material/info: Fundação: visão por este item. Consolidação entre "
+                           "materiais/fornecedores e os campos Controle AP/Elimin. Resíduo "
+                           "(fonte: Relatório de SCs, aba SC7) ficam para uma próxima etapa.")
 
             cob = it.get("dias_cobertura")
             giro = ficha["giro"]
             g1, g2, g3, g4 = st.columns(4)
             g1.metric("Cobertura",
                       f"{cob:.0f} d" if cob is not None and cob < PREVISAO_RUPTURA_SEM_RISCO else "—",
-                      help="(estoque + guarda-chuva) ÷ consumo diário.")
+                      help="Estoque atual ÷ consumo diário.")
             tend = it.get("tendencia_label")
             tend_txt = (f"{tend} {'+' if (it.get('tendencia_pct') or 0) >= 0 else ''}"
                         f"{_g(it.get('tendencia_pct'))}%") if tend else None
-            g2.metric("Consumo/dia", _g1(it.get("consumo_medio_diario")), delta=tend_txt,
+            g2.metric("Consumo/dia", f"{_g1(it.get('consumo_medio_diario'))} {un}/dia", delta=tend_txt,
                       delta_color="inverse", help="Média diária de saídas (janela 30d).")
             g3.metric("Giro anual", _g(giro["giro_anual"]),
                       help=f"Tempo médio em estoque: "
                            f"{giro['tempo_medio_dias'] if giro['tempo_medio_dias'] else '—'} d · "
                            f"baseado em {giro['n_snapshots']} fotos.")
             lt_calc = it.get("lead_time_calculado")
-            g4.metric("Lead time (Neidson)", f"{int(it.get('lead_time_dias') or 0)} d",
+            g4.metric("Lead time (Compras)", f"{int(it.get('lead_time_dias') or 0)} d",
                       help=(f"Calculado (sugestão): {int(lt_calc)} d "
                             f"({it.get('lead_time_calculado_amostras') or 0} amostras, "
                             f"{it.get('lead_time_calculado_origem') or '—'})" if lt_calc
@@ -2693,9 +2985,10 @@ elif pagina == "Ficha 360":
                 _preco_un = vc.get("preco") or 0
                 st.caption(f"Valor unitário: **{vc['moeda']} {_preco_un:,.2f}** / {un} "
                            f"· origem {vc['origem']}")
-                st.metric(f"Valor consumido ({vc['janela_dias']}d)",
+                st.metric(f"Valor consumido (YTD {date.today().year})",
                           f"{vc['moeda']} {vc['valor']:,.2f}",
-                          help=f"Estimativa (último preço, origem {vc['origem']}).")
+                          help=f"Estimativa (último preço, origem {vc['origem']}). "
+                               f"Acumulado de 01/01/{date.today().year} até hoje.")
                 if ficha["abc"]:
                     st.caption(f"Curva ABC (valor): classe **{ficha['abc']['classe']}** "
                                f"· {ficha['abc']['pct_acumulado']}% acumulado.")
@@ -2810,8 +3103,8 @@ elif pagina == "Ficha 360":
                            f"{saz.get('meses_atuais', 0)}/{saz.get('meses_necessarios', 12)} "
                            "meses (precisa de 1 ciclo anual completo para um perfil confiável).")
             st.caption(f":material/calendar_month: Indicadores de série baseados em ~{mat['dias']} dias de histórico — "
-                       "diagnóstico que amadurece conforme os dados acumulam. A base do Sr. "
-                       "Neidson (mín/máx/lead time/categoria) permanece intocada.")
+                       "diagnóstico que amadurece conforme os dados acumulam. A base do "
+                       "Compras (mín/máx/lead time/categoria) permanece intocada.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FEEDBACK / SUGESTÕES (Item 3 / v2.1.0)
@@ -2840,7 +3133,7 @@ elif pagina == "Ajuda":
                           help="Reescreve tudo em linguagem simples — ótimo para entender os "
                                "cálculos e os dashboards.")
         _busca_manual = st.text_input(":material/search: Filtrar por palavra (opcional)", key="ajuda_busca",
-                                      placeholder="ex.: cobertura, ABC, conversão, guarda-chuva")
+                                      placeholder="ex.: cobertura, ABC, conversão, saldo residual")
         _b = (_busca_manual or "").strip().lower()
         for _sec in MANUAL:
             _itens = _sec["itens"]
@@ -2873,7 +3166,7 @@ elif pagina == "Ajuda":
                                        placeholder="Descreva a sugestão, o problema ou a ideia em detalhes...")
                 fb_pagina = st.selectbox("Página/área relacionada (opcional)",
                                          ["—", "Dashboard", "Inventário", "Gerenciar Itens",
-                                          "Movimentações", "Requisição", "Compras (SC)",
+                                          "Movimentações", "Requisição", "Controle de SC",
                                           "Configurações", "Geral"], index=0)
                 enviado = st.form_submit_button(":material/mail: Enviar Feedback", type="primary", width="stretch")
                 if enviado:
@@ -2957,7 +3250,7 @@ elif pagina == "Configurações":
     with st.container(border=True):
         st.subheader(":material/download: Importar Base (Tipo/Categoria, Mínimo, Máximo, Lead Time)")
         st.caption("Atualiza itens **existentes** (casados pelo PN) com os dados apurados pelo "
-                   "Sr. Neidson. PNs não encontrados são apenas relatados — nenhum item é criado. "
+                   "Compras. PNs não encontrados são apenas relatados — nenhum item é criado. "
                    "Um backup do banco é criado automaticamente antes de aplicar.")
         arq_neidson = st.file_uploader("Planilha (.xlsx)", type=["xlsx"], key="upl_neidson")
         if arq_neidson is not None:

@@ -83,16 +83,32 @@ def calcular_status_inventario(estoque_atual, estoque_minimo, estoque_em_transit
     # ESTOQUE CONFORTÁVEL
     return "🟢 OK"
 
-def calcular_cobertura(estoque_atual, guarda_chuva, consumo_diario):
-    """Dias de cobertura = (estoque + guarda-chuva) / consumo diário.
+def calcular_cobertura(estoque_atual, consumo_diario):
+    """Dias de cobertura = estoque atual / consumo diário.
 
-    v2.2.1: torna explícito quantos dias o estoque (mais o que já vem chegando)
-    dura no ritmo atual. Sem consumo, retorna a sentinela de "sem risco"."""
+    v2.2.1: torna explícito quantos dias o estoque dura no ritmo atual. Sem
+    consumo, retorna a sentinela de "sem risco". v3.1.0: deixou de somar o
+    Saldo Residual (Guarda-Chuva) — pedido do PO para refletir só o estoque
+    físico disponível; o guarda-chuva segue considerado no gatilho de
+    reposição (`_disponivel`/ROP em services/planejamento.py), que é uma
+    decisão diferente (quando comprar) desta métrica (quantos dias de estoque)."""
     consumo = consumo_diario or 0
     if consumo <= 0:
         return PREVISAO_RUPTURA_SEM_RISCO
-    disponivel = (estoque_atual or 0) + (guarda_chuva or 0)
-    return round(disponivel / consumo, 1)
+    return round((estoque_atual or 0) / consumo, 1)
+
+
+def filtrar_itens_por_busca(itens, busca):
+    """Filtra uma lista de itens (dicts no formato de `listar_inventario`) por
+    substring no Part Number, nome ou descrição (case-insensitive). Usado pela
+    busca de materiais em Controle de SC → Fornecedores & Cotação (v3.1.0)."""
+    if not busca:
+        return itens
+    b = busca.lower()
+    return [i for i in itens
+            if b in (i.get("part_number") or "").lower()
+            or b in (i.get("nome_item") or "").lower()
+            or b in (i.get("descricao") or "").lower()]
 
 
 def calcular_status_sc(data_aprovacao, numero_po, fornecedor, tem_pendente):
@@ -252,10 +268,10 @@ def listar_inventario():
             else item["status_estoque_fisico"]
         )
 
-        # v2.2.1: dias de cobertura explícito (estoque + guarda-chuva) / consumo.
+        # v2.2.1: dias de cobertura explícito. v3.1.0: estoque atual / consumo (sem
+        # somar o guarda-chuva — pedido do PO; ver docstring de calcular_cobertura).
         item["dias_cobertura"] = calcular_cobertura(
             item.get("estoque_atual", 0) or 0,
-            item.get("estoque_em_transito", 0) or 0,
             item.get("consumo_medio_diario", 0) or 0,
         )
 
@@ -1431,7 +1447,8 @@ def buscar_scs_por_item(item_id, apenas_abertas=True):
                    COALESCE(isc.quantidade_pedido, isc.quantidade_solicitada) AS quantidade_negociada,
                    isc.quantidade_recebida,
                    COALESCE(isc.saldo_residual, COALESCE(isc.quantidade_pedido, isc.quantidade_solicitada)-isc.quantidade_recebida) AS pendente,
-                   isc.data_necessidade, isc.data_prev_nfe, isc.documento_nf, isc.status_item
+                   isc.data_necessidade, isc.data_prev_nfe, isc.documento_nf, isc.status_item,
+                   isc.preco_unitario, isc.valor_total, isc.moeda
             FROM itens_sc isc JOIN solicitacoes_compra sc ON sc.id=isc.sc_id
             WHERE isc.item_id=? {filtro}
             ORDER BY sc.data_abertura DESC
@@ -1567,8 +1584,10 @@ def exportar_inventario_df():
             it["preco_ref"] = round(preco, 2)
             it["preco_origem"] = origem or "—"
             it["valor_estoque"] = round(float(it.get("estoque_atual", 0) or 0) * preco, 2)
-            vc = calcular_valor_consumido(it["id"], conn=conn)
-            it["valor_consumido_90d"] = vc["valor"]
+            # v3.1.0: Valor Consumido passou de janela fixa de 90d para YTD (Year to
+            # Date — desde 01/01 do ano corrente), a pedido do PO.
+            vc = calcular_valor_consumido(it["id"], dias=dias_ytd(), conn=conn)
+            it["valor_consumido_ytd"] = vc["valor"]
             it["classe_abc_valor"] = classe_abc.get(it["id"], "—")
             # v2.7.0: coluna de transparência de consumo real. "Sem movimentação"
             # quando nunca houve requisição; senão "N req · últ. dd/mm".
@@ -1589,7 +1608,7 @@ def exportar_inventario_df():
         "tendencia_label", "tendencia_pct", "movimentacao",
         "lead_time_dias", "lead_time_calculado", "lead_time_calculado_origem",
         "giro_anual", "tempo_medio_dias", "previsao_ruptura_dias",
-        "preco_ref", "preco_origem", "valor_estoque", "valor_consumido_90d",
+        "preco_ref", "preco_origem", "valor_estoque", "valor_consumido_ytd",
         "classe_abc_valor", "padrao_demanda", "classe_xyz",
         "sc_numero", "status_material", "status_sc",
         "data_inventario",
@@ -1612,7 +1631,7 @@ def exportar_inventario_df():
         "estoque_minimo": "Mínimo",
         "estoque_maximo": "Máximo",
         "estoque_seguranca": "Segurança",
-        "estoque_em_transito": "Guarda-Chuva",
+        "estoque_em_transito": "Saldo Residual (Guarda-Chuva)",
         "dias_cobertura": "Cobertura(d)",
         "consumo_medio_diario": "Consumo/Dia",
         "consumo_30d": "Consumo 30d",
@@ -1630,7 +1649,7 @@ def exportar_inventario_df():
         "preco_ref": "Preço Ref",
         "preco_origem": "Origem Preço",
         "valor_estoque": "Valor em Estoque",
-        "valor_consumido_90d": "Valor Consumido(90d)",
+        "valor_consumido_ytd": "Valor Consumido(YTD)",
         "classe_abc_valor": "Classe ABC(valor)",
         "padrao_demanda": "Padrão Demanda",
         "classe_xyz": "Classe XYZ",
@@ -2486,6 +2505,15 @@ def obter_fornecedores_por_item(item_id, conn=None):
     return resultado
 
 
+def dias_ytd(hoje=None):
+    """Nº de dias decorridos no ano corrente até `hoje` (inclusive) — usado para
+    calcular o Valor Consumido em janela YTD (Year to Date, v3.1.0: substituiu a
+    janela fixa de 90 dias, a pedido do PO). Ex.: 08/01 → 8; 31/12 → 365 (ou 366
+    em ano bissexto)."""
+    hoje = hoje or date.today()
+    return (hoje - date(hoje.year, 1, 1)).days + 1
+
+
 def calcular_valor_consumido(item_id, dias=VALOR_CONSUMIDO_JANELA_DIAS, conn=None):
     """Valor consumido (ESTIMATIVA) = Σ(saídas na janela) × preço de valoração.
 
@@ -2511,14 +2539,19 @@ def calcular_valor_consumido(item_id, dias=VALOR_CONSUMIDO_JANELA_DIAS, conn=Non
 
 def obter_abc_valor(dias=VALOR_CONSUMIDO_JANELA_DIAS, limit=None, conn=None):
     """Curva ABC por VALOR consumido (qtd_saída × preço) na janela. Ordena
-    decrescente, calcula % acumulada e classe A/B/C (limiares 80/95). Usa todas
-    as saídas (coerente com consumo/giro). v2.3.0."""
+    decrescente, calcula % acumulada e classe A/B/C (limiares 80/95).
+
+    v3.2.0: passou a usar CONSUMO REAL (`SAIDA_REAL_WHERE` = saída por requisição),
+    coerente com consumo/giro/classificação/"quem consome". Antes usava `tipo='saida'`
+    cru, que incluía AJUSTES FÍSICOS de inventário (contagens) como se fossem consumo —
+    isso inflava a curva com valores absurdos (ex.: um ajuste de 99.999 un num alicate
+    virava R$ 2,1 mi). v2.3.0."""
     with transaction(conn) as c:
         rows = c.execute(
-            """SELECT i.id, i.part_number, i.nome_item,
+            f"""SELECT i.id, i.part_number, i.nome_item,
                       COALESCE(SUM(m.quantidade),0) AS qtd
                FROM movimentacoes m JOIN inventario i ON i.id = m.item_id
-               WHERE m.tipo='saida' AND m.data_hora >= datetime('now', ?)
+               WHERE {SAIDA_REAL_WHERE} AND m.data_hora >= datetime('now', ?)
                GROUP BY i.id HAVING qtd > 0""",
             (f"-{dias} days",),
         ).fetchall()
