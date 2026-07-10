@@ -35,7 +35,7 @@ from services.db_functions import (
     obter_valor_imobilizado, obter_evolucao_valor_imobilizado,
     obter_evolucao_preco, obter_abc_valor,
     obter_fornecedores_por_item,
-    filtrar_itens_por_busca,
+    filtrar_itens_por_busca, sincronizar_fornecedores_lista,
     sugerir_conversao,
 )
 from services.constants import UNIDADES_COMPRA_SUGERIDAS, FATOR_CONVERSAO_PADRAO
@@ -50,8 +50,8 @@ from services.ficha import (
 )
 from services.ajuda_conteudo import GUIAS_PERSONA, MANUAL
 from services.dashboards import (
-    montar_dashboard, PUBLICOS,
-    PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_DIRETORIA, PUBLICO_EXECUTIVO,
+    montar_dashboard,
+    PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_EXECUTIVO,
 )
 
 setup_logging()
@@ -64,7 +64,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 3.2.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 3.3.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -135,7 +135,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 3.2.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 3.3.0</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -447,52 +447,6 @@ def _render_dash_gestao(vm):
             st.caption("Aguardando histórico de requisições.")
 
 
-def _render_dash_diretoria(vm):
-    """:material/account_balance: Diretoria — retrato financeiro: valor imobilizado, evolução, ABC por valor, savings."""
-    k = vm["kpis"]; vd = vm["valor_detalhe"]
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric(":material/payments: Valor imobilizado", _dash_fmt_brl(k["valor_imobilizado"]),
-                  help="Σ(estoque × preço de valoração), em BRL.")
-        st.caption(f"{vd['itens_valorados']} itens valorados · {vd['itens_sem_preco']} com estoque sem preço · "
-                   f"{vd['itens_nao_brl']} em moeda ≠ BRL ({_dash_fmt_brl(vd['total_nao_brl'])}).")
-    with c2:
-        st.metric(":material/show_chart: Economia (Savings)", "em breve", delta_color="off",
-                  help="Spot Saving (R$4,7M em 2025) depende de ingestão dedicada — planejado para versão futura.")
-        st.caption("Savings ainda não ingerido — transparência: sem dado, sem número inventado.")
-
-    st.markdown("---")
-    colE, colA = st.columns([3, 2])
-
-    with colE:
-        with st.container(border=True):
-            st.markdown("#### :material/trending_up: Evolução do valor imobilizado")
-            ev = vm["evolucao"]; serie = ev.get("serie") or []
-            n = ev.get("n_snapshots", 0)
-            if len(serie) >= 2:
-                df_ev = pd.DataFrame(serie)
-                df_ev["data"] = pd.to_datetime(df_ev["data"])
-                st.line_chart(df_ev.set_index("data")["valor"], color="#F7941E", height=300)
-                st.caption(f"Baseado em {n} foto(s) diária(s) de estoque (a maturidade cresce com o uso).")
-            else:
-                st.info(f"Ainda há poucas fotos diárias ({n}) para desenhar a evolução — amadurece com o tempo.")
-
-    with colA:
-        with st.container(border=True):
-            st.markdown("#### :material/emoji_events: ABC por valor — onde está o capital")
-            st.caption("Itens que concentram o valor em estoque (classe A = maior).")
-            abc = vm["abc_valor"]
-            if abc:
-                df_a = pd.DataFrame([{
-                    "Classe": x["classe"], "Part Number": x["part_number"],
-                    "Item": str(x["nome_item"])[:24], "Valor (R$)": x["valor"],
-                } for x in abc])
-                st.dataframe(df_a, width="stretch", hide_index=True, height=320,
-                             column_config={"Valor (R$)": st.column_config.NumberColumn(format="R$ %.2f")})
-            else:
-                st.caption("Sem consumo valorado na janela.")
-
-
 _MESES_PT = ["", "jan", "fev", "mar", "abr", "mai", "jun",
              "jul", "ago", "set", "out", "nov", "dez"]
 
@@ -559,6 +513,25 @@ def _donut(labels, values, height=300, fmt=None):
         plot_bgcolor=PAL["plot_bg"],
         font=dict(family="Inter", color=PAL["texto"], size=11),
         legend=dict(orientation="v", x=1, y=0.5, font=dict(size=10)))
+    return fig
+
+
+def _barv(labels, values, textos=None, cor=None, height=280):
+    """Barras verticais temáticas (categorias/tempo) — espelha `_barh` p/ telas que só
+    precisam de um bar chart no padrão da marca (Ficha 360 etc.). v3.3.0."""
+    import plotly.graph_objects as go
+    fig = go.Figure(go.Bar(
+        x=labels, y=values,
+        marker=dict(color=cor or PAL["accent"], line=dict(width=1, color=PAL["accent_borda"])),
+        text=textos if textos is not None else values, textposition="outside",
+        textfont=dict(size=11, color=PAL["texto"]), hoverinfo="skip", cliponaxis=False))
+    fig.update_layout(
+        template=PAL["plotly_template"], height=height,
+        margin=dict(l=0, r=8, t=18, b=0), paper_bgcolor=PAL["paper_bg"],
+        plot_bgcolor=PAL["plot_bg"], showlegend=False,
+        font=dict(family="Inter", color=PAL["texto"]),
+        xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=11, color=PAL["texto"])),
+        yaxis=dict(showgrid=False, zeroline=False, visible=False))
     return fig
 
 
@@ -746,23 +719,18 @@ if pagina == "Dashboard":
         st.info("Nenhum item cadastrado. Vá em **:material/add: Gerenciar Itens** para começar.")
         st.stop()
 
-    # v3.0.0 — seletor de público: cada perfil vê o que importa, sem poluir o menu lateral.
-    publico = st.radio("Visão", PUBLICOS, index=PUBLICOS.index(PUBLICO_GESTAO),
-                       horizontal=True, key="dash_view",
-                       help="Comprador = ação (fila, SCs, aging) · Gestão = saúde (serviço, cobertura, "
-                            "valor, giro) · Diretoria = financeiro (valor, evolução, ABC) · "
-                            "Mensal = apresentação (variação mês a mês + séries).")
-    st.markdown("---")
-
-    vm = montar_dashboard(publico)
-    if publico == PUBLICO_COMPRADOR:
-        _render_dash_comprador(vm)
-    elif publico == PUBLICO_DIRETORIA:
-        _render_dash_diretoria(vm)
-    elif publico == PUBLICO_EXECUTIVO:
-        _render_dash_executivo(vm)
-    else:
-        _render_dash_gestao(vm)
+    # v3.3.0 — abas por público (substitui as "bolinhas"/radio), no mesmo padrão das
+    # telas Controle de SC / Movimentações. Diretoria removida; "Mensal" → "KPI Mensal".
+    tab_comp, tab_gest, tab_mensal = st.tabs(
+        [f":material/person: {PUBLICO_COMPRADOR}",
+         f":material/insights: {PUBLICO_GESTAO}",
+         f":material/calendar_month: {PUBLICO_EXECUTIVO}"])
+    with tab_comp:
+        _render_dash_comprador(montar_dashboard(PUBLICO_COMPRADOR))
+    with tab_gest:
+        _render_dash_gestao(montar_dashboard(PUBLICO_GESTAO))
+    with tab_mensal:
+        _render_dash_executivo(montar_dashboard(PUBLICO_EXECUTIVO))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INVENTÁRIO
@@ -1123,7 +1091,7 @@ elif pagina == "Gerenciar Itens":
                     _seg_calc = float(item_sel.get('estoque_seguranca_calculado') or 0)
                     ed_seg = st.number_input("Estoque de Segurança", min_value=0.0, value=float(item_sel.get('estoque_seguranca') or 0), key="ed_seg",
                                              help=f"Parâmetro manual do gestor (entre Mínimo e Máximo). "
-                                                  f"Sugestão calculada (consumo×lead time×1,5): {_seg_calc:.1f}.")
+                                                  f"Sugestão calculada (consumo×lead time×1,5, arredondada p/ cima): {_seg_calc:.0f}.")
                     # Nota: Estoque atual NÃO deve ser editado aqui, apenas via Movimentação/Inventário
                     st.markdown(f"**Estoque Atual:** `{item_sel['estoque_atual']}` (Alterar em *Inventário*)")
                     st.markdown(f"**Status:** `{item_sel['status_material']}`")
@@ -1245,7 +1213,7 @@ elif pagina == "Movimentações":
     st.title(":material/sync: Controle de Estoque")
 
     # --- TABS: AJUSTE, HISTÓRICO E DASHBOARD ---
-    tab_ajuste, tab_hist, tab_dash = st.tabs([":material/balance: Ajuste Rápido", ":material/history: Histórico Completo", ":material/bar_chart: Analytics"])
+    tab_dash, tab_ajuste, tab_hist = st.tabs([":material/bar_chart: Analytics", ":material/balance: Ajuste Rápido", ":material/history: Histórico Completo"])
 
     centros = listar_valores("centro_custo") or ["Geral"]
 
@@ -1518,29 +1486,6 @@ elif pagina == "Movimentações":
                     )
                 else:
                     st.success(":material/check_circle: Nenhum item de valor relevante totalmente parado.")
-
-            # Evolução de preço por item (antecipa parte da Ficha 360 v2.6)
-            st.markdown("**:material/search: Evolução de preço (por item)**")
-            if not df_series.empty and "PN" in df_series.columns:
-                _map_pn = {i["part_number"]: i["id"] for i in listar_inventario()}
-                pn_sel = st.selectbox("Item", ["—"] + sorted(_map_pn.keys()),
-                                      key="fin_pn_preco")
-                if pn_sel and pn_sel != "—":
-                    serie_p = obter_evolucao_preco(_map_pn[pn_sel])
-                    if serie_p:
-                        df_p = pd.DataFrame(serie_p)
-                        df_p["data"] = pd.to_datetime(df_p["data"], errors="coerce")
-                        df_p = df_p.dropna(subset=["data"]).sort_values("data")
-                        if not df_p.empty:
-                            st.line_chart(df_p.set_index("data")["preco_unitario"], height=220)
-                            st.caption(
-                                f"{len(df_p)} registro(s) de preço · origem(ns): "
-                                f"{', '.join(sorted(df_p['origem'].dropna().unique()))}."
-                            )
-                        else:
-                            st.info("Sem datas válidas no histórico de preço deste item.")
-                    else:
-                        st.info("Sem histórico de preço para este item ainda.")
 
         st.markdown("---")
 
@@ -2366,12 +2311,18 @@ elif pagina == "Controle de SC":
         st.caption("Busque um material para ver seus fornecedores, último preço e lead time, "
                    "e gerar um e-mail de cotação pronto. O sistema recomenda; o comprador decide.")
 
-        busca_forn = st.text_input(":material/search: Buscar material (PN, nome ou descrição)",
-                                    key="busca_forn")
-        itens_forn = filtrar_itens_por_busca(listar_inventario(), busca_forn)
-        opcoes_forn = {f"{i['part_number']} — {i['nome_item']}": i for i in itens_forn}
+        # v3.3.0 — busca única: o próprio select filtra por PN, nome OU descrição (o
+        # rótulo inclui a descrição), eliminando o campo de busca redundante acima.
+        opcoes_forn = {}
+        for i in listar_inventario():
+            desc = (i.get("descricao") or "").strip()
+            rot = f"{i['part_number']} — {i['nome_item']}"
+            if desc and desc.lower() not in (i.get("nome_item") or "").lower():
+                rot += f" · {desc}"
+            opcoes_forn[rot] = i
         lista_forn = [" "] + list(opcoes_forn.keys())
-        sel_forn = st.selectbox("Selecione o material", lista_forn, index=0, key="forn_item_sel")
+        sel_forn = st.selectbox("Selecione o material (busque por PN, nome ou descrição)",
+                                lista_forn, index=0, key="forn_item_sel")
         item_forn = opcoes_forn.get(sel_forn) if sel_forn != " " else None
         if not item_forn:
             st.info("Selecione um material para consultar os fornecedores.")
@@ -2657,11 +2608,15 @@ elif pagina == "Controle de SC":
             st.caption("Preencha as informações conforme elas chegarem (PO, Fornecedor, Previsões). O status será sugerido automaticamente.")
             
             scs_todas = listar_scs()
+            opc_ed = {f"SC {s['numero_sc']} — {s['status']}": s for s in scs_todas} if scs_todas else {}
+            _ph_sc = "— selecione uma SC —"
+            sel_ed = st.selectbox("Selecionar SC", [_ph_sc] + list(opc_ed.keys()),
+                                  index=0, label_visibility="collapsed") if scs_todas else None
             if not scs_todas:
                 st.info("Nenhuma SC cadastrada para atualização.")
+            elif sel_ed not in opc_ed:
+                st.info("Selecione uma S.C. para editar seus dados.")
             else:
-                opc_ed = {f"SC {s['numero_sc']} — {s['status']}": s for s in scs_todas}
-                sel_ed = st.selectbox("Selecionar SC", list(opc_ed.keys()), label_visibility="collapsed")
                 sc_ed  = opc_ed[sel_ed]
                 
                 # ✅ CORREÇÃO 1: Carregar fornecedores das configurações
@@ -2906,7 +2861,7 @@ elif pagina == "Ficha 360":
             e3.metric("Máximo", _g(it.get("estoque_maximo")))
             e4.metric("Segurança", _g(it.get("estoque_seguranca")),
                       help=f"Origem: {rep['estoque_seguranca_origem']}.")
-            e5.metric("Saldo Residual (Guarda-Chuva)", _g(it.get("estoque_em_transito")),
+            e5.metric("Saldo Residual", _g(it.get("estoque_em_transito")),
                       help="Qtd já negociada que ainda falta chegar (SCs abertas).")
 
             ver_saldo_key = f"ver_saldo_{item_f['id']}"
@@ -2971,11 +2926,13 @@ elif pagina == "Ficha 360":
             cc1, cc2 = st.columns(2)
             with cc1:
                 st.markdown("##### :material/trending_down: Consumo médio/dia por janela")
-                st.bar_chart(pd.DataFrame(
-                    {"Consumo/dia": [round(it.get("consumo_30d") or 0, 1),
-                                     round(it.get("consumo_60d") or 0, 1),
-                                     round(it.get("consumo_90d") or 0, 1)]},
-                    index=["30 dias", "60 dias", "90 dias"]))
+                _cons_j = [round(it.get("consumo_30d") or 0, 1),
+                           round(it.get("consumo_60d") or 0, 1),
+                           round(it.get("consumo_90d") or 0, 1)]
+                st.plotly_chart(
+                    _barv(["30 dias", "60 dias", "90 dias"], _cons_j,
+                          textos=[f"{v:g}" for v in _cons_j]),
+                    width="stretch", config={"displayModeBar": False})
             with cc2:
                 st.markdown("##### :material/payments: Valor")
                 vc = ficha["valor"]["valor_consumido"]
@@ -3095,8 +3052,11 @@ elif pagina == "Ficha 360":
 
             if cm:
                 st.markdown("###### :material/calendar_month: Consumo real por mês")
-                df_cm = pd.DataFrame(cm).set_index("mes")["qtd"]
-                st.bar_chart(df_cm)
+                st.plotly_chart(
+                    _barv([_mes_label(x["mes"]) for x in cm],
+                          [round(x["qtd"], 1) for x in cm],
+                          textos=[f"{round(x['qtd'], 1):g}" for x in cm]),
+                    width="stretch", config={"displayModeBar": False})
 
             if not saz.get("disponivel"):
                 st.caption(f":material/eco: **Sazonalidade:** amadurecendo — "
@@ -3324,6 +3284,16 @@ elif pagina == "Configurações":
                 st.info(f"Nenhum {titulo.split(' ')[-1].lower()} cadastrado.")
 
             st.divider()
+
+            # v3.3.0 — atalho: semear a lista com o cadastro mestre de fornecedores
+            if tipo_lista == "fornecedor":
+                if st.button(":material/sync: Sincronizar do Relatório de SCs", key="sync_forn",
+                             help="Adiciona os Nomes Fantasia do cadastro mestre (importado no "
+                                  "Relatório de SCs) que ainda não estão na lista."):
+                    _add, _tot = sincronizar_fornecedores_lista()
+                    st.success(f"{_add} fornecedor(es) adicionado(s) — {_tot} no cadastro mestre.")
+                    time.sleep(1.0)
+                    st.rerun()
 
             # 2. Formulário de Adição
             with st.form(f"form_add_{tipo_lista}", clear_on_submit=True):

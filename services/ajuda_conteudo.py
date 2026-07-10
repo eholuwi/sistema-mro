@@ -78,16 +78,17 @@ def _item(nome, para_que, base, como, crianca):
 MANUAL = [
     {
         "tela": ":material/bar_chart: Dashboard",
-        "intro": "A tela de abertura, agora com um **seletor de público** no topo: cada perfil "
-                 "(:material/person: Comprador · :material/bar_chart: Gestão · :material/account_balance: Diretoria) vê só o que importa para o seu trabalho.",
+        "intro": "A tela de abertura, agora com **abas por público** no topo (mesmo padrão de "
+                 "Controle de SC / Movimentações): cada perfil "
+                 "(:material/person: Comprador · :material/bar_chart: Gestão · :material/calendar_month: KPI Mensal) vê só o que importa para o seu trabalho.",
         "itens": [
             _item(
-                "Seletor de visão (:material/person: Comprador · :material/bar_chart: Gestão · :material/account_balance: Diretoria)",
+                "Abas de visão (:material/person: Comprador · :material/bar_chart: Gestão · :material/calendar_month: KPI Mensal)",
                 "Trocar o painel inteiro conforme quem está olhando — sem poluir o menu lateral.",
-                "A sua escolha no seletor; o conteúdo é montado só para aquele público.",
-                "Ao clicar num público, o sistema monta os cartões e gráficos daquela visão. "
+                "A aba escolhida; o conteúdo é montado só para aquele público.",
+                "Ao abrir uma aba, o sistema monta os cartões e gráficos daquela visão. "
                 "**Comprador** = ação (o que comprar); **Gestão** = saúde da operação; "
-                "**Diretoria** = retrato financeiro. Começa na visão Gestão.",
+                "**KPI Mensal** = apresentação (variação mês a mês + séries).",
                 "É como trocar de canal na TV: o mesmo aparelho, mas cada canal mostra o programa "
                 "certo para quem está assistindo.",
             ),
@@ -129,18 +130,16 @@ MANUAL = [
                 "quais itens saem sempre igual ou 'do nada'.",
             ),
             _item(
-                "Visão :material/account_balance: Diretoria — Valor imobilizado · Evolução · ABC por valor · Savings",
-                "Dar à direção o retrato financeiro do estoque: quanto está parado, como evoluiu e "
-                "onde o dinheiro está concentrado.",
-                "A valoração do estoque, as fotos diárias (snapshots) e o consumo valorado.",
-                "**Valor imobilizado** = Σ(estoque × preço), com transparência (itens sem preço "
-                "subestimam; moeda ≠ BRL somada à parte). **Evolução** desenha esse valor ao longo "
-                "dos dias (amadurece com mais fotos). **ABC por valor** = a clássica 80/95: classe "
-                "**A** concentra o capital. **Savings** aparece como **'em breve'** — o dado do "
-                "Spot Saving ainda não é ingerido (nada de número inventado).",
-                "É o resumo pro chefe: quanto dinheiro está guardado em peças, se está subindo ou "
-                "descendo, e quais poucas peças valem quase tudo. A parte de 'economia' ainda está "
-                "sendo preparada.",
+                "Visão :material/calendar_month: KPI Mensal — panorama do ano (R$, consumo, ABC, Top 10)",
+                "Dar a visão de apresentação mensal: quanto se consumiu no ano, a curva ABC por "
+                "valor, a composição por tipo e os rankings Top 10.",
+                "As saídas reais valoradas (por requisição) e o valor imobilizado do estoque.",
+                "Traz **Valor consumido no ano**, **Valor imobilizado**, **nº de requisições**, as "
+                "**séries mensais** de consumo e de SCs, a **Curva ABC por valor** e vários **Top "
+                "10** (valor consumido, dead stock, centro de custo, emitente, setor). É a base da "
+                "reunião mensal de KPI.",
+                "É o resumo do mês para apresentar: quanto saiu, quanto está parado e onde o "
+                "dinheiro se concentra.",
             ),
         ],
     },

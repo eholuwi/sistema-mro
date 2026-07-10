@@ -1,4 +1,4 @@
-import sqlite3, json, re, unicodedata
+import sqlite3, json, re, math, unicodedata
 import logging
 from datetime import datetime, date, timedelta
 from database import transaction
@@ -434,7 +434,8 @@ def _recalcular_ruptura_by_pn(conn, part_number):
         # v2.2.0: estoque_seguranca virou parâmetro MANUAL do gestor (entre mín e
         # máx) e NÃO é mais sobrescrito aqui. Gravamos apenas a SUGESTÃO calculada
         # (consumo × lead_time × 1,5) em estoque_seguranca_calculado.
-        seguranca_calc = consumo*(r["lead_time_dias"] or 0)*FATOR_ESTOQUE_SEGURANCA
+        # v3.3.0: arredonda p/ CIMA — segurança nunca deve ser menor (nem fracionária).
+        seguranca_calc = math.ceil(consumo*(r["lead_time_dias"] or 0)*FATOR_ESTOQUE_SEGURANCA)
         c.execute("""
             UPDATE inventario SET previsao_ruptura_dias=?,estoque_seguranca_calculado=?,data_atualizacao=? WHERE id=?
         """,(ruptura,seguranca_calc,datetime.now().strftime("%Y-%m-%d %H:%M:%S"),r["id"]))
@@ -1373,18 +1374,11 @@ fornecedor, data_recebimento, obs_nf=""):
                 (novo_estoque, agora, item_id)
             )
 
-            # (6) Recalcula ruptura INLINE (sem commit proprio)
-            r_rup = conn.execute(
-                "SELECT estoque_atual,consumo_medio_diario,lead_time_dias FROM inventario WHERE id=?",
-                (item_id,)
-            ).fetchone()
-            consumo = r_rup["consumo_medio_diario"] or 0
-            prev_ruptura = (r_rup["estoque_atual"] / consumo) if consumo > 0 else PREVISAO_RUPTURA_SEM_RISCO
-            seguranca = consumo * (r_rup["lead_time_dias"] or 0) * FATOR_ESTOQUE_SEGURANCA
-            conn.execute(
-                "UPDATE inventario SET previsao_ruptura_dias=?,estoque_seguranca=?,data_atualizacao=? WHERE id=?",
-                (prev_ruptura, seguranca, agora, item_id)
-            )
+            # (6) Recalcula ruptura + segurança (SUGESTÃO) reusando a função canônica.
+            #     v3.3.0: NÃO sobrescreve mais o estoque_seguranca MANUAL do gestor — o
+            #     bug antigo gravava aqui consumo×lead×1,5 (fracionário) na coluna manual,
+            #     contaminando o parâmetro do gestor com "números quebrados".
+            _recalcular_ruptura_by_id(conn, item_id)
 
             # (7) Atualiza status da SC
             pend = conn.execute("""
@@ -2367,6 +2361,38 @@ def _nome_fornecedor_valido(nome):
     Descarta o lixo que a ingestão do SCM às vezes grava no lugar do fornecedor
     (ex.: '1.0'/'2.0' = nº da loja, 'None'), verificado nos dados reais. v2.4.0."""
     return bool(nome) and bool(re.search(r"[A-Za-zÀ-ÿ]", str(nome)))
+
+
+def sincronizar_fornecedores_lista():
+    """Semeia a lista 'fornecedor' (Configurações) com os fornecedores que realmente
+    atenderam material MRO — os Nomes Fantasia que aparecem nas SCs importadas (no
+    cabeçalho da SC e por item), e NÃO o cadastro SA1 inteiro (que traz milhares de
+    fornecedores de toda a empresa). Idempotente: só adiciona os que faltam. Devolve
+    (adicionados:int, total_mro:int). v3.3.0."""
+    with transaction() as c:
+        rows = c.execute("""
+            SELECT DISTINCT nome FROM (
+                SELECT fornecedor_item AS nome FROM itens_sc
+                UNION
+                SELECT fornecedor AS nome FROM solicitacoes_compra
+            ) WHERE TRIM(COALESCE(nome, '')) <> ''
+        """).fetchall()
+    existentes = {_normalizar_txt(v) for v in (listar_valores("fornecedor") or [])}
+    adicionados = 0
+    total = 0
+    for r in rows:
+        nome = (r["nome"] or "").strip()
+        if not _nome_fornecedor_valido(nome):
+            continue
+        total += 1
+        chave = _normalizar_txt(nome)
+        if chave in existentes:
+            continue
+        ok, _msg = adicionar_valor_lista("fornecedor", nome)
+        if ok:
+            adicionados += 1
+            existentes.add(chave)
+    return adicionados, total
 
 
 def obter_fornecedores_por_item(item_id, conn=None):

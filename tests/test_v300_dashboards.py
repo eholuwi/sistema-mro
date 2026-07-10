@@ -1,4 +1,6 @@
-"""v3.0.0 — Dashboards por público (Comprador / Gestão / Diretoria).
+"""v3.0.0 — Dashboards por público (Comprador / Gestão / KPI Mensal).
+
+v3.3.0: visão "Diretoria" removida; "Mensal" renomeada para "KPI Mensal".
 
 Cobre os assemblers PUROS de `services/dashboards.py` (montam view-models a partir
 de funções que já existem) e os casos-limite honestos: nível de serviço com
@@ -119,20 +121,6 @@ def test_comprador_aging_por_faixa(db, make_item, make_sc):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 🏛️ DIRETORIA
-# ══════════════════════════════════════════════════════════════════════════════
-
-def test_diretoria_estrutura_e_savings_placeholder(db, make_item):
-    make_item(part_number="D1", estoque=10, minimo=1)
-    vm = D.montar_visao_diretoria()
-    assert vm["kpis"]["savings"] is None
-    assert vm["savings_disponivel"] is False
-    assert vm["kpis"]["valor_imobilizado"] == 0.0     # sem preço
-    assert "serie" in vm["evolucao"] and "n_snapshots" in vm["evolucao"]
-    assert isinstance(vm["abc_valor"], list)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # Roteador + _giro_medio
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -140,7 +128,7 @@ def test_montar_dashboard_roteia_por_publico(db, make_item):
     make_item(part_number="R1", estoque=10, minimo=1)
     assert "fila" in D.montar_dashboard(D.PUBLICO_COMPRADOR)
     assert "distribuicao" in D.montar_dashboard(D.PUBLICO_GESTAO)
-    assert "abc_valor" in D.montar_dashboard(D.PUBLICO_DIRETORIA)
+    assert "rankings" in D.montar_dashboard(D.PUBLICO_EXECUTIVO)
     # Público desconhecido cai no default (Gestão).
     assert "distribuicao" in D.montar_dashboard("qualquer coisa")
 

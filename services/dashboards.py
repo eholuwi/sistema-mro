@@ -17,17 +17,16 @@ from services.constants import (
     CC_GENERICOS, PREVISAO_RUPTURA_SEM_RISCO, SAIDA_REAL_WHERE,
 )
 from services.db_functions import (
-    _preco_valoracao, calcular_giro, listar_inventario, listar_scs, obter_abc_valor,
-    obter_evolucao_valor_imobilizado, obter_valor_imobilizado, transaction,
+    _preco_valoracao, calcular_giro, listar_inventario, listar_scs,
+    obter_valor_imobilizado, transaction,
 )
 from services.planejamento import gerar_scs_sugeridas, gerar_sugestoes_reposicao
 
 # Rótulos dos públicos — fonte única de verdade (app.py e manual de Ajuda consomem).
 PUBLICO_COMPRADOR = "Comprador"
 PUBLICO_GESTAO = "Gestão"
-PUBLICO_DIRETORIA = "Diretoria"
-PUBLICO_EXECUTIVO = "Mensal"   # v3.2.0 — visão executiva de apresentação (mês a mês)
-PUBLICOS = [PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_DIRETORIA, PUBLICO_EXECUTIVO]
+PUBLICO_EXECUTIVO = "KPI Mensal"   # v3.2.0 apresentação mês a mês; v3.3.0 renomeado (era "Mensal")
+PUBLICOS = [PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_EXECUTIVO]
 
 
 def _dias_desde(iso, hoje=None):
@@ -185,28 +184,6 @@ def montar_visao_gestao():
         "com_consumo": com_consumo,
         "demanda": dict(demanda),
         "xyz": dict(xyz),
-    }
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 🏛️ DIRETORIA — "retrato financeiro"
-# ══════════════════════════════════════════════════════════════════════════════
-
-def montar_visao_diretoria(dias_evolucao=180, top_abc=10):
-    """View-model da Diretoria: valor imobilizado (+transparência), evolução e ABC por
-    valor. Savings (Spot Saving) fica como placeholder honesto — ADIADO na v2.3.0."""
-    valor = obter_valor_imobilizado()
-    evolucao = obter_evolucao_valor_imobilizado(dias=dias_evolucao)
-    abc = obter_abc_valor(limit=top_abc)
-    return {
-        "kpis": {
-            "valor_imobilizado": valor["total_brl"],
-            "savings": None,                # ADIADO → renderizado como "em breve"
-        },
-        "valor_detalhe": valor,
-        "evolucao": evolucao,               # {"serie": [...], "n_snapshots": N}
-        "abc_valor": abc,
-        "savings_disponivel": False,        # placeholder honesto (sem ingestão nova)
     }
 
 
@@ -451,8 +428,6 @@ def montar_dashboard(publico):
     """Roteador: devolve o view-model do público pedido (default = Gestão)."""
     if publico == PUBLICO_COMPRADOR:
         return montar_visao_comprador()
-    if publico == PUBLICO_DIRETORIA:
-        return montar_visao_diretoria()
     if publico == PUBLICO_EXECUTIVO:
         return montar_visao_executiva()
     return montar_visao_gestao()

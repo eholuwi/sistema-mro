@@ -524,9 +524,38 @@ def criar_banco():
         logger.info("  -> Migracao: unidade em precos_historico adicionada.")
         conn.commit()
 
+    # v3.3.0 — Correção do estoque de segurança (bug dos "números quebrados"): o
+    # recebimento de SC gravava a SUGESTÃO (consumo × lead time × 1,5, fracionária) na
+    # coluna MANUAL `estoque_seguranca`, contaminando o parâmetro do gestor.
+    #   (a) normaliza a SUGESTÃO calculada p/ inteiro (arredonda p/ cima, como o novo cálculo);
+    #   (b) reseta valores MANUAIS não-inteiros (só podiam vir do bug) p/ 0 → o efetivo cai
+    #       para a sugestão. Inteiros do gestor são preservados. Idempotente.
+    conn.execute("""
+        UPDATE inventario
+           SET estoque_seguranca_calculado = CAST(estoque_seguranca_calculado AS INTEGER)
+               + (estoque_seguranca_calculado > CAST(estoque_seguranca_calculado AS INTEGER))
+         WHERE estoque_seguranca_calculado IS NOT NULL
+           AND estoque_seguranca_calculado <> CAST(estoque_seguranca_calculado AS INTEGER)
+    """)
+    conn.commit()
+    _tem_frac = conn.execute(
+        """SELECT 1 FROM inventario
+            WHERE estoque_seguranca IS NOT NULL
+              AND estoque_seguranca <> CAST(estoque_seguranca AS INTEGER) LIMIT 1"""
+    ).fetchone()
+    if _tem_frac:
+        _backup_db("fix-seguranca-v330")
+        conn.execute(
+            """UPDATE inventario SET estoque_seguranca = 0
+                WHERE estoque_seguranca IS NOT NULL
+                  AND estoque_seguranca <> CAST(estoque_seguranca AS INTEGER)"""
+        )
+        conn.commit()
+        logger.info("  -> v3.3.0: estoque_seguranca manual fracionário resetado (bug corrigido).")
+
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 3.2.0")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 3.3.0")
 
 
 def _migrar(conn):

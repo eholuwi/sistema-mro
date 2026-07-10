@@ -202,7 +202,7 @@ O sistema opera como:
 # 🚀 Próximos Passos
 
 * **v2.7.0** — Críticos automáticos, XYZ & Sazonalidade
-* **v3.0.0** — Dashboards por público (Comprador / Gestão / Diretoria)
+* **v3.0.0** — Dashboards por público (Comprador / Gestão / KPI Mensal)
 
 ---
 
