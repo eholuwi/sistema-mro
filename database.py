@@ -417,6 +417,11 @@ def criar_banco():
         "prioridade_critica": "INTEGER DEFAULT 0",
         "origem_importacao": "TEXT",
         "data_importacao": "TEXT",
+        # v3.5.0 — Dashboard de Comprador: comprador real (coluna do Relatório),
+        # data de emissão do PO (DT Emissão) e saving (R$) por SC.
+        "comprador": "TEXT",
+        "data_po": "TEXT",
+        "saving": "REAL",
     }
     for col, tipo in novas_cols_sc.items():
         if col not in cols_sc:
