@@ -50,7 +50,7 @@ from services.ficha import (
 )
 from services.ajuda_conteudo import GUIAS_PERSONA, MANUAL
 from services.dashboards import (
-    montar_dashboard, montar_visao_compras_mro,
+    montar_dashboard, montar_visao_compras_mro, montar_visao_almoxarifado,
     PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_EXECUTIVO,
 )
 
@@ -64,7 +64,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 3.5.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 3.6.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -135,7 +135,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 3.5.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 3.6.0</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -236,6 +236,112 @@ def _dash_fmt_brl(v):
         return "R$ " + f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except (ValueError, TypeError):
         return "R$ —"
+
+
+def _render_dash_almoxarifado(vm):
+    """:material/warehouse: Dashboard do Almoxarifado (§2) — saúde do estoque, prioridades
+    do dia, entradas/saídas por período, materiais mais movimentados, setores e histórico."""
+    k = vm["kpis"]
+    st.markdown("### :material/warehouse: Dashboard do Almoxarifado · Inventus Power")
+    r1 = st.columns(4)
+    r1[0].metric("📦 Itens cadastrados", k["itens_cadastrados"])
+    r1[1].metric("📥 Entradas hoje", k["entradas_hoje"])
+    r1[2].metric("📤 Requisições hoje", k["requisicoes_hoje"])
+    r1[3].metric("📉 Estoque baixo", k["estoque_baixo"], delta_color="inverse")
+    r2 = st.columns(4)
+    r2[0].metric("🔴 Compra urgente", k["compra_urgente"], delta_color="inverse")
+    r2[1].metric("⚠️ Sem giro", k["sem_giro"])
+    r2[2].metric("💰 Valor estoque", _brl_compact(k["valor_estoque"]))
+    r2[3].metric("📊 Cobertura média",
+                 f"{k['cobertura_media']}d" if k["cobertura_media"] is not None else "—")
+
+    st.divider()
+    st.markdown("#### 🚨 Prioridades do Dia")
+    pri = vm["prioridades"]
+    pc1, pc2, pc3 = st.columns(3)
+    pc1.metric("🟠 Abaixo do mínimo", pri["abaixo_minimo"])
+    pc2.metric("🟡 Cobertura < lead time", pri["cobertura_menor_lead"])
+    pc3.metric("🔴 Comprar agora (lista)", len(pri["comprar_agora"]))
+    if pri["comprar_agora"]:
+        dfp = pd.DataFrame([{
+            "Prio": "🔴" if p["urgente"] else "🟠",
+            "PN": p["pn"], "Item": (p["item"] or "")[:38],
+            "Estoque": p["estoque"], "Mínimo": p["minimo"],
+            "Cobertura(d)": (p["cobertura"] if (p["cobertura"] is not None
+                             and p["cobertura"] < PREVISAO_RUPTURA_SEM_RISCO) else None),
+        } for p in pri["comprar_agora"]])
+        st.dataframe(dfp, hide_index=True, width="stretch",
+                     column_config={"Cobertura(d)": st.column_config.NumberColumn(format="%.1f")})
+
+    st.divider()
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        with st.container(border=True):
+            st.markdown("##### :material/donut_large: Distribuição")
+            d = vm["distribuicao"]
+            st.plotly_chart(
+                _donut(["OK", "Atenção", "Comprar", "Sem giro"],
+                       [d["ok"], d["atencao"], d["comprar"], d["sem_mov"]]),
+                width="stretch", config={"displayModeBar": False})
+    with s2:
+        with st.container(border=True):
+            st.markdown("##### :material/timeline: Cobertura (dias)")
+            cf = vm["cobertura_faixa"]
+            st.plotly_chart(_barv(list(cf.keys()), [int(v) for v in cf.values()]),
+                            width="stretch", config={"displayModeBar": False})
+    with s3:
+        with st.container(border=True):
+            st.markdown("##### :material/leaderboard: Curva ABC (valor)")
+            a = vm["abc"]
+            st.plotly_chart(
+                _barv(["A", "B", "C"], [a["A"]["n"], a["B"]["n"], a["C"]["n"]],
+                      textos=[f"{a['A']['pct']}%", f"{a['B']['pct']}%", f"{a['C']['pct']}%"]),
+                width="stretch", config={"displayModeBar": False})
+
+    st.divider()
+    ea, sa = st.columns(2)
+    with ea:
+        with st.container(border=True):
+            st.markdown("#### 📥 Entradas")
+            en = vm["entradas"]
+            e1, e2, e3 = st.columns(3)
+            e1.metric("Hoje", en["hoje"]["n"])
+            e2.metric("Semana", en["semana"]["n"])
+            e3.metric("Mês", en["mes"]["n"])
+    with sa:
+        with st.container(border=True):
+            st.markdown("#### 📤 Saídas (requisições)")
+            sd = vm["saidas"]
+            x1, x2, x3 = st.columns(3)
+            x1.metric("Hoje", sd["hoje"]["n"])
+            x2.metric("Semana", sd["semana"]["n"])
+            x3.metric("Mês", sd["mes"]["n"])
+
+    tc1, tc2 = st.columns(2)
+    with tc1:
+        _bloco_top("📥 Top materiais recebidos (mês)", vm["top_recebidos"],
+                   lambda x: x["pn"], "q", lambda v: f"{v:g}")
+    with tc2:
+        _bloco_top("📤 Materiais mais consumidos (mês)", vm["mais_consumidos"],
+                   lambda x: x["pn"], "q", lambda v: f"{v:g}")
+    _bloco_top("🏭 Setores que mais retiram", vm["setores"],
+               lambda x: x["setor"], "n", lambda v: f"{int(v)}")
+
+    st.divider()
+    with st.container(border=True):
+        st.markdown("#### 📈 Histórico mensal — Entradas × Saídas")
+        h = vm["historico_mensal"]
+        if h["meses"]:
+            st.plotly_chart(
+                _barras_agrupadas([_mes_label(m) for m in h["meses"]],
+                                  [("Entradas", h["entradas"], "#22c55e"),
+                                   ("Saídas", h["saidas"], "#ef4444")]),
+                width="stretch", config={"displayModeBar": False})
+        else:
+            st.caption("Sem movimentações registradas.")
+
+    st.caption(":material/map: **Mapa do Almoxarifado** (prateleiras por status de cor) fica "
+               "para quando houver um modelo de localização/posição — hoje o local é texto livre.")
 
 
 def _render_dash_compras_mro(vm):
@@ -961,14 +1067,17 @@ if pagina == "Dashboard":
 
     # v3.3.0 — abas por público (substitui as "bolinhas"/radio), no mesmo padrão das
     # telas Controle de SC / Movimentações. Diretoria removida; "Mensal" → "KPI Mensal".
-    tab_comp, tab_gest, tab_mensal = st.tabs(
+    tab_comp, tab_gest, tab_almox, tab_mensal = st.tabs(
         [f":material/person: {PUBLICO_COMPRADOR}",
          f":material/insights: {PUBLICO_GESTAO}",
+         ":material/warehouse: Almoxarifado",
          f":material/calendar_month: {PUBLICO_EXECUTIVO}"])
     with tab_comp:
         _render_dash_compras_mro(montar_visao_compras_mro())
     with tab_gest:
         _render_dash_gestao(montar_dashboard(PUBLICO_GESTAO))
+    with tab_almox:
+        _render_dash_almoxarifado(montar_visao_almoxarifado())
     with tab_mensal:
         _render_dash_executivo(montar_dashboard(PUBLICO_EXECUTIVO))
 

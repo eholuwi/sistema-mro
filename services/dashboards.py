@@ -18,7 +18,7 @@ from services.constants import (
 )
 from services.db_functions import (
     _preco_valoracao, calcular_giro, listar_inventario, listar_scs,
-    obter_valor_imobilizado, transaction,
+    obter_valor_imobilizado, obter_abc_valor, transaction,
 )
 from services.planejamento import gerar_scs_sugeridas, gerar_sugestoes_reposicao
 
@@ -450,6 +450,163 @@ def montar_visao_gestao():
         "com_consumo": com_consumo,
         "demanda": dict(demanda),
         "xyz": dict(xyz),
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 🏬 ALMOXARIFADO (§2) — saúde do estoque, prioridades do dia, entradas/saídas
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _faixa_cobertura(d):
+    if d <= 7:   return "≤7"
+    if d <= 15:  return "8-15"
+    if d <= 30:  return "16-30"
+    if d <= 60:  return "31-60"
+    if d <= 180: return "60-180"
+    if d <= 365: return "180-365"
+    return "365+"
+
+
+COBERTURA_FAIXAS = ["≤7", "8-15", "16-30", "31-60", "60-180", "180-365", "365+"]
+
+
+def montar_visao_almoxarifado(hoje=None):
+    """View-model do Dashboard do Almoxarifado (§2): saúde do estoque, prioridades do dia,
+    entradas/saídas por período, materiais mais movimentados, setores, consumo e histórico
+    mensal. PURO (DT-3). Fora (dependem de dados que não existem): Mapa do Almoxarifado
+    (exige modelo de localização/prateleira) e itens de requisição digital."""
+    from datetime import timedelta
+    hoje = hoje or date.today()
+    hoje_iso = hoje.strftime("%Y-%m-%d")
+    sem_ini = (hoje - timedelta(days=7)).strftime("%Y-%m-%d")
+    mes_ini = (hoje - timedelta(days=30)).strftime("%Y-%m-%d")
+
+    itens = listar_inventario()
+    total = len(itens)
+
+    dist = {"ok": 0, "atencao": 0, "comprar": 0, "sem_mov": 0}
+    cob_faixa = {f: 0 for f in COBERTURA_FAIXAS}
+    coberturas = []
+    estoque_baixo = compra_urgente = sem_giro = cob_menor_lead = 0
+    comprar_agora = []
+    for i in itens:
+        s = i.get("status_material", "")
+        if i.get("sem_movimentacao"):
+            dist["sem_mov"] += 1
+            sem_giro += 1
+        elif "COMPRAR" in s:
+            dist["comprar"] += 1
+        elif "ATENÇÃO" in s:
+            dist["atencao"] += 1
+        elif "OK" in s:
+            dist["ok"] += 1
+
+        est = i.get("estoque_atual") or 0
+        mn = i.get("estoque_minimo") or 0
+        if mn > 0 and est <= mn:
+            estoque_baixo += 1
+            parada = i.get("importancia") == "Parada de Linha"
+            com_giro = not i.get("sem_movimentacao")
+            urgente = parada or (est <= 0 and com_giro)
+            if urgente:
+                compra_urgente += 1
+            if urgente or com_giro:
+                comprar_agora.append({
+                    "pn": i["part_number"], "item": i["nome_item"],
+                    "estoque": est, "minimo": mn, "urgente": urgente,
+                    "cobertura": i.get("dias_cobertura"),
+                })
+
+        cob = i.get("dias_cobertura")
+        if cob is not None and cob != PREVISAO_RUPTURA_SEM_RISCO and not i.get("sem_movimentacao"):
+            coberturas.append(cob)
+            cob_faixa[_faixa_cobertura(cob)] += 1
+            lt = i.get("lead_time_dias") or 0
+            if lt and cob < lt:
+                cob_menor_lead += 1
+
+    cobertura_media = round(sum(coberturas) / len(coberturas), 1) if coberturas else None
+    comprar_agora.sort(key=lambda x: (not x["urgente"], x["estoque"]))
+
+    valor = obter_valor_imobilizado()
+
+    with transaction() as conn:
+        def _periodo(where_tipo, ini, dia=False):
+            campo = "= ?" if dia else ">= ?"
+            r = conn.execute(
+                f"SELECT COUNT(*) n, COALESCE(SUM(quantidade),0) q FROM movimentacoes "
+                f"WHERE {where_tipo} AND substr(data_hora,1,10) {campo}", (ini,)).fetchone()
+            return {"n": r["n"], "q": round(r["q"], 1)}
+
+        entradas = {"hoje": _periodo("tipo='entrada'", hoje_iso, dia=True),
+                    "semana": _periodo("tipo='entrada'", sem_ini),
+                    "mes": _periodo("tipo='entrada'", mes_ini)}
+        saidas = {"hoje": _periodo(SAIDA_REAL_WHERE, hoje_iso, dia=True),
+                  "semana": _periodo(SAIDA_REAL_WHERE, sem_ini),
+                  "mes": _periodo(SAIDA_REAL_WHERE, mes_ini)}
+        req_hoje = conn.execute(
+            "SELECT COUNT(*) FROM requisicoes WHERE substr(data_hora,1,10)=?", (hoje_iso,)).fetchone()[0]
+
+        top_recebidos = [dict(r) for r in conn.execute("""
+            SELECT inv.part_number pn, inv.nome_item item, SUM(m.quantidade) q
+            FROM movimentacoes m JOIN inventario inv ON inv.id=m.item_id
+            WHERE m.tipo='entrada' AND substr(m.data_hora,1,10) >= ?
+            GROUP BY m.item_id ORDER BY q DESC LIMIT 10
+        """, (mes_ini,)).fetchall()]
+        mais_consumidos = [dict(r) for r in conn.execute(f"""
+            SELECT inv.part_number pn, inv.nome_item item, SUM(m.quantidade) q
+            FROM movimentacoes m JOIN inventario inv ON inv.id=m.item_id
+            WHERE {SAIDA_REAL_WHERE} AND substr(m.data_hora,1,10) >= ?
+            GROUP BY m.item_id ORDER BY q DESC LIMIT 10
+        """, (mes_ini,)).fetchall()]
+        setores = [dict(r) for r in conn.execute(f"""
+            SELECT COALESCE(NULLIF(TRIM(setor),''),'—') setor, COUNT(*) n, ROUND(SUM(quantidade),1) q
+            FROM movimentacoes WHERE {SAIDA_REAL_WHERE}
+            GROUP BY 1 ORDER BY n DESC LIMIT 10
+        """).fetchall()]
+        hist = [dict(r) for r in conn.execute("""
+            SELECT substr(data_hora,1,7) ym,
+                   ROUND(SUM(CASE WHEN tipo='entrada' THEN quantidade ELSE 0 END),1) ent,
+                   ROUND(SUM(CASE WHEN tipo='saida' AND requisicao_id IS NOT NULL THEN quantidade ELSE 0 END),1) sai
+            FROM movimentacoes GROUP BY ym ORDER BY ym
+        """).fetchall()]
+
+    abc_cont = Counter(r["classe"] for r in obter_abc_valor() if r.get("classe"))
+    abc_tot = sum(abc_cont.values()) or 1
+    abc = {c: {"n": abc_cont.get(c, 0), "pct": round(abc_cont.get(c, 0) / abc_tot * 100, 1)}
+           for c in ("A", "B", "C")}
+
+    historico_mensal = {
+        "meses": [h["ym"] for h in hist],
+        "entradas": [h["ent"] for h in hist],
+        "saidas": [h["sai"] for h in hist],
+    }
+
+    return {
+        "kpis": {
+            "itens_cadastrados": total,
+            "entradas_hoje": entradas["hoje"]["n"],
+            "requisicoes_hoje": req_hoje,
+            "estoque_baixo": estoque_baixo,
+            "compra_urgente": compra_urgente,
+            "sem_giro": sem_giro,
+            "valor_estoque": valor["total_brl"],
+            "cobertura_media": cobertura_media,
+        },
+        "prioridades": {
+            "comprar_agora": comprar_agora[:15],
+            "abaixo_minimo": estoque_baixo,
+            "cobertura_menor_lead": cob_menor_lead,
+        },
+        "distribuicao": dist,
+        "cobertura_faixa": cob_faixa,
+        "abc": abc,
+        "entradas": entradas,
+        "saidas": saidas,
+        "top_recebidos": top_recebidos,
+        "mais_consumidos": mais_consumidos,
+        "setores": setores,
+        "historico_mensal": historico_mensal,
     }
 
 
