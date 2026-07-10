@@ -558,6 +558,9 @@ def resumir_grupo_sc(label, sugs, criterio="natureza"):
         f"Agrupa {n} {unid} d{'a' if criterio == 'natureza' else 'o'} {criterio} {rotulo_curto}.",
         f"{n_criticos} crítico(s); prioridade máxima: {prio_max}; "
         f"consumo agregado ~{_fmt_num(soma_consumo)} un/dia.",
+        # v3.4.0: deixa explícito o horizonte de ~2 meses e a base do cálculo (pedido do §3).
+        "Quantidades dimensionadas para ~2 meses de consumo (horizonte de reposição do MRO), "
+        "com base no giro de estoque e nos parâmetros mín/máx do cadastro.",
     ]
     if comprar_ate_min:
         linhas.append(f"Comprar até {_fmt_data(comprar_ate_min)} (mais urgente: {pn_urgente}).")

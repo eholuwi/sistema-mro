@@ -2134,7 +2134,7 @@ elif pagina == "Controle de SC":
 
         if not sugestoes:
             st.success(":material/check_circle: Nenhuma reposição necessária agora. Estoque + saldo "
-                       "residual (guarda-chuva) cobrem o horizonte planejado para todos os itens.")
+                       "residual cobrem o horizonte planejado para todos os itens.")
         else:
             # --- Filtros ---
             cflt1, cflt2, cflt3 = st.columns(3)
@@ -2196,52 +2196,57 @@ elif pagina == "Controle de SC":
 
             st.divider()
 
-            # v2.9.0: coluna extra da qtd na UNIDADE DE COMPRA só aparece quando algum
-            # item da fila tem conversão (fator≠1), para não poluir a tabela dos demais.
-            _has_conv = any(abs((x.get("fator_conversao") or 1) - 1) > 1e-9 for x in filtradas)
-            df_rep = pd.DataFrame([{
-                "Prioridade": ("⚪ " + s["prioridade"]) if s.get("sem_movimentacao") else s["prioridade"],
-                "PN": s["part_number"],
-                "Item": s["nome_item"],
-                "Cobertura(d)": (s["cobertura_dias"]
-                                 if s["cobertura_dias"] < PREVISAO_RUPTURA_SEM_RISCO else None),
-                "Comprar até": _cate(s),
-                "ROP": s["rop"],
-                "Estoque": s["estoque_atual"],
-                "Saldo Residual": s["guarda_chuva"],
-                "Qtd Sugerida": s["qtd_sugerida"],
-                "Un": s["unidade"],
-                **({"Qtd (compra)": (f"{s['qtd_sugerida_compra']} {s['unidade_compra']}"
-                                     if abs((s.get('fator_conversao') or 1) - 1) > 1e-9 else "—")}
-                   if _has_conv else {}),
-                "Fornecedor": s["fornecedor_sugerido"] or "—",
-            } for s in filtradas])
-            st.dataframe(
-                df_rep, hide_index=True, width="stretch",
+            # v3.4.0 — tabela ENRIQUECIDA + SELEÇÃO (pedido do §3): o comprador marca o
+            # que entra nas "SCs sugeridas" (default: tudo). Colunas: estoque, mín, máx,
+            # segurança (efetivo, c/ piso pelo mínimo), cobertura, consumo/dia+un, setores.
+            def _linha_rep(s, incluir=None):
+                d = {
+                    "PN": s["part_number"],
+                    "Item": s["nome_item"],
+                    "Estoque": s.get("estoque_atual"),
+                    "Mín": s.get("estoque_minimo"),
+                    "Máx": s.get("estoque_maximo"),
+                    "Segurança": s.get("estoque_seguranca"),
+                    "Cobertura(d)": (s["cobertura_dias"]
+                                     if s["cobertura_dias"] < PREVISAO_RUPTURA_SEM_RISCO else None),
+                    "Consumo/dia": round(float(s.get("consumo_diario") or 0), 2),
+                    "Un": s["unidade"],
+                    "Comprar até": _cate(s),
+                    "Setor": s.get("setor") or "—",
+                    "Qtd Sugerida": s["qtd_sugerida"],
+                    "Fornecedor": s["fornecedor_sugerido"] or "—",
+                }
+                return {"Incluir": incluir, **d} if incluir is not None else d
+
+            _num_cols = {
+                "Estoque": "%.0f", "Mín": "%.0f", "Máx": "%.0f", "Segurança": "%.0f",
+                "Cobertura(d)": "%.1f", "Consumo/dia": "%.2f", "Qtd Sugerida": "%d",
+            }
+            df_sel = pd.DataFrame([_linha_rep(s, incluir=True) for s in filtradas])
+            edit_sel = st.data_editor(
+                df_sel, hide_index=True, width="stretch", key="rep_sel_editor",
                 column_config={
-                    "Cobertura(d)": st.column_config.NumberColumn(
-                        format="%.1f",
-                        help="Estoque atual ÷ consumo diário. "
-                             "Vazio = sem consumo registrado no período."),
-                    "Comprar até": st.column_config.TextColumn(
-                        help="Data-limite p/ emitir a SC e o material chegar antes de acabar "
-                             "(cobertura − lead time − 15 d de antecedência). "
-                             ":material/alarm: = já atrasado; — = sem consumo."),
-                    "ROP": st.column_config.NumberColumn(
-                        format="%.1f",
-                        help="Ponto de pedido = consumo diário × lead time + estoque de segurança."),
-                    "Qtd Sugerida": st.column_config.NumberColumn(
-                        format="%d",
-                        help="alvo − estoque − saldo residual (guarda-chuva). "
-                             "Alvo = máx(máx. Compras, consumo × 60 d)."),
+                    "Incluir": st.column_config.CheckboxColumn(
+                        "Incluir", help="Marque os itens que entram nas SCs sugeridas abaixo."),
+                    "Segurança": st.column_config.NumberColumn(
+                        format="%.0f", disabled=True,
+                        help="Estoque de segurança efetivo: manual do gestor > calculado > "
+                             "piso pelo mínimo (itens sem consumo)."),
+                    **{c: st.column_config.NumberColumn(format=f, disabled=True)
+                       for c, f in _num_cols.items() if c != "Segurança"},
+                    **{c: st.column_config.TextColumn(disabled=True)
+                       for c in ("PN", "Item", "Un", "Comprar até", "Setor", "Fornecedor")},
                 },
             )
-            st.caption("Ordem: urgência → Parada de Linha → menor cobertura. Saldo Residual "
-                       "(Guarda-Chuva) = qtd já negociada que ainda falta chegar (não pede em duplicidade).")
+            _incluir = list(edit_sel["Incluir"]) if "Incluir" in edit_sel else [True] * len(filtradas)
+            selecionadas = [s for s, inc in zip(filtradas, _incluir) if inc]
+            st.caption(f"**{len(selecionadas)}** de {len(filtradas)} itens selecionados · "
+                       "Segurança = efetivo (piso pelo mínimo do gestor quando não há consumo).")
 
             buf_rep = io.BytesIO()
             with pd.ExcelWriter(buf_rep, engine="openpyxl") as w:
-                df_rep.to_excel(w, index=False, sheet_name="Sugestões")
+                pd.DataFrame([_linha_rep(s) for s in filtradas]).to_excel(
+                    w, index=False, sheet_name="Sugestões")
             st.download_button(
                 "⬇️ Exportar sugestões (Excel)", data=buf_rep.getvalue(),
                 file_name=f"reposicao_mro_{date.today():%d-%m-%Y}.xlsx",
@@ -2254,8 +2259,10 @@ elif pagina == "Controle de SC":
             st.caption("Itens juntados pelo **Tipo do material** (campo do cadastro do item), com "
                        "título, justificativa e **centro de custo** sugeridos. Revise, edite e crie "
                        "a SC agrupada em um clique — o sistema recomenda, você decide.")
-            grupos_sc = agrupar_por_tipo_material(filtradas)
+            grupos_sc = agrupar_por_tipo_material(selecionadas)
             resumos = [resumir_grupo_sc(label, sugs, criterio="tipo de material") for label, sugs in grupos_sc.items()]
+            if not resumos:
+                st.info("Marque ao menos um item na tabela acima para gerar as SCs sugeridas.")
             for gi, r in enumerate(resumos):
                 label_curto = r["label"]
                 cabecalho = f"{label_curto} · {r['n_itens']} itens · {r['prioridade']}"
@@ -2264,18 +2271,10 @@ elif pagina == "Controle de SC":
                                   + datetime.strptime(r["comprar_ate_min"], "%Y-%m-%d").strftime("%d/%m"))
                 with st.expander(cabecalho, expanded=(gi == 0 and r["prioridade_tier"] == 0)):
                     st.dataframe(
-                        pd.DataFrame([{
-                            "PN": s["part_number"],
-                            "Item": s["nome_item"],
-                            "Cobertura(d)": (s["cobertura_dias"]
-                                             if s["cobertura_dias"] < PREVISAO_RUPTURA_SEM_RISCO else None),
-                            "Comprar até": _cate(s),
-                            "Qtd": s["qtd_sugerida"],
-                            "Un": s["unidade"],
-                            "CC (item)": s.get("cc_sugerido") or "—",
-                            "Fornecedor": s["fornecedor_sugerido"] or "—",
-                        } for s in r["itens"]]),
+                        pd.DataFrame([_linha_rep(s) for s in r["itens"]]),
                         hide_index=True, width="stretch",
+                        column_config={c: st.column_config.NumberColumn(format=f)
+                                       for c, f in _num_cols.items()},
                     )
                     cap = f":material/sell: Centro de custo sugerido: **{r['cc_sugerido']}**"
                     if r["valor_estimado"] > 0:
@@ -2305,7 +2304,9 @@ elif pagina == "Controle de SC":
                         else:
                             itens_g = [sugestao_para_item_sc(s, data_necessidade=str(date.today()))
                                        for s in r["itens"]]
-                            obs_g = f"{titulo_g}\nCentro de custo sugerido: {cc_g}\n\n{just_g}"
+                            _snap = pd.DataFrame([_linha_rep(s) for s in r["itens"]]).to_string(index=False)
+                            obs_g = (f"{titulo_g}\nCentro de custo sugerido: {cc_g}\n\n{just_g}\n\n"
+                                     f"— Tabela de reposição (anexo) —\n{_snap}")
                             ok, msg = criar_sc(num_sc_g.strip(), str(dt_g), itens_g, obs_g)
                             if ok:
                                 sc_id_g = buscar_sc_id_por_numero(num_sc_g.strip())
@@ -2316,85 +2317,6 @@ elif pagina == "Controle de SC":
                                 st.error(f":material/cancel: {msg}")
 
             st.divider()
-            st.markdown("#### :material/edit_note: Detalhe e ação por item")
-            opc_rep = {
-                f"{s['prioridade']} · {s['part_number']} — {s['nome_item']} "
-                f"(sugerido {s['qtd_sugerida']} {s['unidade']})": s
-                for s in filtradas
-            }
-            escolha = st.selectbox("Selecione um item para criar a SC ou registrar a decisão",
-                                   ["—"] + list(opc_rep.keys()), key="rep_sel")
-            if escolha != "—":
-                s = opc_rep[escolha]
-                st.info(f"**Justificativa:** {s['justificativa']}")
-
-                mc1, mc2, mc3, mc4 = st.columns(4)
-                mc1.metric("Cobertura",
-                           f"{s['cobertura_dias']:.1f} d"
-                           if s["cobertura_dias"] < PREVISAO_RUPTURA_SEM_RISCO else "—")
-                mc2.metric("ROP", f"{s['rop']:g}",
-                           help=f"consumo {s['consumo_diario']:.2f}/d × lead time {s['lead_time']}d "
-                                f"({s['lead_time_origem']}) + segurança {s['estoque_seguranca']:g} "
-                                f"({s['estoque_seguranca_origem']})")
-                mc3.metric("Alvo", f"{s['alvo']:g}",
-                           help=f"{s['alvo_origem']} · máx. Compras {s['alvo_neidson']:g} · "
-                                f"horizonte {s['horizonte_dias']}d = {s['alvo_horizonte']:g}")
-                mc4.metric("Qtd sugerida", f"{s['qtd_sugerida']} {s['unidade']}")
-                if abs((s.get('fator_conversao') or 1) - 1) > 1e-9:
-                    st.caption(
-                        f":material/shopping_cart: Pedir ao fornecedor: **{s['qtd_sugerida_compra']} {s['unidade_compra']}** "
-                        f"(= {s['qtd_sugerida']} {s['unidade']} de estoque × fator {s['fator_conversao']:g}).")
-
-                if s["lead_time_maturidade"]:
-                    st.caption(f":material/warning: {s['lead_time_maturidade']} — usando lead time "
-                               f"{s['lead_time']}d ({s['lead_time_origem']}).")
-                if s["fornecedor_sugerido"]:
-                    preco_txt = (
-                        f" · último preço {s['fornecedor_moeda']} {s['fornecedor_ultimo_preco']:.2f}"
-                        if s["fornecedor_ultimo_preco"] is not None else ""
-                    )
-                    email_txt = f" · {s['fornecedor_email']}" if s["fornecedor_email"] else ""
-                    st.caption(f":material/apartment: Fornecedor sugerido: **{s['fornecedor_sugerido']}**"
-                               f"{preco_txt}{email_txt}")
-
-                with st.form("form_rep_acao", clear_on_submit=False):
-                    fa1, fa2 = st.columns(2)
-                    num_sc_rep = fa1.text_input(
-                        "Número da SC *", value=f"REP-{datetime.now():%Y%m%d-%H%M}",
-                        key="rep_num_sc")
-                    dt_ab_rep = fa2.date_input("Data de abertura", value=date.today(),
-                                               key="rep_dt_ab")
-                    qtd_final = st.number_input(
-                        "Quantidade (editável)", min_value=0.0,
-                        value=float(s["qtd_sugerida"]), step=1.0, key="rep_qtd_final")
-                    obs_rep = st.text_area("Observações da SC", value=s["justificativa"],
-                                           height=70, key="rep_obs")
-                    ba1, ba2, ba3 = st.columns(3)
-                    criar_rep = ba1.form_submit_button(":material/check_circle: Criar SC", type="primary",
-                                                       width="stretch")
-                    adiar_rep = ba2.form_submit_button(":material/pause: Adiar", width="stretch")
-                    ignorar_rep = ba3.form_submit_button(":material/block: Ignorar", width="stretch")
-
-                if criar_rep:
-                    if not num_sc_rep.strip():
-                        st.warning(":material/warning: Informe o número da SC.")
-                    else:
-                        s_final = dict(s)
-                        s_final["qtd_sugerida"] = qtd_final
-                        item_sc = sugestao_para_item_sc(s_final, data_necessidade=str(date.today()))
-                        ok, msg = criar_sc(num_sc_rep.strip(), str(dt_ab_rep), [item_sc], obs_rep)
-                        if ok:
-                            sc_id = buscar_sc_id_por_numero(num_sc_rep.strip())
-                            registrar_desfecho_sugestao(s_final, "criou_sc", sc_id=sc_id)
-                            st.success(f":material/check_circle: {msg} Desfecho registrado no histórico.")
-                        else:
-                            st.error(f":material/cancel: {msg}")
-                elif adiar_rep:
-                    registrar_desfecho_sugestao(s, "adiada", observacao=obs_rep)
-                    st.info(":material/pause: Sugestão adiada e registrada no histórico.")
-                elif ignorar_rep:
-                    registrar_desfecho_sugestao(s, "ignorada", observacao=obs_rep)
-                    st.info(":material/block: Sugestão ignorada e registrada no histórico.")
 
             with st.expander(":material/history: Histórico de decisões de reposição"):
                 hist = listar_sugestoes(limit=50)
@@ -2961,7 +2883,7 @@ elif pagina == "Ficha 360":
                 # v2.7.1: gatilho ativo mas qtd = 0 → o saldo residual já cobre o alvo
                 # (antes aparecia "repor 0", confuso).
                 st.info(f"🟡 **{rep['prioridade']}** — **sem compra agora**: o saldo residual "
-                        f"(guarda-chuva) (**{_g(it.get('estoque_em_transito'))} {un}** já negociados) "
+                        f"(**{_g(it.get('estoque_em_transito'))} {un}** já negociados) "
                         f"cobre o alvo de **{_g(rep['alvo'])} {un}**. Reavaliar quando o material chegar.")
             else:
                 st.success(":material/check_circle: Sem necessidade de reposição no momento "
