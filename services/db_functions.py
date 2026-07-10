@@ -2717,13 +2717,16 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
         "pedido":           _coluna(df, ["Pedido", "Numero PC", "Número PC"]),
         "qtd_pedido":       _coluna(df, ["Quantidade"]),                 # Quantidade = qtd do PO (aba SCM)
         "qtd_entregue":     _coluna(df, ["Qtd.Entregue", "Qtd Entregue"]),
-        "fornecedor":       _coluna(df, ["Nome Fantasia"]),
+        # v3.5.0 — "Nome Fantasia" vinha com lixo ("1.0"/"2.0") neste export; o nome real
+        # do fornecedor está em "Razão Social" / "Fornecedor". Prioriza os limpos.
+        "fornecedor":       _coluna(df, ["Razão Social", "Razao Social", "Fornecedor", "Nome Fantasia"]),
         "previsao_nfe":     _coluna(df, ["Previsão NFe", "Previsao NFe"]),
         "documento":        _coluna(df, ["Documento"]),
-        # v3.5.0 — Dashboard de Comprador: comprador real, data de emissão do PO e saving.
+        # v3.5.0 — Dashboard de Comprador: comprador real, data do PO, saving, departamento.
         "comprador":        _coluna(df, ["Comprador"]),
         "dt_emissao_po":    _coluna(df, ["DT Emissão", "DT Emissao", "Dt Emissão", "Dt Emissao"]),
         "saving":           _coluna(df, ["Saving"]),
+        "departamento":     _coluna(df, ["Departamento"]),
         "preco_unitario":   _coluna(df, ["Prc Unitario", "Preco Unitario", "Preço Unitário"]),
         "valor_total":      _coluna(df, ["Vlr.Total", "Valor Total", "Vlr Total"]),
         "moeda":            _coluna(df, ["Moeda"]),
@@ -2797,6 +2800,8 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                 comprador = comprador if comprador and comprador != "-" else None
                 data_po = _to_date_str(_valor(row, colunas["dt_emissao_po"], None))
                 saving_val = _to_float(_valor(row, colunas["saving"], 0))
+                departamento = str(_valor(row, colunas["departamento"], "") or "").strip()
+                departamento = departamento if departamento and departamento != "-" else None
                 descricao_sc = str(_valor(row, colunas["descricao_sc"], "") or "").strip()
                 documento = str(_valor(row, colunas["documento"], "") or "").strip() or None
                 preco_unit = _to_float(_valor(row, colunas["preco_unitario"], 0))
@@ -2820,12 +2825,13 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                             descricao_solicitacao=?, status_protheus=?, prioridade_critica=?,
                             origem_importacao=?, data_importacao=?,
                             comprador=COALESCE(?, comprador), data_po=COALESCE(?, data_po),
-                            saving=MAX(COALESCE(saving, 0), ?)
+                            saving=MAX(COALESCE(saving, 0), ?),
+                            departamento=COALESCE(?, departamento)
                         WHERE id=?
                     """, (data_abertura, data_aprovacao, numero_po or None, fornecedor or None,
                           data_prev, status, justificativa, solicitante, descricao_sc,
                           status_protheus, 1 if prioridade_critica else 0, nome_arquivo, agora,
-                          comprador, data_po, saving_val, sc_id))
+                          comprador, data_po, saving_val, departamento, sc_id))
                     stats["scs_atualizadas"] += 1
                 else:
                     cur = conn.execute("""
@@ -2833,12 +2839,12 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                             (numero_sc,data_abertura,data_aprovacao,numero_po,fornecedor,
                              data_prev_entrega,status,observacoes,solicitante,
                              descricao_solicitacao,status_protheus,prioridade_critica,
-                             origem_importacao,data_importacao,comprador,data_po,saving)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             origem_importacao,data_importacao,comprador,data_po,saving,departamento)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """, (numero_sc, data_abertura, data_aprovacao, numero_po or None, fornecedor or None,
                           data_prev, status, justificativa, solicitante, descricao_sc,
                           status_protheus, 1 if prioridade_critica else 0, nome_arquivo, agora,
-                          comprador, data_po, saving_val))
+                          comprador, data_po, saving_val, departamento))
                     sc_id = cur.lastrowid
                     stats["scs_criadas"] += 1
 

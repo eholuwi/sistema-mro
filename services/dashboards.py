@@ -108,6 +108,208 @@ def montar_visao_comprador(top_n=12, hoje=None):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 🛒 DASHBOARD COMPRAS MRO (§1) — analytics de COMPRAS sobre o Relatório de SCs
+# ══════════════════════════════════════════════════════════════════════════════
+
+AGING_FAIXAS = ["0-7", "8-15", "16-30", "31-60", "60+"]
+SCPO_FAIXAS = ["1 dia", "2-5", "6-10", "11-20", "20+"]
+
+
+def _dias_entre(iso1, iso2):
+    """Dias inteiros de iso1 até iso2. None se algum não parsear."""
+    def _p(x):
+        try:
+            return datetime.strptime(str(x).strip()[:10], "%Y-%m-%d").date()
+        except (ValueError, TypeError, AttributeError):
+            return None
+    a, b = _p(iso1), _p(iso2)
+    return (b - a).days if (a and b) else None
+
+
+def _faixa_aging(d):
+    if d is None:
+        return None
+    if d <= 7:  return "0-7"
+    if d <= 15: return "8-15"
+    if d <= 30: return "16-30"
+    if d <= 60: return "31-60"
+    return "60+"
+
+
+def _faixa_sc_po(d):
+    if d is None:
+        return None
+    if d <= 1:  return "1 dia"
+    if d <= 5:  return "2-5"
+    if d <= 10: return "6-10"
+    if d <= 20: return "11-20"
+    return "20+"
+
+
+def montar_visao_compras_mro(hoje=None):
+    """View-model do Dashboard de Comprador (§1): analytics de COMPRAS sobre as SCs
+    importadas do Relatório de SCs — comprador real, data do PO (DT Emissão), aging,
+    fornecedores, departamentos e solicitantes. PURO (DT-3): monta números/listas;
+    o `app.py` só desenha. WK por ISO week (`date.isocalendar`)."""
+    from collections import defaultdict
+    from services.db_functions import _normalizar_txt, _nome_fornecedor_valido
+    hoje = hoje or date.today()
+    hoje_iso = hoje.strftime("%Y-%m-%d")
+    # Escopo: ANO CORRENTE (pedido do usuário / prompt "Ano corrente quase sempre") —
+    # exclui SCs antigas nunca fechadas (backlog de anos anteriores) da fila e do aging.
+    ano_f = str(hoje.year)
+
+    with transaction() as conn:
+        dep_por_solic = {}
+        for r in conn.execute("SELECT nome, departamento FROM solicitantes_mro"):
+            dep_por_solic[_normalizar_txt(r["nome"])] = (r["departamento"] or "").strip() or "—"
+
+        scs = [dict(r) for r in conn.execute("""
+            SELECT sc.id, sc.numero_sc, sc.status, sc.data_abertura, sc.data_aprovacao,
+                   sc.data_po, sc.numero_po, sc.fornecedor, sc.comprador, sc.solicitante,
+                   sc.departamento,
+                   COALESCE(SUM(i.valor_total), 0) AS valor,
+                   COUNT(i.id) AS n_itens,
+                   SUM(CASE WHEN COALESCE(i.saldo_residual, i.quantidade_solicitada - i.quantidade_recebida) > 0
+                            THEN 1 ELSE 0 END) AS n_pendentes
+            FROM solicitacoes_compra sc
+            LEFT JOIN itens_sc i ON i.sc_id = sc.id
+            WHERE substr(sc.data_abertura, 1, 4) = ?
+            GROUP BY sc.id
+        """, (ano_f,)).fetchall()]
+
+        itens_abertos = [dict(r) for r in conn.execute("""
+            SELECT sc.numero_sc, sc.data_abertura, sc.comprador, sc.solicitante, sc.departamento,
+                   inv.part_number, inv.nome_item, inv.estoque_atual, inv.estoque_minimo,
+                   inv.setor_responsavel
+            FROM itens_sc i
+            JOIN solicitacoes_compra sc ON sc.id = i.sc_id
+            JOIN inventario inv ON inv.id = i.item_id
+            WHERE sc.status NOT IN ('Recebido', 'Cancelado')
+              AND substr(sc.data_abertura, 1, 4) = ?
+              AND COALESCE(i.saldo_residual, i.quantidade_solicitada - i.quantidade_recebida) > 0
+        """, (ano_f,)).fetchall()]
+
+        # Item-level: o nome do fornecedor válido é escolhido no Python porque o
+        # fornecedor_item às vezes traz lixo numérico ("1.0"/"2.0") junto do valor,
+        # enquanto o nome real está em sc.fornecedor (ou vice-versa).
+        forn_rows = [dict(r) for r in conn.execute("""
+            SELECT i.fornecedor_item AS fi, sc.fornecedor AS sf,
+                   COALESCE(i.valor_total, 0) AS valor
+            FROM itens_sc i JOIN solicitacoes_compra sc ON sc.id = i.sc_id
+            WHERE substr(sc.data_abertura, 1, 4) = ?
+        """, (ano_f,)).fetchall()]
+
+        row = conn.execute(
+            "SELECT MAX(data_hora) AS dh FROM log_importacoes WHERE tipo LIKE 'relatorio%'"
+        ).fetchone()
+        ultima_atualizacao = row["dh"] if row else None
+
+    def _dep(solic):
+        return dep_por_solic.get(_normalizar_txt(solic), "—")
+
+    def _aging_sc(s):
+        atend = s.get("data_po") or s.get("data_aprovacao")
+        return _dias_entre(s["data_abertura"], atend or hoje_iso)
+
+    abertas = [s for s in scs if s["status"] not in ("Recebido", "Cancelado") and (s["n_pendentes"] or 0) > 0]
+    em_cotacao = [s for s in abertas if "Cota" in (s["status"] or "")]
+    com_po = [s for s in scs if (s["numero_po"] or "").strip()]
+
+    agings = [a for a in (_aging_sc(s) for s in scs) if a is not None and a >= 0]
+    aging_medio = round(sum(agings) / len(agings), 1) if agings else None
+
+    scpo = [d for d in (_dias_entre(s["data_abertura"], s["data_po"]) for s in com_po)
+            if d is not None and d >= 0]
+    scpo_hist = {f: 0 for f in SCPO_FAIXAS}
+    for d in scpo:
+        scpo_hist[_faixa_sc_po(d)] += 1
+    scpo_medio = round(sum(scpo) / len(scpo), 1) if scpo else None
+
+    # Painel de Prioridades — itens abertos, mais velho primeiro (a fila do dia)
+    painel = []
+    itens_criticos = 0
+    for it in itens_abertos:
+        aging = _dias_entre(it["data_abertura"], hoje_iso)
+        if (it.get("estoque_atual") or 0) <= (it.get("estoque_minimo") or 0):
+            itens_criticos += 1
+        painel.append({
+            "aging": aging if aging is not None else -1,
+            "sc": it["numero_sc"], "item": it["nome_item"], "pn": it["part_number"],
+            "comprador": (it["comprador"] or "—"),
+            "departamento": (it["setor_responsavel"] or "—"),
+        })
+    painel.sort(key=lambda x: x["aging"], reverse=True)
+
+    aging_dist = {f: 0 for f in AGING_FAIXAS}
+    for p in painel:
+        fx = _faixa_aging(p["aging"] if p["aging"] >= 0 else None)
+        if fx:
+            aging_dist[fx] += 1
+
+    comp = defaultdict(lambda: {"itens": 0, "pos": set(), "valor": 0.0, "agings": []})
+    for s in scs:
+        c = s.get("comprador")
+        if not c:
+            continue
+        d = comp[c]
+        d["itens"] += int(s["n_itens"] or 0)
+        if (s["numero_po"] or "").strip():
+            d["pos"].add(s["numero_po"])
+        d["valor"] += float(s["valor"] or 0)
+        a = _aging_sc(s)
+        if a is not None and a >= 0:
+            d["agings"].append(a)
+    por_comprador = sorted(
+        [{"comprador": c, "itens": v["itens"], "pos": len(v["pos"]),
+          "valor": round(v["valor"], 2),
+          "aging_medio": round(sum(v["agings"]) / len(v["agings"]), 1) if v["agings"] else None}
+         for c, v in comp.items()],
+        key=lambda x: x["valor"], reverse=True)
+
+    dep_cont, sol_cont = Counter(), Counter()
+    for it in itens_abertos:
+        dep_cont[it["setor_responsavel"] or "—"] += 1
+        sol_cont[(it["solicitante"] or "—").title()] += 1
+    por_departamento = [{"departamento": k, "n": v} for k, v in dep_cont.most_common()]
+    por_solicitante = [{"solicitante": k, "n": v} for k, v in sol_cont.most_common(10)]
+
+    forn_agg = defaultdict(lambda: {"valor": 0.0, "itens": 0})
+    for r in forn_rows:
+        nome = next((c.strip() for c in (r["fi"], r["sf"]) if c and _nome_fornecedor_valido(c)), None)
+        if not nome:
+            continue
+        forn_agg[nome]["valor"] += float(r["valor"] or 0)
+        forn_agg[nome]["itens"] += 1
+    fornecedores_top = sorted(
+        [{"fornecedor": k, "valor": round(v["valor"], 2), "itens": v["itens"]}
+         for k, v in forn_agg.items() if v["valor"] > 0],
+        key=lambda x: x["valor"], reverse=True)[:10]
+
+    ano, wk, _ = hoje.isocalendar()
+    return {
+        "ultima_atualizacao": ultima_atualizacao,
+        "wk": wk, "ano": ano,
+        "kpis": {
+            "itens_abertos": len(em_cotacao),
+            "itens_criticos": itens_criticos,
+            "scs_abertas": len(abertas),
+            "pos_emitidos": len(com_po),
+            "valor_comprado": round(sum(float(s["valor"] or 0) for s in scs), 2),
+            "aging_medio": aging_medio,
+            "scpo_medio": scpo_medio,
+        },
+        "painel_prioridades": painel,
+        "aging_dist": aging_dist,
+        "scpo_hist": scpo_hist,
+        "por_comprador": por_comprador,
+        "por_departamento": por_departamento,
+        "por_solicitante": por_solicitante,
+        "fornecedores_top": fornecedores_top,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # 📊 GESTÃO — "saúde da operação"
 # ══════════════════════════════════════════════════════════════════════════════
 

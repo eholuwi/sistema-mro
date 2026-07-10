@@ -418,10 +418,11 @@ def criar_banco():
         "origem_importacao": "TEXT",
         "data_importacao": "TEXT",
         # v3.5.0 — Dashboard de Comprador: comprador real (coluna do Relatório),
-        # data de emissão do PO (DT Emissão) e saving (R$) por SC.
+        # data de emissão do PO (DT Emissão), saving (R$) e departamento por SC.
         "comprador": "TEXT",
         "data_po": "TEXT",
         "saving": "REAL",
+        "departamento": "TEXT",
     }
     for col, tipo in novas_cols_sc.items():
         if col not in cols_sc:
