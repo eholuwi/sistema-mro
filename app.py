@@ -50,7 +50,7 @@ from services.ficha import (
 )
 from services.ajuda_conteudo import GUIAS_PERSONA, MANUAL
 from services.dashboards import (
-    montar_dashboard,
+    montar_dashboard, montar_visao_compras_mro,
     PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_EXECUTIVO,
 )
 
@@ -64,7 +64,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 3.4.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 3.5.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -135,7 +135,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 3.4.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 3.5.0</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -236,6 +236,88 @@ def _dash_fmt_brl(v):
         return "R$ " + f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except (ValueError, TypeError):
         return "R$ —"
+
+
+def _render_dash_compras_mro(vm):
+    """:material/shopping_cart: Dashboard Compras MRO (§1) — analytics de compras sobre o
+    Relatório de SCs: KPIs, Painel de Prioridades, aging, comparativo por comprador,
+    fornecedores e demanda por setor/solicitante. Escopo: ANO CORRENTE."""
+    k = vm["kpis"]
+    ch, cw = st.columns([3, 1])
+    ch.markdown("### :material/shopping_cart: Dashboard Compras MRO · Inventus Power")
+    cw.markdown(f"<div style='text-align:right'><b>WK {vm['wk']}</b> · {vm['ano']}</div>",
+                unsafe_allow_html=True)
+    ua = vm.get("ultima_atualizacao")
+    st.caption(f":material/update: Última atualização do Relatório de SCs: **{fmt(ua) if ua else '—'}** · "
+               f"escopo do ano de {vm['ano']}.")
+
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1.metric(":material/request_quote: Em cotação", k["itens_abertos"],
+              help="SCs abertas com status de Cotação.")
+    m2.metric("🔴 Críticos", k["itens_criticos"], delta_color="inverse",
+              help="Itens abertos com estoque no/abaixo do mínimo.")
+    m3.metric(":material/timer: Aging médio",
+              f"{k['aging_medio']}d" if k["aging_medio"] is not None else "—",
+              help="Tempo médio Emissão → atendimento (PO/aprovação) das SCs do ano.")
+    m4.metric(":material/receipt_long: SCs abertas", k["scs_abertas"])
+    m5.metric(":material/shopping_cart_checkout: POs emitidos", k["pos_emitidos"])
+    m6.metric(":material/payments: Valor comprado", _brl_compact(k["valor_comprado"]))
+
+    st.divider()
+    st.markdown("#### 🚨 Painel de Prioridades — a fila do dia (mais velho primeiro)")
+    if vm["painel_prioridades"]:
+        dfp = pd.DataFrame([{
+            "Aging (d)": (p["aging"] if p["aging"] >= 0 else None),
+            "SC": p["sc"], "Item": (p["item"] or "")[:36], "PN": p["pn"],
+            "Comprador": p["comprador"], "Setor": p["departamento"],
+        } for p in vm["painel_prioridades"][:50]])
+        st.dataframe(dfp, hide_index=True, width="stretch", height=380,
+                     column_config={"Aging (d)": st.column_config.NumberColumn(format="%d")})
+        st.caption(f"{len(vm['painel_prioridades'])} itens em aberto no ano · exibindo os 50 mais antigos.")
+    else:
+        st.success(":material/check_circle: Nenhum item em aberto no ano corrente.")
+
+    st.divider()
+    ca, cb = st.columns(2)
+    with ca:
+        with st.container(border=True):
+            st.markdown("#### 🟠 Distribuição do Aging")
+            ad = vm["aging_dist"]
+            st.plotly_chart(_barv(list(ad.keys()), [int(v) for v in ad.values()]),
+                            width="stretch", config={"displayModeBar": False})
+            st.caption("Faixas de dias em aberto (verde → vermelho).")
+    with cb:
+        with st.container(border=True):
+            st.markdown("#### :material/schedule: Tempo SC → PO")
+            sp = vm["scpo_hist"]
+            st.plotly_chart(_barv(list(sp.keys()), [int(v) for v in sp.values()]),
+                            width="stretch", config={"displayModeBar": False})
+            if k.get("scpo_medio") is not None:
+                st.caption(f"Tempo médio da SC até o PO: **{k['scpo_medio']} dias**.")
+
+    st.divider()
+    st.markdown("#### 📈 Comparativo por Comprador")
+    if vm["por_comprador"]:
+        dfc = pd.DataFrame([{
+            "Comprador": c["comprador"], "Itens": c["itens"], "POs": c["pos"],
+            "Valor": c["valor"], "Aging médio (d)": c["aging_medio"],
+        } for c in vm["por_comprador"]])
+        st.dataframe(dfc, hide_index=True, width="stretch", column_config={
+            "Valor": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Aging médio (d)": st.column_config.NumberColumn(format="%.1f")})
+    else:
+        st.caption("Sem compradores no período.")
+
+    st.divider()
+    cc, cd = st.columns(2)
+    with cc:
+        _bloco_top("🏭 Fornecedores por valor", vm["fornecedores_top"],
+                   lambda x: x["fornecedor"][:22], "valor", lambda v: _brl_compact(v))
+    with cd:
+        _bloco_top("📦 Setores (demanda em aberto)", vm["por_departamento"],
+                   lambda x: (x["departamento"] or "—"), "n", lambda v: f"{int(v)}")
+    _bloco_top("👨‍💼 Solicitantes (demanda em aberto)", vm["por_solicitante"],
+               lambda x: (x["solicitante"] or "—")[:28], "n", lambda v: f"{int(v)}")
 
 
 def _render_dash_comprador(vm):
@@ -818,7 +900,7 @@ if pagina == "Dashboard":
          f":material/insights: {PUBLICO_GESTAO}",
          f":material/calendar_month: {PUBLICO_EXECUTIVO}"])
     with tab_comp:
-        _render_dash_comprador(montar_dashboard(PUBLICO_COMPRADOR))
+        _render_dash_compras_mro(montar_visao_compras_mro())
     with tab_gest:
         _render_dash_gestao(montar_dashboard(PUBLICO_GESTAO))
     with tab_mensal:
