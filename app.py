@@ -535,6 +535,98 @@ def _barv(labels, values, textos=None, cor=None, height=280):
     return fig
 
 
+def _receber_por_sc(centros):
+    """v3.4.0 — Recebimento começando pela SC/PO: escolhe uma SC aberta e recebe todos
+    os itens pendentes de uma vez (itera `registrar_recebimento_sc` por item, mesma função
+    do fluxo por material — sem duplicar conversão/ledger). Complementa o 'Por Material'."""
+    scs = listar_scs(apenas_abertas=True)
+    if not scs:
+        st.info("Nenhuma SC aberta para receber. Importe o Relatório de SCs ou crie uma SC.")
+        return
+    with st.container(border=True):
+        opc = {
+            (f"SC {s['numero_sc']} · PO {s.get('numero_po') or '—'} · "
+             f"{s.get('fornecedor') or 'sem fornecedor'} · "
+             f"{int(s.get('total_itens') or 0)} itens · pendente {float(s.get('total_pendente') or 0):g}"): s
+            for s in scs
+        }
+        _ph = "— selecione uma SC —"
+        sel = st.selectbox("Selecione a SC / PO", [_ph] + list(opc.keys()), key="rec_sc_sel")
+        if sel not in opc:
+            st.info("Selecione uma SC para ver e receber os itens pendentes.")
+            return
+        sc = opc[sel]
+        itens = [it for it in listar_itens_sc(sc["id"]) if (it.get("pendente") or 0) > 0]
+        if not itens:
+            st.success(":material/check_circle: Todos os itens desta SC já foram recebidos.")
+            return
+
+        st.markdown(f"**SC {sc['numero_sc']}** · PO `{sc.get('numero_po') or '—'}` · "
+                    f"Fornecedor: {sc.get('fornecedor') or '—'} · Status: {sc.get('status') or '—'}")
+
+        h1, h2, h3 = st.columns(3)
+        forn = h1.text_input("Fornecedor", value=sc.get("fornecedor") or "", key="rec_sc_forn")
+        dt_r = h2.date_input("Data Recebimento", value=date.today(), key="rec_sc_dt")
+        _cc_opts = centros if centros else ["—"]
+        _cc_def = next((i for i, c in enumerate(_cc_opts) if "ALMOXARIFADO" in str(c).upper()), 0)
+        cc_r = h3.selectbox("Centro de Custo", _cc_opts, index=_cc_def, key="rec_sc_cc",
+                            help="Padrão MRO: Almoxarifado.")
+
+        base = pd.DataFrame([{
+            "Receber": True,
+            "PN": it["part_number"],
+            "Item": (it.get("nome_item") or "")[:40],
+            "Un": it.get("unidade") or "UN",
+            "Pendente": float(it.get("pendente") or 0),
+            "Qtd a receber": float(it.get("pendente") or 0),
+            "NF / Documento": "",
+            "_item_sc_id": int(it["id"]),
+        } for it in itens])
+        edit = st.data_editor(
+            base, hide_index=True, width="stretch", key="rec_sc_editor",
+            column_config={
+                "Receber": st.column_config.CheckboxColumn("Receber", help="Desmarque itens que ainda não chegaram."),
+                "PN": st.column_config.TextColumn(disabled=True),
+                "Item": st.column_config.TextColumn(disabled=True),
+                "Un": st.column_config.TextColumn(disabled=True),
+                "Pendente": st.column_config.NumberColumn(format="%.0f", disabled=True),
+                "Qtd a receber": st.column_config.NumberColumn(format="%.2f", min_value=0.0,
+                    help="Default = pendente. Recebimento parcial: reduza aqui."),
+                "NF / Documento": st.column_config.TextColumn(help="NF por item (opcional; usa a do lote se vazio)."),
+                "_item_sc_id": None,
+            },
+        )
+        nf_lote = st.text_input("Nota Fiscal / Documento do lote", key="rec_sc_nf",
+                                help="Aplicada aos itens sem NF própria na tabela acima.")
+
+        if st.button(":material/download: Confirmar recebimento da SC", type="primary",
+                     width="stretch", key="rec_sc_btn"):
+            recebidos, erros = 0, []
+            for _, r in edit.iterrows():
+                if not r["Receber"]:
+                    continue
+                qtd = float(r["Qtd a receber"] or 0)
+                if qtd <= 0:
+                    continue
+                nf = str(r["NF / Documento"]).strip() or nf_lote.strip()
+                ok, msg = registrar_recebimento_sc(
+                    sc_id=sc["id"], item_sc_id=int(r["_item_sc_id"]),
+                    qtd_recebida=qtd, centro_custo=cc_r,
+                    solicitante="Almoxarifado", emitente="Almoxarifado",
+                    fornecedor=forn, data_recebimento=str(dt_r), obs_nf=nf)
+                if ok:
+                    recebidos += 1
+                else:
+                    erros.append(f"{r['PN']}: {msg}")
+            if recebidos:
+                st.success(f":material/check_circle: {recebidos} item(ns) recebido(s) na SC {sc['numero_sc']}.")
+            if erros:
+                st.error(":material/warning: Não recebidos — " + " | ".join(erros))
+            if recebidos and not erros:
+                time.sleep(1.5)
+                st.rerun()
+
+
 def _bloco_top(titulo, itens, label_fn, value_key, value_fmt, cor=None,
                height=300, caption=None):
     """Renderiza um card com um ranking Top N em barras horizontais (maior no topo)."""
@@ -2501,7 +2593,14 @@ elif pagina == "Controle de SC":
     #  📦 RECEBER MATERIAL (Grid Inteligente + Feedback Visual Aprimorado)
     # ══════════════════════════════════════════════════════════════════════════════
     with aba_rec:
-        with st.container(border=True):
+        _modo_rec = st.radio(
+            "Como quer receber?", ["📦 Por Material", "📋 Por SC / PO"],
+            horizontal=True, key="rec_modo",
+            help="Por Material começa pelo item; Por SC / PO escolhe a SC e recebe todos os itens pendentes de uma vez.")
+        if _modo_rec == "📋 Por SC / PO":
+            _receber_por_sc(listar_valores("centro_custo"))
+        else:
+          with st.container(border=True):
             st.markdown("### :material/inventory_2: Registrar Recebimento de Material")
             st.caption("Vincule a uma SC aberta ou registre como entrada avulsa.")
             
