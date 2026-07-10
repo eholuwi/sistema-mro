@@ -1542,19 +1542,21 @@ def obter_dados_dashboard(limit_abc=10):
         }
     }
 
-def atualizar_localizacao_e_inventariar(item_id, novo_local, nova_caixa):
+def atualizar_localizacao_e_inventariar(item_id, novo_local, nova_caixa, novo_local_2=None):
     """
-    Atualiza a localização primária e secundária (caixa) do item.
-    Aceita valores vazios para a caixa.
+    Atualiza a localização primária, a 2ª locação e a caixa/observação do item.
+    Aceita valores vazios. v3.4.0: 2ª locação (`local_armazenagem_2`) — um 2º ponto de
+    armazenagem do mesmo item, distinto do Ajuste Rápido de Movimentações.
     """
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     nova_caixa = nova_caixa or ""
     novo_local  = novo_local  or ""
+    novo_local_2 = novo_local_2 or ""
     try:
         with transaction() as conn:
             conn.execute(
-                "UPDATE inventario SET local_armazenagem=?, caixa_identificacao=?, data_inventario=?, data_atualizacao=? WHERE id=?",
-                (novo_local, nova_caixa, agora, agora, item_id)
+                "UPDATE inventario SET local_armazenagem=?, local_armazenagem_2=?, caixa_identificacao=?, data_inventario=?, data_atualizacao=? WHERE id=?",
+                (novo_local, novo_local_2, nova_caixa, agora, agora, item_id)
             )
         return True, agora
     except Exception as e:

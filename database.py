@@ -501,6 +501,9 @@ def criar_banco():
         # (comportamento idêntico ao de hoje para os itens de UM única).
         "unidade_compra": "TEXT",
         "fator_conversao": "REAL DEFAULT 1",
+        # v3.4.0 — 2ª locação: 2º ponto de armazenagem do mesmo item (Contagem Física),
+        # independente do Ajuste Rápido de Movimentações.
+        "local_armazenagem_2": "TEXT",
     }.items():
         if col not in cols_inv0:
             conn.execute(f"ALTER TABLE inventario ADD COLUMN {col} {tipo}")

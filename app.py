@@ -962,18 +962,27 @@ elif pagina == "Inventário":
             if item_inv.get("local_armazenagem") and item_inv.get("local_armazenagem") not in locais_disp: 
                 locais_disp.insert(0, item_inv["local_armazenagem"])
             
-            c_q, c_l = st.columns(2) 
-            
+            c_q, c_l, c_l2 = st.columns(3)
+
             # Inicializa com o estoque atual. Se for 0, começa em 0.
             nova_qtd = c_q.number_input("Quantidade Real", min_value=0.0, step=1.0, value=float(item_inv['estoque_atual']))
-            
+
             # Selectbox de Local (Obrigatório)
             local_atual = item_inv.get("local_armazenagem")
             idx_local_inicial = 0
             if local_atual and local_atual in locais_disp:
                 idx_local_inicial = locais_disp.index(local_atual)
-                
+
             novo_local = c_l.selectbox("Local (1ª Locação)", options=locais_disp, index=idx_local_inicial)
+
+            # v3.4.0: 2ª locação (opcional) — 2º ponto de armazenagem do mesmo item,
+            # independente do Ajuste Rápido de Movimentações (que permanece intacto).
+            _op_l2 = ["—"] + locais_disp
+            _l2_atual = item_inv.get("local_armazenagem_2") or ""
+            _idx_l2 = _op_l2.index(_l2_atual) if _l2_atual in _op_l2 else 0
+            novo_local_2 = c_l2.selectbox(
+                "Local (2ª Locação)", options=_op_l2, index=_idx_l2,
+                help="Opcional — 2º ponto de armazenagem do mesmo item. '—' = sem 2ª locação.")
             
             # ✅ NOVO CAMPO: Observação Operacional (Texto Livre)
             obs_inventario = st.text_input(
@@ -989,24 +998,30 @@ elif pagina == "Inventário":
                 
                 # Verifica mudanças operacionais
                 mudou_local = (novo_local != item_inv.get("local_armazenagem"))
+                _l2_val = None if novo_local_2 == "—" else novo_local_2
+                _l2_norm = _l2_val or ""
+                mudou_local2 = (_l2_norm != (item_inv.get("local_armazenagem_2") or ""))
                 mudou_obs = (obs_inventario.strip() != (item_inv.get("caixa_identificacao") or "").strip())
                 mudou_qtd = (delta != 0)
 
                 # Se nada mudou, avisa o usuário
-                if not mudou_qtd and not mudou_local and not mudou_obs:
+                if not mudou_qtd and not mudou_local and not mudou_local2 and not mudou_obs:
                     st.warning(":material/warning: Nenhuma alteração detectada. O item já está com esses dados.")
                 else:
-                    # 1. Atualiza sempre os metadados (Local e Obs) e marca como inventariado
-                    ok_loc, msg_loc = atualizar_localizacao_e_inventariar(item_inv["id"], novo_local, obs_inventario)
+                    # 1. Atualiza sempre os metadados (Local, 2ª Locação e Obs) e marca como inventariado
+                    ok_loc, msg_loc = atualizar_localizacao_e_inventariar(
+                        item_inv["id"], novo_local, obs_inventario, novo_local_2=_l2_val)
                     
                     if ok_loc:
                         # 2. Lógica de Movimentação (Histórico)
                         # Precisamos registrar no histórico se houve mudança de QTD OU de Metadados (Local/Obs)
                         
                         obs_partes = []
-                        if mudou_local: 
+                        if mudou_local:
                             obs_partes.append(f"Local: {item_inv.get('local_armazenagem','N/A')} → {novo_local}")
-                        if mudou_obs: 
+                        if mudou_local2:
+                            obs_partes.append(f"2ª Locação: '{item_inv.get('local_armazenagem_2') or ''}' → '{_l2_norm}'")
+                        if mudou_obs:
                             obs_partes.append(f"Obs: '{item_inv.get('caixa_identificacao','')}' → '{obs_inventario}'")
                         
                         # Se houve mudança de quantidade, registramos entrada/saída normal
@@ -1025,7 +1040,7 @@ elif pagina == "Inventário":
                         # ✅ CORREÇÃO: Se NÃO mudou quantidade, mas mudou Local/Obs, registramos uma "Conferência"
                         # Usamos tipo 'entrada' com qtd 0 apenas para gerar o log histórico, 
                         # pois a tabela exige um tipo válido.
-                        elif mudou_local or mudou_obs:
+                        elif mudou_local or mudou_local2 or mudou_obs:
                             obs_final = f"Conferência de Inventário (Sem alteração de Qtd) {' | '.join(obs_partes)}"
                             
                             registrar_movimentacao(
