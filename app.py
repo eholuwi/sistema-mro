@@ -1704,7 +1704,9 @@ elif pagina == "Movimentações":
 # ══════════════════════════════════════════════════════════════════════════════
 elif pagina == "Requisição":
     st.title(":material/assignment: Requisição de Material")
-    
+    st.caption("Registre a saída de material por requisição e acompanhe o histórico completo "
+               "por setor, emitente e autorizador.")
+
     aba_nova, aba_hist_req = st.tabs([":material/edit_note: Nova Requisição", ":material/history: Histórico"])
     
     # Configurações de contexto
@@ -1853,33 +1855,70 @@ elif pagina == "Requisição":
     # --- ABA: HISTÓRICO ---
     with aba_hist_req:
         st.markdown("### :material/history: Histórico de Requisições")
-        reqs = listar_requisicoes(limit=200)
+        reqs = listar_requisicoes(limit=500)
         if not reqs:
             st.info("Nenhuma requisição registrada até o momento.")
         else:
-            df_reqs = pd.DataFrame(reqs)[["numero_requisicao", "data_hora", "setor", "emitente", "autorizador_nome", "total_itens"]]
+            df_all = pd.DataFrame(reqs)
+
+            # v3.4.0 — resumo em métricas
+            _itens = int(pd.to_numeric(df_all.get("total_itens"), errors="coerce").fillna(0).sum())
+            m1, m2, m3 = st.columns(3)
+            m1.metric(":material/receipt_long: Requisições", len(df_all))
+            m2.metric(":material/inventory_2: Itens requisitados", _itens)
+            m3.metric(":material/domain: Setores atendidos", int(df_all["setor"].nunique()))
+
+            # v3.4.0 — filtros (setor + busca livre)
+            fc1, fc2 = st.columns(2)
+            setores_op = ["Todos"] + sorted(s for s in df_all["setor"].dropna().unique())
+            f_set = fc1.selectbox("Setor", setores_op, key="hist_req_setor")
+            f_txt = fc2.text_input(":material/search: Buscar (Nº, emitente ou autorizador)", key="hist_req_busca")
+
+            fil = df_all.copy()
+            if f_set != "Todos":
+                fil = fil[fil["setor"] == f_set]
+            if f_txt.strip():
+                t = f_txt.strip().lower()
+                fil = fil[fil.apply(
+                    lambda r: t in str(r.get("numero_requisicao", "")).lower()
+                    or t in str(r.get("emitente", "")).lower()
+                    or t in str(r.get("autorizador_nome", "")).lower(), axis=1)]
+
+            # v3.4.0 — mini-gráfico: requisições por setor
+            if not fil.empty:
+                by_set = fil["setor"].fillna("—").value_counts()
+                if len(by_set):
+                    st.plotly_chart(
+                        _barv(list(by_set.index), [int(v) for v in by_set.values]),
+                        width="stretch", config={"displayModeBar": False})
+
+            df_reqs = fil[["numero_requisicao", "data_hora", "setor", "emitente",
+                           "autorizador_nome", "total_itens"]].copy()
             df_reqs.columns = ["Nº Req", "Data/Hora", "Setor", "Emitente", "Autorizador", "Qtd Itens"]
             st.dataframe(df_reqs, width="stretch", hide_index=True)
-            
+
             st.markdown("---")
             st.markdown("#### :material/search: Detalhes da Requisição")
-            opcoes_req = {f"REQ-{r['numero_requisicao']} | {r['setor']} | {r['data_hora'][:10]}": r for r in reqs}
-            sel_req = st.selectbox("Escolha uma requisição para ver os detalhes:", [""] + list(opcoes_req.keys()))
-            
+            opcoes_req = {f"REQ-{r['numero_requisicao']} | {r['setor']} | {str(r['data_hora'])[:10]}": r
+                          for r in fil.to_dict("records")}
+            sel_req = st.selectbox("Escolha uma requisição para ver os detalhes:",
+                                   [""] + list(opcoes_req.keys()))
+
             if sel_req:
                 r_det = opcoes_req[sel_req]
-                with st.container():
-                    st.markdown(f"**Resumo REQ-{r_det['numero_requisicao']}**")
+                with st.container(border=True):
+                    st.markdown(f"**Resumo REQ-{r_det['numero_requisicao']}** · "
+                                f"{str(r_det.get('data_hora',''))[:16]}")
                     c_a, c_b, c_c = st.columns(3)
                     c_a.write(f":material/person: **Emitente:** {r_det['emitente']}")
                     c_b.write(f":material/edit: **Autorizador:** {r_det['autorizador_nome']}")
                     c_c.write(f":material/apartment: **C.Custo:** {r_det['centro_custo']}")
-                    
+
                     itens_det = listar_itens_requisicao(r_det["id"])
                     if itens_det:
                         df_det = pd.DataFrame(itens_det)[["part_number", "nome_item", "quantidade_solicitada", "quantidade_atendida", "unidade"]]
                         df_det.columns = ["PN", "Material", "Solicitado", "Atendido", "UN"]
-                        st.table(df_det)
+                        st.dataframe(df_det, width="stretch", hide_index=True)
                         
 # ══════════════════════════════════════════════════════════════════════════════
 # CONTROLE DE SC
