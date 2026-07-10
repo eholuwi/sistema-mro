@@ -7,6 +7,7 @@ from services.constants import (
     JANELA_CONSUMO_DIAS, PREVISAO_RUPTURA_SEM_RISCO,
     SNAPSHOT_RETENCAO_DIAS, RELATORIO_SCS_ABAS, decodificar_moeda,
     JANELAS_CONSUMO, TENDENCIA_LIMIAR_PCT, GIRO_JANELA_DIAS, LEAD_TIME_MAX_DIAS,
+    LEAD_TIME_DEFAULT_DIAS,
     ABC_LIMIAR_A, ABC_LIMIAR_B, VALOR_CONSUMIDO_JANELA_DIAS, MOEDA_PADRAO,
     SAIDA_REAL_WHERE, STATUS_SEM_MOVIMENTACAO,
     FATOR_CONVERSAO_PADRAO, extrair_fator_embalagem,
@@ -435,7 +436,10 @@ def _recalcular_ruptura_by_pn(conn, part_number):
         # máx) e NÃO é mais sobrescrito aqui. Gravamos apenas a SUGESTÃO calculada
         # (consumo × lead_time × 1,5) em estoque_seguranca_calculado.
         # v3.3.0: arredonda p/ CIMA — segurança nunca deve ser menor (nem fracionária).
-        seguranca_calc = math.ceil(consumo*(r["lead_time_dias"] or 0)*FATOR_ESTOQUE_SEGURANCA)
+        # v3.4.0: usa o lead default quando não há lead cadastrado (mesma base do
+        # lead_time_efetivo do ROP) — sem isso, item com consumo mas sem lead zerava.
+        lead = r["lead_time_dias"] or LEAD_TIME_DEFAULT_DIAS
+        seguranca_calc = math.ceil(consumo*lead*FATOR_ESTOQUE_SEGURANCA)
         c.execute("""
             UPDATE inventario SET previsao_ruptura_dias=?,estoque_seguranca_calculado=?,data_atualizacao=? WHERE id=?
         """,(ruptura,seguranca_calc,datetime.now().strftime("%Y-%m-%d %H:%M:%S"),r["id"]))

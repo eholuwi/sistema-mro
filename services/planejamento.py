@@ -115,15 +115,24 @@ def lead_time_efetivo(item):
 
 
 def estoque_seguranca_efetivo(item):
-    """Estoque de segurança a usar + origem. O manual (gestor) tem prioridade; se
-    0, cai para o calculado (sugestão); se ambos 0, retorna (0, 'não definido').
-    Retorna (valor:float, origem:str)."""
+    """Estoque de segurança a usar + origem. Prioridade: manual (gestor) > calculado
+    (sugestão consumo × lead × 1,5) > piso pelo mínimo do gestor > não definido.
+    Retorna (valor:float, origem:str).
+
+    v3.4.0: itens SEM consumo zeravam o calculado (consumo × … = 0) — ~40% do catálogo
+    são spares/sem giro. Quando não há base de consumo mas o gestor definiu um mínimo,
+    a segurança efetiva cai para o `estoque_minimo` (o mínimo já é o buffer desejado
+    do gestor), em vez de exibir um "0" que parece falta de proteção. Coerente com o
+    gatilho de reposição, que já dispara em estoque ≤ mínimo."""
     ss = _num(item.get("estoque_seguranca"))
     if ss > 0:
         return ss, "manual (gestor)"
     ssc = _num(item.get("estoque_seguranca_calculado"))
     if ssc > 0:
         return ssc, "calculado (sugestão)"
+    minimo = _num(item.get("estoque_minimo"))
+    if minimo > 0:
+        return minimo, "piso (mínimo do gestor)"
     return 0.0, "não definido"
 
 
