@@ -30,12 +30,15 @@ seu **apoio** — a base do Compras (mínimo/máximo/categoria) fica intocada.
 - Isso é o **consumo real** — alimenta cobertura, giro e o padrão de demanda.
 
 **2. Receber de uma SC — `:material/receipt_long: Controle de SC` → `:material/inventory_2: Receber Material`**
+- Dois modos: **Por Material** (começa pelo item) ou **Por SC / PO** (escolhe a SC e
+  recebe **todos os itens pendentes** de uma vez).
 - Informe a quantidade **na unidade de compra** (ex.: litros). Se houver **conversão**, o
   sistema mostra o preview (ex.: *5 L ÷ 5 = +1 GL*) e soma já convertido.
 - Viu **:material/warning: revisar unidade**? Avise o comprador para cadastrar o fator.
 
 **3. Contagem física — `:material/assignment: Inventário` → `Realizar Contagem Física`**
-- Informe a quantidade real e o local; a diferença vira ajuste (não conta como consumo).
+- Informe a quantidade real, o **local (1ª e 2ª locação)** e observações; a diferença vira
+  ajuste (não conta como consumo).
 
 **4. Consultar — `:material/badge: Ficha 360`** — tudo do item numa tela.
 
@@ -48,7 +51,8 @@ Você **decide e cria as SCs**. O sistema **recomenda**, você confirma — nunc
 
 **1. O que repor — `:material/receipt_long: Controle de SC` → `:material/psychology: Assistente de Reposição`**
 - Fila **priorizada** (🔴/🟠/🟡) com **"Comprar até DD/MM"** por item.
-- **SCs sugeridas agrupadas** (natureza + centro de custo) — crie multi-item em 1 clique.
+- **Selecione** os itens e crie **SCs sugeridas agrupadas por Tipo do material** (com
+  título, justificativa de ~2 meses e centro de custo) — multi-item em 1 clique.
 
 **2. Cotar — abas de SC e Fornecedores** — melhor fornecedor (menor último preço), lead
 time e **rascunho de e-mail** de cotação.
