@@ -146,6 +146,14 @@ def _faixa_sc_po(d):
     return "20+"
 
 
+def _iso_week(iso):
+    """Semana ISO (1-53) de uma data ISO. None se não parsear."""
+    try:
+        return datetime.strptime(str(iso).strip()[:10], "%Y-%m-%d").isocalendar()[1]
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def montar_visao_compras_mro(hoje=None):
     """View-model do Dashboard de Comprador (§1): analytics de COMPRAS sobre as SCs
     importadas do Relatório de SCs — comprador real, data do PO (DT Emissão), aging,
@@ -194,8 +202,9 @@ def montar_visao_compras_mro(hoje=None):
         # fornecedor_item às vezes traz lixo numérico ("1.0"/"2.0") junto do valor,
         # enquanto o nome real está em sc.fornecedor (ou vice-versa).
         forn_rows = [dict(r) for r in conn.execute("""
-            SELECT i.fornecedor_item AS fi, sc.fornecedor AS sf,
-                   COALESCE(i.valor_total, 0) AS valor
+            SELECT sc.id AS sc_id, i.fornecedor_item AS fi, sc.fornecedor AS sf,
+                   COALESCE(i.valor_total, 0) AS valor,
+                   sc.data_abertura AS da, sc.data_po AS dp
             FROM itens_sc i JOIN solicitacoes_compra sc ON sc.id = i.sc_id
             WHERE substr(sc.data_abertura, 1, 4) = ?
         """, (ano_f,)).fetchall()]
@@ -274,17 +283,69 @@ def montar_visao_compras_mro(hoje=None):
     por_departamento = [{"departamento": k, "n": v} for k, v in dep_cont.most_common()]
     por_solicitante = [{"solicitante": k, "n": v} for k, v in sol_cont.most_common(10)]
 
+    # Fornecedor válido por SC (resolve o lixo "1.0"/"2.0"): usado no valor e no lead time.
+    def _forn_valido(fi, sf):
+        return next((c.strip() for c in (fi, sf) if c and _nome_fornecedor_valido(c)), None)
+
+    forn_por_sc = {}
     forn_agg = defaultdict(lambda: {"valor": 0.0, "itens": 0})
     for r in forn_rows:
-        nome = next((c.strip() for c in (r["fi"], r["sf"]) if c and _nome_fornecedor_valido(c)), None)
+        nome = _forn_valido(r["fi"], r["sf"])
         if not nome:
             continue
         forn_agg[nome]["valor"] += float(r["valor"] or 0)
         forn_agg[nome]["itens"] += 1
+        forn_por_sc.setdefault(r["sc_id"], nome)
     fornecedores_top = sorted(
         [{"fornecedor": k, "valor": round(v["valor"], 2), "itens": v["itens"]}
          for k, v in forn_agg.items() if v["valor"] > 0],
         key=lambda x: x["valor"], reverse=True)[:10]
+
+    # Lead time por fornecedor (Emissão → PO), por SC (dedupe) — bom para negociação.
+    lt = defaultdict(list)
+    for s in com_po:
+        nome = forn_por_sc.get(s["id"])
+        d = _dias_entre(s["data_abertura"], s["data_po"])
+        if nome and d is not None and d >= 0:
+            lt[nome].append(d)
+    lead_time_fornecedor = sorted(
+        [{"fornecedor": n, "dias": round(sum(v) / len(v), 1), "pos": len(v)} for n, v in lt.items()],
+        key=lambda x: x["dias"], reverse=True)[:12]
+
+    # Evolução semanal (WK): itens aprovados × POs emitidos — compras acompanha a demanda?
+    aprov_wk, po_wk = Counter(), Counter()
+    for s in scs:
+        if s["data_aprovacao"]:
+            w = _iso_week(s["data_aprovacao"])
+            if w:
+                aprov_wk[w] += int(s["n_itens"] or 0)
+        if s["data_po"]:
+            w = _iso_week(s["data_po"])
+            if w:
+                po_wk[w] += 1
+    weeks = sorted(set(aprov_wk) | set(po_wk))
+    evolucao_semanal = {
+        "weeks": weeks,
+        "aprovados": [aprov_wk.get(w, 0) for w in weeks],
+        "pos": [po_wk.get(w, 0) for w in weeks],
+    }
+
+    # Volume mensal: Itens / SCs / POs por mês (YYYY-MM).
+    mes_itens, mes_scs, mes_pos = Counter(), Counter(), Counter()
+    for s in scs:
+        m = (s["data_abertura"] or "")[:7]
+        if m:
+            mes_scs[m] += 1
+            mes_itens[m] += int(s["n_itens"] or 0)
+        if s["data_po"]:
+            mes_pos[(s["data_po"] or "")[:7]] += 1
+    meses = sorted(m for m in (set(mes_scs) | set(mes_pos)) if m)
+    volume_mensal = {
+        "meses": meses,
+        "itens": [mes_itens.get(m, 0) for m in meses],
+        "scs": [mes_scs.get(m, 0) for m in meses],
+        "pos": [mes_pos.get(m, 0) for m in meses],
+    }
 
     ano, wk, _ = hoje.isocalendar()
     return {
@@ -306,6 +367,9 @@ def montar_visao_compras_mro(hoje=None):
         "por_departamento": por_departamento,
         "por_solicitante": por_solicitante,
         "fornecedores_top": fornecedores_top,
+        "lead_time_fornecedor": lead_time_fornecedor,
+        "evolucao_semanal": evolucao_semanal,
+        "volume_mensal": volume_mensal,
     }
 
 

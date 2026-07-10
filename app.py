@@ -263,6 +263,35 @@ def _render_dash_compras_mro(vm):
     m5.metric(":material/shopping_cart_checkout: POs emitidos", k["pos_emitidos"])
     m6.metric(":material/payments: Valor comprado", _brl_compact(k["valor_comprado"]))
 
+    # KPIs Linha 2 — Evolução Semanal (WK) + Volume Mensal
+    e2a, e2b = st.columns(2)
+    with e2a:
+        with st.container(border=True):
+            st.markdown("##### :material/show_chart: Evolução Semanal — aprovados × POs")
+            ev = vm["evolucao_semanal"]
+            if ev["weeks"]:
+                st.plotly_chart(
+                    _linhas([f"WK{w}" for w in ev["weeks"]],
+                            [("Itens aprovados", ev["aprovados"], "#3b82f6"),
+                             ("POs emitidos", ev["pos"], "#22c55e")]),
+                    width="stretch", config={"displayModeBar": False})
+                st.caption("Compras acompanha a demanda? Aprovações × POs por semana.")
+            else:
+                st.caption("Sem dados de aprovação/PO no ano.")
+    with e2b:
+        with st.container(border=True):
+            st.markdown("##### :material/bar_chart: Volume Mensal — Itens · SCs · POs")
+            vmn = vm["volume_mensal"]
+            if vmn["meses"]:
+                st.plotly_chart(
+                    _barras_agrupadas([_mes_label(m) for m in vmn["meses"]],
+                                      [("Itens", vmn["itens"], "#3b82f6"),
+                                       ("SCs", vmn["scs"], "#8b5cf6"),
+                                       ("POs", vmn["pos"], "#22c55e")]),
+                    width="stretch", config={"displayModeBar": False})
+            else:
+                st.caption("Sem volume no ano.")
+
     st.divider()
     st.markdown("#### 🚨 Painel de Prioridades — a fila do dia (mais velho primeiro)")
     if vm["painel_prioridades"]:
@@ -318,6 +347,10 @@ def _render_dash_compras_mro(vm):
                    lambda x: (x["departamento"] or "—"), "n", lambda v: f"{int(v)}")
     _bloco_top("👨‍💼 Solicitantes (demanda em aberto)", vm["por_solicitante"],
                lambda x: (x["solicitante"] or "—")[:28], "n", lambda v: f"{int(v)}")
+
+    _bloco_top("📅 Lead Time por Fornecedor (dias)", vm["lead_time_fornecedor"],
+               lambda x: x["fornecedor"][:24], "dias", lambda v: f"{v:g}d",
+               caption="Tempo médio Emissão → PO por fornecedor — maior = alvo de negociação.")
 
 
 def _render_dash_comprador(vm):
@@ -707,6 +740,39 @@ def _receber_por_sc(centros):
             if recebidos and not erros:
                 time.sleep(1.5)
                 st.rerun()
+
+
+def _linhas(x, series, height=260):
+    """Gráfico de linhas multi-série (WK/tempo). series = [(nome, valores, cor)]. v3.5.0."""
+    import plotly.graph_objects as go
+    fig = go.Figure()
+    for nome, vals, cor in series:
+        fig.add_trace(go.Scatter(x=x, y=vals, name=nome, mode="lines+markers",
+                                 line=dict(color=cor, width=2), marker=dict(size=5)))
+    fig.update_layout(
+        template=PAL["plotly_template"], height=height,
+        margin=dict(l=0, r=8, t=10, b=0), paper_bgcolor=PAL["paper_bg"],
+        plot_bgcolor=PAL["plot_bg"], font=dict(family="Inter", color=PAL["texto"]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0, font=dict(size=11)),
+        xaxis=dict(showgrid=False, tickfont=dict(size=10, color=PAL["texto"])),
+        yaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=10, color=PAL["texto"])))
+    return fig
+
+
+def _barras_agrupadas(x, series, height=260):
+    """Barras verticais agrupadas. series = [(nome, valores, cor)]. v3.5.0."""
+    import plotly.graph_objects as go
+    fig = go.Figure()
+    for nome, vals, cor in series:
+        fig.add_trace(go.Bar(x=x, y=vals, name=nome, marker_color=cor))
+    fig.update_layout(
+        barmode="group", template=PAL["plotly_template"], height=height,
+        margin=dict(l=0, r=8, t=10, b=0), paper_bgcolor=PAL["paper_bg"],
+        plot_bgcolor=PAL["plot_bg"], font=dict(family="Inter", color=PAL["texto"]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0, font=dict(size=11)),
+        xaxis=dict(showgrid=False, tickfont=dict(size=10, color=PAL["texto"])),
+        yaxis=dict(showgrid=False, zeroline=False, visible=False))
+    return fig
 
 
 def _bloco_top(titulo, itens, label_fn, value_key, value_fmt, cor=None,

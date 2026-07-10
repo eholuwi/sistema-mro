@@ -11,13 +11,14 @@ ANO = date.today().year
 
 
 def _sc(numero, data_abertura, comprador=None, data_po=None, numero_po=None,
-        status="Em Cotação", solicitante="Fulano", departamento=None):
+        status="Em Cotação", solicitante="Fulano", departamento=None, data_aprovacao=None):
     with database.transaction() as c:
         cur = c.execute(
             "INSERT INTO solicitacoes_compra "
-            "(numero_sc,data_abertura,status,comprador,data_po,numero_po,solicitante,departamento) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (numero, data_abertura, status, comprador, data_po, numero_po, solicitante, departamento))
+            "(numero_sc,data_abertura,status,comprador,data_po,numero_po,solicitante,"
+            "departamento,data_aprovacao) VALUES (?,?,?,?,?,?,?,?,?)",
+            (numero, data_abertura, status, comprador, data_po, numero_po, solicitante,
+             departamento, data_aprovacao))
         return cur.lastrowid
 
 
@@ -52,8 +53,28 @@ def test_assembler_estrutura_ano_corrente_e_comprador(db, make_item):
     assert vm["kpis"]["scpo_medio"] == 9.0
 
 
+def test_assembler_parte2_lead_time_volume_evolucao(db, make_item):
+    it = make_item("PN-LT", estoque=0, minimo=5)
+    _sc_id = _sc("SC-LT", f"{ANO}-03-01", comprador="Miguel", data_po=f"{ANO}-03-05",
+                 data_aprovacao=f"{ANO}-03-02", numero_po="PO-9")
+    _item_sc(_sc_id, it, qtd=4, valor=200.0, fornecedor="GRID TECNOLOGIA")
+
+    vm = montar_visao_compras_mro()
+    # Lead time Emissão→PO = 4 dias (01→05/03)
+    lt = {x["fornecedor"]: x for x in vm["lead_time_fornecedor"]}
+    assert lt["GRID TECNOLOGIA"]["dias"] == 4.0 and lt["GRID TECNOLOGIA"]["pos"] == 1
+    # Volume mensal inclui o mês 03
+    assert any(m.endswith("-03") for m in vm["volume_mensal"]["meses"])
+    # Evolução semanal: 1 PO emitido e 1 item aprovado (n_itens da SC)
+    assert sum(vm["evolucao_semanal"]["pos"]) == 1
+    assert sum(vm["evolucao_semanal"]["aprovados"]) == 1
+
+
 def test_assembler_sem_dados_nao_quebra(db):
     vm = montar_visao_compras_mro()
     assert vm["kpis"]["scs_abertas"] == 0
     assert vm["painel_prioridades"] == []
     assert vm["fornecedores_top"] == []
+    assert vm["lead_time_fornecedor"] == []
+    assert vm["evolucao_semanal"]["weeks"] == []
+    assert vm["volume_mensal"]["meses"] == []
