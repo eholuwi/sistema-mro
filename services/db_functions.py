@@ -481,9 +481,14 @@ def setor_dominante_por_item(item_ids=None, conn=None):
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Colunas MANUAIS (o almox edita e persistem) × TÉCNICAS (o sistema recalcula no sync).
-MONITOR_COLS_MANUAIS = ("status_po", "fornecedor", "comentario", "responsavel")
+# v3.11.0: STATUS PO passou a ser TÉCNICA — derivada do status da SC/PO (aba SCM) no sync.
+MONITOR_COLS_MANUAIS = ("fornecedor", "comentario", "responsavel")
 MONITOR_COLS_TECNICAS = ("numero_sc", "part_number", "nome_item", "status_calc", "unidade",
-                         "tam_po", "saldo_po", "esgotado_em", "faltando_dias", "po")
+                         "tam_po", "saldo_po", "esgotado_em", "faltando_dias", "po", "status_po")
+
+# Nº máximo de linhas exibidas no Monitor (v3.11.0): o comprador vê só as ~15 mais urgentes
+# do dia; o almox (Juan) mantém a grade enxuta. Linhas manuais têm prioridade de exibição.
+MONITOR_MAX_LINHAS = 15
 
 
 def _monitor_status(estoque, minimo):
@@ -526,7 +531,7 @@ def sincronizar_monitor_sc(conn=None, hoje=None, force=False):
         c.execute("UPDATE monitor_sc SET ativo=0 WHERE origem='sistema'")
 
         rows = c.execute(f"""
-            SELECT isc.id AS item_sc_id, sc.numero_sc,
+            SELECT isc.id AS item_sc_id, sc.numero_sc, sc.status AS status_sc,
                    isc.numero_po AS po_item, sc.numero_po AS po_sc,
                    inv.part_number, inv.nome_item, inv.unidade,
                    inv.estoque_atual, inv.estoque_minimo, inv.previsao_ruptura_dias,
@@ -550,19 +555,25 @@ def sincronizar_monitor_sc(conn=None, hoje=None, force=False):
                 faltando = round(float(rupt), 1)
                 esgotado_em = (hoje + timedelta(days=int(rupt))).strftime("%Y-%m-%d")
             po = (r["po_item"] or r["po_sc"] or "")
+            # v3.11.0: STATUS PO derivado automaticamente do status da SC/PO (aba SCM),
+            # chaveado pela linha da SC — substitui a digitação manual do almox.
+            status_po = (r["status_sc"] or "").strip()
             c.execute("""
                 INSERT INTO monitor_sc
                     (linha_id, numero_sc, part_number, nome_item, status_calc, unidade,
-                     tam_po, saldo_po, esgotado_em, faltando_dias, po, origem, ativo, data_atualizacao)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?, 'sistema', 1, ?)
+                     tam_po, saldo_po, esgotado_em, faltando_dias, po, status_po,
+                     origem, ativo, data_atualizacao)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'sistema', 1, ?)
                 ON CONFLICT(linha_id) DO UPDATE SET
                     numero_sc=excluded.numero_sc, part_number=excluded.part_number,
                     nome_item=excluded.nome_item, status_calc=excluded.status_calc,
                     unidade=excluded.unidade, tam_po=excluded.tam_po, saldo_po=excluded.saldo_po,
                     esgotado_em=excluded.esgotado_em, faltando_dias=excluded.faltando_dias,
-                    po=excluded.po, ativo=1, data_atualizacao=excluded.data_atualizacao
+                    po=excluded.po, status_po=excluded.status_po,
+                    ativo=1, data_atualizacao=excluded.data_atualizacao
             """, (linha_id, r["numero_sc"], r["part_number"], r["nome_item"], status_calc,
-                  r["unidade"], r["tam_po"], r["saldo_po"], esgotado_em, faltando, po, agora))
+                  r["unidade"], r["tam_po"], r["saldo_po"], esgotado_em, faltando, po,
+                  status_po, agora))
             ativos += 1
 
         c.execute(
@@ -573,14 +584,22 @@ def sincronizar_monitor_sc(conn=None, hoje=None, force=False):
 
 def listar_monitor_sc(conn=None):
     """Linhas VISÍVEIS do Monitor: itens de sistema ainda pendentes (ativo=1) + linhas
-    manuais, exceto tombstones (removido=1). Mais urgente primeiro (menor 'faltando')."""
+    manuais, exceto tombstones (removido=1). Mais urgente primeiro (menor 'faltando').
+    v3.11.0: limitado às MONITOR_MAX_LINHAS mais urgentes — o comprador vê só a fila do dia.
+    As linhas manuais (do almox) têm prioridade e sempre entram dentro do limite."""
     with transaction(conn) as c:
         rows = c.execute("""
             SELECT * FROM monitor_sc
             WHERE removido=0 AND (origem='manual' OR ativo=1)
             ORDER BY (faltando_dias IS NULL), faltando_dias ASC, numero_sc
         """).fetchall()
-    return [dict(r) for r in rows]
+    rows = [dict(r) for r in rows]
+    if len(rows) <= MONITOR_MAX_LINHAS:
+        return rows
+    manuais = [r for r in rows if r.get("origem") == "manual"]
+    sistema = [r for r in rows if r.get("origem") != "manual"]
+    n_sis = max(0, MONITOR_MAX_LINHAS - len(manuais))
+    return (sistema[:n_sis] + manuais)[:MONITOR_MAX_LINHAS]
 
 
 def salvar_monitor_sc(registros, linha_ids_originais, conn=None, hoje=None):
@@ -1648,10 +1667,19 @@ def itens_com_sc_aberta(conn=None):
 
 
 def listar_recebimentos_sc(limit=300):
+    """Recebimentos (entradas de estoque) vinculados a SC, mais recentes primeiro.
+    v3.11.0: enriquecido com fornecedor, PO, unidade, qtd solicitada e saldo pendente
+    para a Linha do Tempo detalhada."""
     with transaction() as conn:
         rows = conn.execute("""
-            SELECT m.data_hora, sc.numero_sc, i.part_number, i.nome_item,
-                   m.quantidade, isc.documento_nf, m.emitente, m.observacao
+            SELECT m.data_hora, sc.numero_sc, i.part_number, i.nome_item, i.unidade,
+                   m.quantidade, isc.documento_nf, m.emitente, m.observacao,
+                   COALESCE(isc.numero_po, sc.numero_po) AS numero_po,
+                   COALESCE(isc.fornecedor_item, sc.fornecedor) AS fornecedor,
+                   isc.quantidade_solicitada AS qtd_solicitada,
+                   COALESCE(isc.saldo_residual,
+                            isc.quantidade_solicitada - isc.quantidade_recebida) AS pendente,
+                   sc.status AS status_sc
             FROM movimentacoes m
             JOIN itens_sc isc ON isc.id=m.sc_item_id
             JOIN solicitacoes_compra sc ON sc.id=isc.sc_id

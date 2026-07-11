@@ -72,7 +72,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 3.10.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 3.11.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -143,7 +143,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 3.10.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 3.11.0</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -2269,9 +2269,10 @@ elif pagina == "Controle de SC":
     with aba_mon:
         st.markdown("### :material/sensors: Monitor de SC")
         st.caption("Grade viva das SCs abertas — substitui a planilha FUP que ia por e-mail. "
-                   "O **sistema** preenche e atualiza as colunas técnicas todo dia; o "
-                   "**almoxarifado** edita as manuais (STATUS PO, Fornecedor, Comentário, "
-                   "Responsável), adiciona/apaga linhas e marca **Revisado**. Salve no botão abaixo.")
+                   "O **sistema** preenche as colunas técnicas todo dia (incl. o **STATUS PO**, "
+                   "derivado do status da SC/PO) e mostra as **15 linhas mais urgentes**; o "
+                   "**almoxarifado** edita as manuais (Fornecedor, Comentário, Responsável), "
+                   "adiciona/apaga linhas e marca **Revisado**. Salve no botão abaixo.")
 
         _mtop1, _mtop2 = st.columns([3, 1])
         with _mtop2:
@@ -2281,13 +2282,13 @@ elif pagina == "Controle de SC":
                 st.rerun()
 
         _mon_linhas = listar_monitor_sc()
-        _MON_COLS = ["SC", "Produto", "Descrição", "STATUS", "Un", "TAM PO", "Saldo PO",
+        _MON_COLS = ["SC", "Produto", "Descrição", "STATUS", "Un", "Qty Solicitada", "Saldo PO",
                      "Esgotado em", "Faltando (d)", "PO", "STATUS PO", "Fornecedor",
                      "Comentário", "Responsável", "Revisado", "linha_id"]
         if _mon_linhas:
             _df_mon = pd.DataFrame([{
                 "SC": l["numero_sc"], "Produto": l["part_number"], "Descrição": l["nome_item"],
-                "STATUS": l["status_calc"], "Un": l["unidade"], "TAM PO": l["tam_po"],
+                "STATUS": l["status_calc"], "Un": l["unidade"], "Qty Solicitada": l["tam_po"],
                 "Saldo PO": l["saldo_po"], "Esgotado em": l["esgotado_em"],
                 "Faltando (d)": l["faltando_dias"], "PO": l["po"], "STATUS PO": l["status_po"],
                 "Fornecedor": l["fornecedor"], "Comentário": l["comentario"],
@@ -2306,9 +2307,14 @@ elif pagina == "Controle de SC":
                 "Revisado": st.column_config.CheckboxColumn(
                     "Revisado", help="Marque quando confirmar que o material é necessário — "
                                      "o comprador confia nesse sinal. Reseta todo dia."),
-                "TAM PO": st.column_config.NumberColumn(format="%.0f"),
+                "Qty Solicitada": st.column_config.NumberColumn(
+                    format="%.0f", help="Quantidade solicitada na SC (qtd da linha)."),
                 "Saldo PO": st.column_config.NumberColumn(format="%.0f"),
                 "Faltando (d)": st.column_config.NumberColumn(format="%.1f"),
+                "STATUS PO": st.column_config.TextColumn(
+                    "STATUS PO", disabled=True,
+                    help="Status da SC/PO — preenchido automaticamente pelo sistema (aba SCM do "
+                         "Relatório de SCs). Não é editável."),
                 "linha_id": None,
             },
         )
@@ -2320,7 +2326,7 @@ elif pagina == "Controle de SC":
             _registros = [{
                 "numero_sc": _mon_nz(r.get("SC")), "part_number": _mon_nz(r.get("Produto")),
                 "nome_item": _mon_nz(r.get("Descrição")), "status_calc": _mon_nz(r.get("STATUS")),
-                "unidade": _mon_nz(r.get("Un")), "tam_po": _mon_nz(r.get("TAM PO")),
+                "unidade": _mon_nz(r.get("Un")), "tam_po": _mon_nz(r.get("Qty Solicitada")),
                 "saldo_po": _mon_nz(r.get("Saldo PO")), "esgotado_em": _mon_nz(r.get("Esgotado em")),
                 "faltando_dias": _mon_nz(r.get("Faltando (d)")), "po": _mon_nz(r.get("PO")),
                 "status_po": _mon_nz(r.get("STATUS PO")), "fornecedor": _mon_nz(r.get("Fornecedor")),
@@ -2920,23 +2926,55 @@ elif pagina == "Controle de SC":
     with aba_h:
         with st.container(border=True):
             st.markdown("### :material/history: Linha do Tempo de Recebimentos")
-            st.caption("Registro cronológico de entradas vinculadas a S.C.")
-            
+            st.caption("Registro cronológico de entradas vinculadas a S.C. — quem "
+                       "entregou, quanto, contra qual PO e o que ainda falta na SC.")
+
             recebimentos = listar_recebimentos_sc(limit=300)
-            if recebimentos:
-                # UX: Layout de lista vertical para melhor leitura de logs
-                for r in recebimentos:
-                    with st.container(border=True):
-                        # Linha Principal: PN + Item + Quantidade (Destaque Mono)
-                        st.markdown(f"`{r['part_number']}` — **{r['nome_item']}** | `+{r['quantidade']} UN`")
-                        
-                        # Linha Secundária: Detalhes em caption para não poluir visual
-                        c_meta1, c_meta2, c_meta3 = st.columns([2, 2, 3])
-                        c_meta1.caption(f":material/calendar_month: **{fmt(r['data_hora'])}**")
-                        c_meta2.caption(f":material/receipt_long: **SC:** {r['numero_sc']} | **NF:** {r['documento_nf'] or '—'}")
-                        c_meta3.caption(f":material/person: **Recebido por:** {r['emitente']} | {r['observacao']}")
-            else:
+            if not recebimentos:
                 st.info("ℹ️ Nenhum recebimento vinculado a SC encontrado no histórico.")
+            else:
+                _tot_qtd = sum(float(r["quantidade"] or 0) for r in recebimentos)
+                _forns = len({(r["fornecedor"] or "").strip()
+                              for r in recebimentos if r["fornecedor"]})
+                _rc = st.columns(3)
+                _rc[0].metric("Recebimentos", len(recebimentos))
+                _rc[1].metric("Qtd total recebida", f"{_tot_qtd:g}")
+                _rc[2].metric("Fornecedores distintos", _forns)
+                st.caption(f"Últimos {len(recebimentos)} recebimentos (mais recentes primeiro).")
+                st.divider()
+
+                from itertools import groupby
+                for _dia, _grupo in groupby(recebimentos,
+                                            key=lambda r: (r["data_hora"] or "")[:10]):
+                    _grupo = list(_grupo)
+                    st.markdown(f"#### :material/calendar_month: {fmt(_dia)} · "
+                                f"{len(_grupo)} recebimento(s)")
+                    for r in _grupo:
+                        with st.container(border=True):
+                            _un = r["unidade"] or "UN"
+                            _pend = r.get("pendente")
+                            _pend_txt = (f"Ainda falta **{float(_pend):g} {_un}**"
+                                         if _pend is not None and float(_pend) > 0
+                                         else "**SC completa**")
+                            _hora = (r["data_hora"] or "")[11:16] or "—"
+                            st.markdown(
+                                f"`{r['part_number']}` — **{r['nome_item']}**  |  "
+                                f":material/add_box: **+{float(r['quantidade'] or 0):g} {_un}**"
+                                f"  ·  {_pend_txt}")
+                            _c1, _c2, _c3 = st.columns([3, 3, 2])
+                            _c1.caption(f":material/apartment: **Fornecedor:** "
+                                        f"{r['fornecedor'] or '—'}")
+                            _c2.caption(f":material/receipt_long: **SC:** {r['numero_sc']} · "
+                                        f"**PO:** {r['numero_po'] or '—'} · "
+                                        f"**NF:** {r['documento_nf'] or '—'}")
+                            _c3.caption(f":material/schedule: **{_hora}**")
+                            _d1, _d2 = st.columns([3, 3])
+                            _qs = r.get("qtd_solicitada")
+                            _d1.caption(f":material/inventory_2: Solicitado na SC: "
+                                        f"{_qs if _qs is not None else '—'} {_un}")
+                            _d2.caption(f":material/person: Recebido por: "
+                                        f"{r['emitente'] or '—'}"
+                                        + (f" · {r['observacao']}" if r['observacao'] else ""))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 📇 FICHA 360 DO MATERIAL (v2.6.0) — vida útil do item em uma tela (read-only,
