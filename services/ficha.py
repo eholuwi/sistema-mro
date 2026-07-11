@@ -247,8 +247,6 @@ def montar_ficha_360(item_id, conn=None):
             "lead_time": calc["lead_time"],
             "lead_time_origem": calc["lead_time_origem"],
             "lead_time_maturidade": calc["lead_time_maturidade"],
-            "estoque_seguranca": calc["estoque_seguranca"],
-            "estoque_seguranca_origem": calc["estoque_seguranca_origem"],
             "consumo_diario": calc["consumo_diario"],
             "alvo": qtd["alvo"],
             "alvo_origem": qtd["alvo_origem"],

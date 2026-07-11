@@ -1,10 +1,9 @@
-"""v3.3.0 — Correção do estoque de segurança ("números quebrados").
+"""v3.7.0 — Estoque de Segurança DESATIVADO (recálculo e recebimento).
 
-Regressão do bug: o recebimento de SC gravava a SUGESTÃO (consumo × lead time × 1,5,
-fracionária) na coluna MANUAL `estoque_seguranca`, contaminando o parâmetro do gestor
-(o `estoque_seguranca_efetivo` prioriza o manual → o decimal aparecia na Ficha 360 e no
-Assistente). Agora o recebimento delega a `_recalcular_ruptura_by_id`, que grava só a
-SUGESTÃO em `estoque_seguranca_calculado` (arredondada p/ CIMA) e NÃO toca no manual.
+O buffer do MRO passou a ser o próprio Mínimo do Neidson. `_recalcular_ruptura_by_pn`
+não grava mais `estoque_seguranca_calculado` (só `previsao_ruptura_dias`, usado pelo
+Monitor de SC), e nenhum fluxo (inclusive o recebimento de SC) toca nas colunas de
+segurança — que permanecem no schema, porém órfãs.
 """
 import database
 from services import db_functions as F
@@ -22,8 +21,8 @@ def _seg(item_id):
     conn = database.get_connection()
     try:
         r = conn.execute(
-            "SELECT estoque_seguranca, estoque_seguranca_calculado FROM inventario WHERE id=?",
-            (item_id,)).fetchone()
+            "SELECT estoque_seguranca, estoque_seguranca_calculado, previsao_ruptura_dias "
+            "FROM inventario WHERE id=?", (item_id,)).fetchone()
         return dict(r)
     finally:
         conn.close()
@@ -41,10 +40,21 @@ def _abrir_sc(item_id, numero_sc="SC-SEG", qtd=10):
     return sc_id, F.listar_itens_sc(sc_id)[0]["id"]
 
 
-def test_recebimento_nao_sobrescreve_seguranca_manual(db, make_item):
-    # Consumo/lead que davam segurança FRACIONÁRIA (o bug): 0,4667 × 5 × 1,5 = 3,50.
+def test_recalcular_atualiza_ruptura_mas_nao_seguranca(db, make_item):
+    # A previsão de ruptura é recomputada; a segurança calculada NÃO é mais escrita.
+    item_id = make_item("PN-SEG2", estoque=100, minimo=10, lead=7)
+    _set(item_id, consumo_medio_diario=2.0, estoque_seguranca_calculado=0)
+    with database.transaction() as c:
+        F._recalcular_ruptura_by_pn(c, "PN-SEG2")
+    seg = _seg(item_id)
+    assert seg["previsao_ruptura_dias"] == 50          # 100 / 2 = 50 dias
+    assert seg["estoque_seguranca_calculado"] == 0     # órfã: não é mais recomputada
+
+
+def test_recebimento_nao_toca_colunas_de_seguranca(db, make_item):
     item_id = make_item("PN-SEG", estoque=0, minimo=5, lead=5)
-    _set(item_id, consumo_medio_diario=0.4667, estoque_seguranca=3)  # 3 = manual do gestor
+    _set(item_id, consumo_medio_diario=0.4667, estoque_seguranca=3,
+         estoque_seguranca_calculado=0)
 
     sc_id, item_sc_id = _abrir_sc(item_id)
     ok, msg = F.registrar_recebimento_sc(sc_id, item_sc_id, 4, CC,
@@ -52,19 +62,6 @@ def test_recebimento_nao_sobrescreve_seguranca_manual(db, make_item):
     assert ok, msg
 
     seg = _seg(item_id)
-    # 1) O parâmetro MANUAL do gestor permanece INTACTO (o bug o trocava por ~3,5).
+    # Ambas as colunas de segurança permanecem intactas (o recebimento não as altera).
     assert seg["estoque_seguranca"] == 3
-    # 2) A SUGESTÃO é inteira (arredondada p/ cima), nunca fracionária.
-    ssc = seg["estoque_seguranca_calculado"]
-    assert ssc == int(ssc)
-    assert ssc == 4      # ceil(0,4667 × 5 × 1,5) = ceil(3,50) = 4
-
-
-def test_sugestao_seguranca_arredonda_para_cima(db, make_item):
-    # O cálculo da sugestão sempre devolve INTEIRO (ceil), não fração "quebrada".
-    item_id = make_item("PN-SEG2", estoque=100, minimo=10, lead=7)
-    _set(item_id, consumo_medio_diario=1.4333)   # 1,4333 × 7 × 1,5 = 15,05
-    with database.transaction() as c:
-        F._recalcular_ruptura_by_pn(c, "PN-SEG2")
-    ssc = _seg(item_id)["estoque_seguranca_calculado"]
-    assert ssc == 16          # ceil(15,05) — inteiro, arredonda p/ cima
+    assert seg["estoque_seguranca_calculado"] == 0

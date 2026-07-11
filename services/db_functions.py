@@ -25,6 +25,7 @@ SOLICITANTES_MRO = {
     "jasiva lopes",
     "luis gabriel arruda de oliveira",
     "sidinei correa alfon",
+    "juan tarco pinheiro de araujo",
 }
 
 PALAVRAS_CRITICAS = ("parada", "critico", "critica", "urgente", "linha")
@@ -432,17 +433,13 @@ def _recalcular_ruptura_by_pn(conn, part_number):
             return
         consumo = r["consumo_medio_diario"] or 0
         ruptura = (r["estoque_atual"]/consumo) if consumo > 0 else PREVISAO_RUPTURA_SEM_RISCO
-        # v2.2.0: estoque_seguranca virou parâmetro MANUAL do gestor (entre mín e
-        # máx) e NÃO é mais sobrescrito aqui. Gravamos apenas a SUGESTÃO calculada
-        # (consumo × lead_time × 1,5) em estoque_seguranca_calculado.
-        # v3.3.0: arredonda p/ CIMA — segurança nunca deve ser menor (nem fracionária).
-        # v3.4.0: usa o lead default quando não há lead cadastrado (mesma base do
-        # lead_time_efetivo do ROP) — sem isso, item com consumo mas sem lead zerava.
-        lead = r["lead_time_dias"] or LEAD_TIME_DEFAULT_DIAS
-        seguranca_calc = math.ceil(consumo*lead*FATOR_ESTOQUE_SEGURANCA)
+        # v3.7.0: o Estoque de Segurança foi desativado (o buffer virou o próprio Mínimo
+        # do Neidson). Não recalculamos mais `estoque_seguranca_calculado` — só a
+        # previsão de ruptura (usada pelo Monitor de SC). As colunas de segurança
+        # permanecem no schema (não-destrutivo), mas ficam órfãs.
         c.execute("""
-            UPDATE inventario SET previsao_ruptura_dias=?,estoque_seguranca_calculado=?,data_atualizacao=? WHERE id=?
-        """,(ruptura,seguranca_calc,datetime.now().strftime("%Y-%m-%d %H:%M:%S"),r["id"]))
+            UPDATE inventario SET previsao_ruptura_dias=?,data_atualizacao=? WHERE id=?
+        """,(ruptura,datetime.now().strftime("%Y-%m-%d %H:%M:%S"),r["id"]))
 
 def _recalcular_ruptura_by_id(conn, item_id):
     with transaction(conn) as c:
@@ -451,6 +448,33 @@ def _recalcular_ruptura_by_id(conn, item_id):
         ).fetchone()
         if r:
             _recalcular_ruptura_by_pn(c, r["part_number"])
+
+
+def setor_dominante_por_item(item_ids=None, conn=None):
+    """{item_id: setor dominante} derivado do CONSUMO REAL (saídas por requisição).
+
+    v3.7.0 — Para cada item, o setor mais frequente entre suas saídas reais
+    (`SAIDA_REAL_WHERE`), ignorando setores vazios. Itens sem consumo real não entram
+    no mapa (o chamador aplica o fallback, ex.: '—'). UMA única query — evita N
+    consultas por render. Substitui o `inventario.setor_responsavel` (98% 'Improdutivo',
+    inútil) como base do "Setor" no Dashboard de Comprador (Setores em aberto) e no
+    Assistente de Reposição (coluna/filtro Setor)."""
+    with transaction(conn) as c:
+        rows = c.execute(f"""
+            SELECT item_id, setor, COUNT(*) AS n
+            FROM movimentacoes
+            WHERE {SAIDA_REAL_WHERE}
+              AND setor IS NOT NULL AND TRIM(setor) <> ''
+            GROUP BY item_id, setor
+        """).fetchall()
+    filtro = set(item_ids) if item_ids is not None else None
+    por_item = {}
+    for r in rows:
+        if filtro is not None and r["item_id"] not in filtro:
+            continue
+        por_item.setdefault(r["item_id"], Counter())[r["setor"]] += r["n"]
+    return {iid: cont.most_common(1)[0][0] for iid, cont in por_item.items()}
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MOVIMENTAÇÕES

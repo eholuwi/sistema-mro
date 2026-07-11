@@ -19,6 +19,7 @@ from services.constants import (
 from services.db_functions import (
     _preco_valoracao, calcular_giro, listar_inventario, listar_scs,
     obter_valor_imobilizado, obter_abc_valor, transaction,
+    setor_dominante_por_item,
 )
 from services.planejamento import gerar_scs_sugeridas, gerar_sugestoes_reposicao
 
@@ -187,9 +188,10 @@ def montar_visao_compras_mro(hoje=None):
         """, (ano_f,)).fetchall()]
 
         itens_abertos = [dict(r) for r in conn.execute("""
-            SELECT sc.numero_sc, sc.data_abertura, sc.comprador, sc.solicitante, sc.departamento,
-                   inv.part_number, inv.nome_item, inv.estoque_atual, inv.estoque_minimo,
-                   inv.setor_responsavel
+            SELECT sc.numero_sc, sc.data_abertura, sc.data_aprovacao, sc.numero_po, sc.status,
+                   sc.comprador, sc.solicitante, sc.departamento,
+                   inv.id AS item_id, inv.part_number, inv.nome_item,
+                   inv.estoque_atual, inv.estoque_minimo
             FROM itens_sc i
             JOIN solicitacoes_compra sc ON sc.id = i.sc_id
             JOIN inventario inv ON inv.id = i.item_id
@@ -235,7 +237,8 @@ def montar_visao_compras_mro(hoje=None):
         scpo_hist[_faixa_sc_po(d)] += 1
     scpo_medio = round(sum(scpo) / len(scpo), 1) if scpo else None
 
-    # Painel de Prioridades — itens abertos, mais velho primeiro (a fila do dia)
+    # Painel de Prioridades — itens abertos, mais velho primeiro (a fila do dia).
+    # v3.7.0 (A1): sem a coluna "Setor" (setor_responsavel era 98% "Improdutivo").
     painel = []
     itens_criticos = 0
     for it in itens_abertos:
@@ -246,13 +249,15 @@ def montar_visao_compras_mro(hoje=None):
             "aging": aging if aging is not None else -1,
             "sc": it["numero_sc"], "item": it["nome_item"], "pn": it["part_number"],
             "comprador": (it["comprador"] or "—"),
-            "departamento": (it["setor_responsavel"] or "—"),
         })
     painel.sort(key=lambda x: x["aging"], reverse=True)
 
+    # Distribuição do aging — v3.7.0 (A1): base APROVAÇÃO → hoje (definição do Luis);
+    # itens sem data de aprovação ficam fora das faixas.
     aging_dist = {f: 0 for f in AGING_FAIXAS}
-    for p in painel:
-        fx = _faixa_aging(p["aging"] if p["aging"] >= 0 else None)
+    for it in itens_abertos:
+        d = _dias_entre(it.get("data_aprovacao"), hoje_iso)
+        fx = _faixa_aging(d if (d is not None and d >= 0) else None)
         if fx:
             aging_dist[fx] += 1
 
@@ -276,9 +281,14 @@ def montar_visao_compras_mro(hoje=None):
          for c, v in comp.items()],
         key=lambda x: x["valor"], reverse=True)
 
+    # Demanda "em aberto" (D3): só SCs em COTAÇÃO e AINDA sem PO (com saldo pendente).
+    # Setor = setor DOMINANTE derivado do consumo real (não o setor_responsavel).
+    itens_d3 = [it for it in itens_abertos
+                if "Cota" in (it.get("status") or "") and not (it.get("numero_po") or "").strip()]
+    setor_dom = setor_dominante_por_item([it["item_id"] for it in itens_d3])
     dep_cont, sol_cont = Counter(), Counter()
-    for it in itens_abertos:
-        dep_cont[it["setor_responsavel"] or "—"] += 1
+    for it in itens_d3:
+        dep_cont[setor_dom.get(it["item_id"], "—")] += 1
         sol_cont[(it["solicitante"] or "—").title()] += 1
     por_departamento = [{"departamento": k, "n": v} for k, v in dep_cont.most_common()]
     por_solicitante = [{"solicitante": k, "n": v} for k, v in sol_cont.most_common(10)]

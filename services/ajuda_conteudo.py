@@ -36,7 +36,7 @@ seu **apoio** — a base do Compras (mínimo/máximo/categoria) fica intocada.
   sistema mostra o preview (ex.: *5 L ÷ 5 = +1 GL*) e soma já convertido.
 - Viu **:material/warning: revisar unidade**? Avise o comprador para cadastrar o fator.
 
-**3. Contagem física — `:material/assignment: Inventário` → `Realizar Contagem Física`**
+**3. Contagem física — `:material/assignment: Saldo em Estoque` → `Realizar Contagem Física`**
 - Informe a quantidade real, o **local (1ª e 2ª locação)** e observações; a diferença vira
   ajuste (não conta como consumo).
 
@@ -60,7 +60,7 @@ time e **rascunho de e-mail** de cotação.
 **3. Curar conversão — `:material/add: Gerenciar Itens`** — quando compra em unidade diferente da de
 estoque (ex.: GL × L), cadastre a **unidade de compra** e o **fator** (o sistema sugere).
 
-**4. Ler a demanda — `:material/badge: Ficha 360` / `:material/assignment: Inventário`** — **Padrão de demanda** e **XYZ**
+**4. Ler a demanda — `:material/badge: Ficha 360` / `:material/assignment: Saldo em Estoque`** — **Padrão de demanda** e **XYZ**
 ajudam a escolher a política de compra. É **diagnóstico**, não muda a lista sozinho.
 
 **5. Atualizar dados — `:material/download: Importar Relatório de SCs`** — atualiza SCs, preços, fornecedores
@@ -148,7 +148,7 @@ MANUAL = [
         ],
     },
     {
-        "tela": ":material/assignment: Inventário",
+        "tela": ":material/assignment: Saldo em Estoque",
         "intro": "A lista completa dos materiais, com filtros, status e a contagem física.",
         "itens": [
             _item(

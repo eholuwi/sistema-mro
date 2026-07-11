@@ -89,6 +89,6 @@ def test_manual_todo_item_tem_explicacao_e_eli5():
 
 def test_manual_cobre_telas_essenciais():
     telas = " ".join(s["tela"] for s in MANUAL)
-    for chave in ("Dashboard", "Inventário", "Ficha 360", "Requisição",
+    for chave in ("Dashboard", "Saldo em Estoque", "Ficha 360", "Requisição",
                   "Controle de SC", "Gerenciar Itens", "Configurações"):
         assert chave in telas, f"Manual não cobre: {chave}"

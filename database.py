@@ -401,13 +401,17 @@ def criar_banco():
         )
     """)
 
-    # Seed dos solicitantes MRO atuais (mesmos 3 da antiga constante SOLICITANTES_MRO).
-    for _nome in ("Jasiva Lopes", "Luis Gabriel Arruda de Oliveira", "Sidinei Correa Alfon"):
+    # Seed dos solicitantes MRO atuais. v3.7.0: + Juan Tarco Pinheiro de Araujo (A5).
+    for _nome in ("Jasiva Lopes", "Luis Gabriel Arruda de Oliveira", "Sidinei Correa Alfon",
+                  "Juan Tarco Pinheiro de Araujo"):
         _norm = _normalizar_nome(_nome)
         c.execute(
             "INSERT OR IGNORE INTO solicitantes_mro (nome, nome_norm, incluir_mro) VALUES (?,?,1)",
             (_nome, _norm),
         )
+        # Garante incluir_mro=1 mesmo se a linha já existir (ex.: importada via SCM USERS
+        # com incluir_mro=0). Idempotente — não há UI admin para marcar manualmente.
+        c.execute("UPDATE solicitantes_mro SET incluir_mro=1 WHERE nome_norm=?", (_norm,))
 
     cols_sc = {r[1] for r in conn.execute("PRAGMA table_info(solicitacoes_compra)")}
     novas_cols_sc = {
@@ -564,7 +568,7 @@ def criar_banco():
 
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 3.6.0")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 3.7.0")
 
 
 def _migrar(conn):

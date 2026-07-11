@@ -1,7 +1,7 @@
 from services.db_functions import obter_dados_dashboard 
 import streamlit as st
 import pandas as pd
-import json, io, os, sys, time, urllib.parse
+import json, io, math, os, sys, time, urllib.parse
 from streamlit_option_menu import option_menu
 from datetime import date, datetime
 from services.styles import inject_custom_css
@@ -36,12 +36,12 @@ from services.db_functions import (
     obter_evolucao_preco, obter_abc_valor,
     obter_fornecedores_por_item,
     filtrar_itens_por_busca, sincronizar_fornecedores_lista,
-    sugerir_conversao,
+    sugerir_conversao, setor_dominante_por_item,
 )
 from services.constants import UNIDADES_COMPRA_SUGERIDAS, FATOR_CONVERSAO_PADRAO
 from services.planejamento import (
     gerar_sugestoes_reposicao, sugestao_para_item_sc,
-    registrar_desfecho_sugestao, listar_sugestoes, buscar_sc_id_por_numero,
+    registrar_desfecho_sugestao, buscar_sc_id_por_numero,
     agrupar_por_tipo_material, resumir_grupo_sc,
 )
 from services.ficha import (
@@ -64,7 +64,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 3.6.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 3.7.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -135,13 +135,13 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 3.6.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 3.7.0</span>
     </div>
     """, unsafe_allow_html=True)
 
     # 2. Navegação (Option Menu)
 
-    opcoes_limpas = ["Dashboard", "Inventário", "Ficha 360", "Gerenciar Itens", "Movimentações", "Requisição", "Controle de SC", "Ajuda", "Configurações"]
+    opcoes_limpas = ["Dashboard", "Saldo em Estoque", "Ficha 360", "Gerenciar Itens", "Movimentações", "Requisição", "Controle de SC", "Ajuda", "Configurações"]
 
     escolha_limpa = option_menu(
         menu_title=None,
@@ -256,24 +256,6 @@ def _render_dash_almoxarifado(vm):
                  f"{k['cobertura_media']}d" if k["cobertura_media"] is not None else "—")
 
     st.divider()
-    st.markdown("#### 🚨 Prioridades do Dia")
-    pri = vm["prioridades"]
-    pc1, pc2, pc3 = st.columns(3)
-    pc1.metric("🟠 Abaixo do mínimo", pri["abaixo_minimo"])
-    pc2.metric("🟡 Cobertura < lead time", pri["cobertura_menor_lead"])
-    pc3.metric("🔴 Comprar agora (lista)", len(pri["comprar_agora"]))
-    if pri["comprar_agora"]:
-        dfp = pd.DataFrame([{
-            "Prio": "🔴" if p["urgente"] else "🟠",
-            "PN": p["pn"], "Item": (p["item"] or "")[:38],
-            "Estoque": p["estoque"], "Mínimo": p["minimo"],
-            "Cobertura(d)": (p["cobertura"] if (p["cobertura"] is not None
-                             and p["cobertura"] < PREVISAO_RUPTURA_SEM_RISCO) else None),
-        } for p in pri["comprar_agora"]])
-        st.dataframe(dfp, hide_index=True, width="stretch",
-                     column_config={"Cobertura(d)": st.column_config.NumberColumn(format="%.1f")})
-
-    st.divider()
     s1, s2, s3 = st.columns(3)
     with s1:
         with st.container(border=True):
@@ -286,12 +268,14 @@ def _render_dash_almoxarifado(vm):
     with s2:
         with st.container(border=True):
             st.markdown("##### :material/timeline: Cobertura (dias)")
+            st.caption("Estoque atual ÷ consumo diário = quantos dias o estoque dura no ritmo atual.")
             cf = vm["cobertura_faixa"]
             st.plotly_chart(_barv(list(cf.keys()), [int(v) for v in cf.values()]),
                             width="stretch", config={"displayModeBar": False})
     with s3:
         with st.container(border=True):
             st.markdown("##### :material/leaderboard: Curva ABC (valor)")
+            st.caption("Classe por valor consumido em 90 d: A = 80% do valor, B = próximos 15%, C = resto.")
             a = vm["abc"]
             st.plotly_chart(
                 _barv(["A", "B", "C"], [a["A"]["n"], a["B"]["n"], a["C"]["n"]],
@@ -320,10 +304,10 @@ def _render_dash_almoxarifado(vm):
     tc1, tc2 = st.columns(2)
     with tc1:
         _bloco_top("📥 Top materiais recebidos (mês)", vm["top_recebidos"],
-                   lambda x: x["pn"], "q", lambda v: f"{v:g}")
+                   lambda x: f'{x["pn"]} — {(x["item"] or "")[:26]}', "q", lambda v: f"{v:g}")
     with tc2:
         _bloco_top("📤 Materiais mais consumidos (mês)", vm["mais_consumidos"],
-                   lambda x: x["pn"], "q", lambda v: f"{v:g}")
+                   lambda x: f'{x["pn"]} — {(x["item"] or "")[:26]}', "q", lambda v: f"{v:g}")
     _bloco_top("🏭 Setores que mais retiram", vm["setores"],
                lambda x: x["setor"], "n", lambda v: f"{int(v)}")
 
@@ -404,7 +388,7 @@ def _render_dash_compras_mro(vm):
         dfp = pd.DataFrame([{
             "Aging (d)": (p["aging"] if p["aging"] >= 0 else None),
             "SC": p["sc"], "Item": (p["item"] or "")[:36], "PN": p["pn"],
-            "Comprador": p["comprador"], "Setor": p["departamento"],
+            "Comprador": p["comprador"],
         } for p in vm["painel_prioridades"][:50]])
         st.dataframe(dfp, hide_index=True, width="stretch", height=380,
                      column_config={"Aging (d)": st.column_config.NumberColumn(format="%d")})
@@ -420,7 +404,8 @@ def _render_dash_compras_mro(vm):
             ad = vm["aging_dist"]
             st.plotly_chart(_barv(list(ad.keys()), [int(v) for v in ad.values()]),
                             width="stretch", config={"displayModeBar": False})
-            st.caption("Faixas de dias em aberto (verde → vermelho).")
+            st.caption("Faixas de dias desde a **aprovação** da SC (verde → vermelho) · "
+                       "itens sem data de aprovação ficam fora.")
     with cb:
         with st.container(border=True):
             st.markdown("#### :material/schedule: Tempo SC → PO")
@@ -1084,8 +1069,8 @@ if pagina == "Dashboard":
 # ══════════════════════════════════════════════════════════════════════════════
 # INVENTÁRIO
 # ══════════════════════════════════════════════════════════════════════════════
-elif pagina == "Inventário":
-    st.title(":material/assignment: Inventário MRO")
+elif pagina == "Saldo em Estoque":
+    st.title(":material/assignment: Saldo em Estoque")
     itens = listar_inventario()
     if not itens:
         st.info("Nenhum item cadastrado. Vá em **:material/add: Gerenciar Itens** para começar.")
@@ -1452,10 +1437,8 @@ elif pagina == "Gerenciar Itens":
                     ed_min = st.number_input("Estoque Mínimo (30 dias)", min_value=0.0, value=float(item_sel.get('estoque_minimo') or 0), key="ed_min")
                     ed_max = st.number_input("Estoque Máximo (60 dias)", min_value=0.0, value=float(item_sel.get('estoque_maximo') or 0), key="ed_max",
                                              help="0 = usa o cálculo automático (Mínimo × 2).")
-                    _seg_calc = float(item_sel.get('estoque_seguranca_calculado') or 0)
-                    ed_seg = st.number_input("Estoque de Segurança", min_value=0.0, value=float(item_sel.get('estoque_seguranca') or 0), key="ed_seg",
-                                             help=f"Parâmetro manual do gestor (entre Mínimo e Máximo). "
-                                                  f"Sugestão calculada (consumo×lead time×1,5, arredondada p/ cima): {_seg_calc:.0f}.")
+                    # v3.7.0: Estoque de Segurança desativado — o buffer virou o próprio
+                    # Mínimo do Neidson (não deixar atingir o mínimo nem passar do máximo).
                     # Nota: Estoque atual NÃO deve ser editado aqui, apenas via Movimentação/Inventário
                     st.markdown(f"**Estoque Atual:** `{item_sel['estoque_atual']}` (Alterar em *Inventário*)")
                     st.markdown(f"**Status:** `{item_sel['status_material']}`")
@@ -1503,7 +1486,6 @@ elif pagina == "Gerenciar Itens":
                         "lead_time_dias": ed_lead,
                         "estoque_minimo": ed_min,
                         "estoque_maximo": ed_max,
-                        "estoque_seguranca": ed_seg,
                         "unidade_compra": (ed_uc or "").strip() or None,
                         "fator_conversao": ed_fator if ed_fator > 0 else FATOR_CONVERSAO_PADRAO,
                     }
@@ -1724,33 +1706,14 @@ elif pagina == "Movimentações":
             if df_series.empty:
                 st.caption("Sem dados suficientes.")
             else:
-                ca, cb, cc = st.columns(3)
-                with ca:
-                    st.markdown("**:material/trending_up: Tendência de consumo**")
-                    if "Tendência" in df_series.columns:
-                        vc = df_series["Tendência"].value_counts()
-                        st.metric("🔺 Em alta", int(vc.get("Alta", 0)),
+                st.markdown("**:material/trending_up: Tendência de consumo**")
+                if "Tendência" in df_series.columns:
+                    vc = df_series["Tendência"].value_counts()
+                    tca = st.columns(3)
+                    tca[0].metric("🔺 Em alta", int(vc.get("Alta", 0)),
                                   help="Consumo dos últimos 30d mais de 15% acima dos 30d anteriores.")
-                        st.metric("🔻 Em queda", int(vc.get("Queda", 0)))
-                        st.metric(":material/remove: Estável", int(vc.get("Estável", 0)))
-                with cb:
-                    st.markdown("**:material/shield: Menor cobertura (dias)**")
-                    st.caption("Estoque atual ÷ consumo diário")
-                    if "Cobertura(d)" in df_series.columns:
-                        _cols_lc = [c for c in ["PN", "Nome", "Cobertura(d)"] if c in df_series.columns]
-                        low = (df_series[df_series["Cobertura(d)"] < 900]
-                               .nsmallest(8, "Cobertura(d)")[_cols_lc])
-                        st.dataframe(low, hide_index=True, width="stretch", height=250)
-                with cc:
-                    st.markdown("**:material/sync: Itens parados (giro 0 c/ estoque)**")
-                    st.caption("Capital imobilizado sem saída no período.")
-                    if "Giro(anual)" in df_series.columns:
-                        parados = df_series[(df_series["Giro(anual)"] == 0) &
-                                            (df_series["Estoque Atual"] > 0)]
-                        st.caption(f"Total: {len(parados)} itens")
-                        _cols_par = [c for c in ["PN", "Nome", "Estoque Atual"] if c in df_series.columns]
-                        st.dataframe(parados[_cols_par].head(8),
-                                     hide_index=True, width="stretch", height=210)
+                    tca[1].metric("🔻 Em queda", int(vc.get("Queda", 0)))
+                    tca[2].metric(":material/remove: Estável", int(vc.get("Estável", 0)))
 
         st.markdown("---")
 
@@ -2186,7 +2149,7 @@ elif pagina == "Controle de SC":
     # Estrutura de abas mantida conforme solicitado
     aba_mon, aba_assist, aba_forn, aba_nova_sc, aba_rec, aba_ed, aba_h, aba_import = st.tabs([
     ":material/sensors: Monitor", ":material/psychology: Assistente de Reposição", ":material/apartment: Fornecedores & Cotação", ":material/add: Nova SC",
-    ":material/inventory_2: Receber Material", ":material/sync: Atualizar Status", ":material/history: Histórico", ":material/download: Importar Relatório de SCs"
+    ":material/inventory_2: Receber Material", ":material/sync: Detalhes SC", ":material/history: Histórico", ":material/download: Importar Relatório de SCs"
     ])
     # ══════════════════════════════════════════════════════════════════════════════
     # 📡 MONITOR DE COMPRAS 
@@ -2428,40 +2391,43 @@ elif pagina == "Controle de SC":
         with st.spinner("Calculando sugestões de reposição…"):
             sugestoes = gerar_sugestoes_reposicao(incluir_sem_movimentacao=incluir_sem_mov)
 
+        # v3.7.0 — Setor DOMINANTE (derivado do consumo real) no lugar do
+        # `setor_responsavel` (98% "Improdutivo", inútil); e Qtd Sugerida = MÁXIMO
+        # cadastrado do material (decisão D2). Fallback ao híbrido só quando não há
+        # máximo resolvido (> 0), para nunca criar SC com quantidade 0.
+        _setor_dom = setor_dominante_por_item([s["item_id"] for s in sugestoes])
+        for s in sugestoes:
+            s["setor"] = _setor_dom.get(s["item_id"], "—")
+            _qmax = int(math.ceil(s.get("estoque_maximo") or 0))
+            if _qmax > 0:
+                s["qtd_sugerida"] = _qmax
+
         if not sugestoes:
             st.success(":material/check_circle: Nenhuma reposição necessária agora. Estoque + saldo "
                        "residual cobrem o horizonte planejado para todos os itens.")
         else:
             # --- Filtros ---
-            cflt1, cflt2, cflt3 = st.columns(3)
+            cflt1, cflt2 = st.columns(2)
             with cflt1:
                 so_criticos = st.checkbox("🔴 Só críticos", value=False, key="rep_so_crit",
                                           help="Itens no/abaixo do ponto de pedido (ROP).")
             with cflt2:
-                setores = sorted({s["setor"] for s in sugestoes if s["setor"]})
-                f_setor = st.selectbox("Setor", ["Todos"] + setores, key="rep_setor")
-            with cflt3:
-                forns = sorted({s["fornecedor_sugerido"] or "Sem fornecedor sugerido"
-                                for s in sugestoes})
-                f_forn = st.selectbox("Fornecedor sugerido (agrupar)", ["Todos"] + forns,
-                                      key="rep_forn")
+                setores = sorted({s["setor"] for s in sugestoes if s["setor"] and s["setor"] != "—"})
+                f_setor = st.selectbox("Setor (consumo real)", ["Todos"] + setores, key="rep_setor")
 
             filtradas = sugestoes
             if so_criticos:
                 filtradas = [s for s in filtradas if s["prioridade_tier"] == 0]
             if f_setor != "Todos":
                 filtradas = [s for s in filtradas if s["setor"] == f_setor]
-            if f_forn != "Todos":
-                filtradas = [s for s in filtradas
-                             if (s["fornecedor_sugerido"] or "Sem fornecedor sugerido") == f_forn]
 
             def _cate(s):
-                """'Comprar até' formatado (:material/alarm: = já atrasado; '—' = sem consumo)."""
+                """'Comprar até' formatado (⏰ = já atrasado; '—' = sem consumo)."""
                 ca = s.get("comprar_ate")
                 if not ca:
                     return "—"
                 dd = datetime.strptime(ca, "%Y-%m-%d").strftime("%d/%m/%Y")
-                return f":material/alarm: {dd}" if s.get("comprar_atrasado") else dd
+                return f"⏰ {dd}" if s.get("comprar_atrasado") else dd
 
             k1, k2, k3 = st.columns(3)
             k1.metric("Itens a repor", len(filtradas))
@@ -2502,7 +2468,6 @@ elif pagina == "Controle de SC":
                     "Estoque": s.get("estoque_atual"),
                     "Mín": s.get("estoque_minimo"),
                     "Máx": s.get("estoque_maximo"),
-                    "Segurança": s.get("estoque_seguranca"),
                     "Cobertura(d)": (s["cobertura_dias"]
                                      if s["cobertura_dias"] < PREVISAO_RUPTURA_SEM_RISCO else None),
                     "Consumo/dia": round(float(s.get("consumo_diario") or 0), 2),
@@ -2510,12 +2475,12 @@ elif pagina == "Controle de SC":
                     "Comprar até": _cate(s),
                     "Setor": s.get("setor") or "—",
                     "Qtd Sugerida": s["qtd_sugerida"],
-                    "Fornecedor": s["fornecedor_sugerido"] or "—",
+                    "Fornecedor (melhor preço)": s["fornecedor_sugerido"] or "—",
                 }
                 return {"Incluir": incluir, **d} if incluir is not None else d
 
             _num_cols = {
-                "Estoque": "%.0f", "Mín": "%.0f", "Máx": "%.0f", "Segurança": "%.0f",
+                "Estoque": "%.0f", "Mín": "%.0f", "Máx": "%.0f",
                 "Cobertura(d)": "%.1f", "Consumo/dia": "%.2f", "Qtd Sugerida": "%d",
             }
             df_sel = pd.DataFrame([_linha_rep(s, incluir=True) for s in filtradas])
@@ -2524,30 +2489,33 @@ elif pagina == "Controle de SC":
                 column_config={
                     "Incluir": st.column_config.CheckboxColumn(
                         "Incluir", help="Marque os itens que entram nas SCs sugeridas abaixo."),
-                    "Segurança": st.column_config.NumberColumn(
-                        format="%.0f", disabled=True,
-                        help="Estoque de segurança efetivo: manual do gestor > calculado > "
-                             "piso pelo mínimo (itens sem consumo)."),
                     **{c: st.column_config.NumberColumn(format=f, disabled=True)
-                       for c, f in _num_cols.items() if c != "Segurança"},
+                       for c, f in _num_cols.items()},
                     **{c: st.column_config.TextColumn(disabled=True)
-                       for c in ("PN", "Item", "Un", "Comprar até", "Setor", "Fornecedor")},
+                       for c in ("PN", "Item", "Un", "Comprar até", "Setor",
+                                 "Fornecedor (melhor preço)")},
                 },
             )
             _incluir = list(edit_sel["Incluir"]) if "Incluir" in edit_sel else [True] * len(filtradas)
             selecionadas = [s for s, inc in zip(filtradas, _incluir) if inc]
             st.caption(f"**{len(selecionadas)}** de {len(filtradas)} itens selecionados · "
-                       "Segurança = efetivo (piso pelo mínimo do gestor quando não há consumo).")
+                       "Qtd Sugerida = **Máximo** cadastrado do material · Setor = consumo real.")
 
+            _df_export = pd.DataFrame([_linha_rep(s) for s in filtradas])
             buf_rep = io.BytesIO()
             with pd.ExcelWriter(buf_rep, engine="openpyxl") as w:
-                pd.DataFrame([_linha_rep(s) for s in filtradas]).to_excel(
-                    w, index=False, sheet_name="Sugestões")
-            st.download_button(
+                _df_export.to_excel(w, index=False, sheet_name="Sugestões")
+            exp1, exp2 = st.columns(2)
+            exp1.download_button(
                 "⬇️ Exportar sugestões (Excel)", data=buf_rep.getvalue(),
                 file_name=f"reposicao_mro_{date.today():%d-%m-%Y}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="rep_export")
+                key="rep_export", width="stretch")
+            exp2.download_button(
+                "⬇️ Exportar sugestões (CSV)",
+                data=_df_export.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"reposicao_mro_{date.today():%d-%m-%Y}.csv",
+                mime="text/csv", key="rep_export_csv", width="stretch")
 
             # --- 📦 SCs sugeridas (agrupadas por TIPO DO MATERIAL) — "de mão beijada" ---
             st.divider()
@@ -2611,25 +2579,6 @@ elif pagina == "Controle de SC":
                                 st.success(f":material/check_circle: {msg} Desfechos registrados no histórico.")
                             else:
                                 st.error(f":material/cancel: {msg}")
-
-            st.divider()
-
-            with st.expander(":material/history: Histórico de decisões de reposição"):
-                hist = listar_sugestoes(limit=50)
-                if not hist:
-                    st.caption("Nenhuma decisão registrada ainda.")
-                else:
-                    st.dataframe(
-                        pd.DataFrame([{
-                            "Quando": fmt(h["data_geracao"]),
-                            "PN": h["part_number"],
-                            "Item": h["nome_item"],
-                            "Qtd": h["qtd_sugerida"],
-                            "Desfecho": h["desfecho"],
-                            "Fornecedor": h["fornecedor_sugerido"] or "—",
-                        } for h in hist]),
-                        hide_index=True, width="stretch",
-                    )
 
     with aba_forn:
         st.markdown("### :material/apartment: Fornecedores & Cotação")
@@ -2749,6 +2698,9 @@ elif pagina == "Controle de SC":
     #   ➕ NOVA SC (Formulário em Grid + Agrupamento Lógico)
     # ══════════════════════════════════════════════════════════════════════════════
     with aba_nova_sc:
+        st.markdown("### :material/add: Nova SC")
+        st.caption("**Nova SC (caso não esteja no sistema MRO).** Cadastro manual de uma "
+                   "solicitação de compra que ainda não veio do Relatório de SCs.")
         if "itens_nova_sc" not in st.session_state: st.session_state.itens_nova_sc = []
         if "sc_criada" not in st.session_state: st.session_state.sc_criada = None
 
@@ -3187,26 +3139,29 @@ elif pagina == "Ficha 360":
 
             # ── Estoque / cobertura / giro ────────────────────────────────────
             st.divider()
-            e1, e2, e3, e4, e5 = st.columns(5)
+            e1, e2, e3, e4 = st.columns(4)
             e1.metric("Estoque atual", _g(it.get("estoque_atual")))
             e2.metric("Mínimo", _g(it.get("estoque_minimo")))
             e3.metric("Máximo", _g(it.get("estoque_maximo")))
-            e4.metric("Segurança", _g(it.get("estoque_seguranca")),
-                      help=f"Origem: {rep['estoque_seguranca_origem']}.")
-            e5.metric("Saldo Residual", _g(it.get("estoque_em_transito")),
-                      help="Qtd já negociada que ainda falta chegar (SCs abertas).")
+            e4.metric("Saldo Item (PO)", _g(it.get("estoque_em_transito")),
+                      help="Qtd já negociada em pedidos (PO/SC) aprovados que ainda falta chegar.")
 
             ver_saldo_key = f"ver_saldo_{item_f['id']}"
-            if st.button(":material/visibility: Ver detalhes do Saldo Residual",
+            if st.button(":material/visibility: Ver detalhes do Saldo Item (PO)",
                          key=f"btn_{ver_saldo_key}"):
                 st.session_state[ver_saldo_key] = not st.session_state.get(ver_saldo_key, False)
             if st.session_state.get(ver_saldo_key):
-                pedidos_com_saldo = [s for s in ficha["scs_pos"] if (s.get("pendente") or 0) > 0]
+                # v3.7.0 (A4/D4): lista TODOS os pedidos do item (não só pendente > 0),
+                # excluindo Cancelado. A exclusão de "Elimin. Resíduo/Reprovado" fica como
+                # follow-up condicionado a uma fonte de status confiável (aba FUP 2026,
+                # hoje não ingerida) — sem isso, não há como marcar esses status na base.
+                pedidos = [s for s in ficha["scs_pos"]
+                           if (s.get("status") or "").strip().lower() != "cancelado"]
                 cont1, cont2 = st.columns(2)
                 with cont1:
-                    st.markdown("**:material/receipt_long: Pedidos com Saldo**")
-                    if not pedidos_com_saldo:
-                        st.caption("Nenhum pedido com saldo em aberto para este item.")
+                    st.markdown("**:material/receipt_long: Pedidos do item (aprovados)**")
+                    if not pedidos:
+                        st.caption("Nenhum pedido registrado para este item.")
                     else:
                         st.dataframe(pd.DataFrame([{
                             "SC": s["numero_sc"], "PO": s.get("po_item") or s.get("numero_po") or "—",
@@ -3214,7 +3169,7 @@ elif pagina == "Ficha 360":
                             "Solic.": s.get("quantidade_solicitada"),
                             "Receb.": s.get("quantidade_recebida"),
                             "Pendente": s.get("pendente"),
-                        } for s in pedidos_com_saldo]), hide_index=True, width="stretch")
+                        } for s in pedidos]), hide_index=True, width="stretch")
                 with cont2:
                     st.markdown("**:material/apartment: Saldo Residual por Fornecedor**")
                     grupos_saldo = agrupar_saldo_residual_por_fornecedor(ficha["scs_pos"])
@@ -3228,9 +3183,10 @@ elif pagina == "Ficha 360":
                             "Entrega Parcial": ("Sim" if any(l["entrega_parcial"] for l in g["linhas"])
                                                 else "Não"),
                         } for g in grupos_saldo]), hide_index=True, width="stretch")
-                st.caption(":material/info: Fundação: visão por este item. Consolidação entre "
-                           "materiais/fornecedores e os campos Controle AP/Elimin. Resíduo "
-                           "(fonte: Relatório de SCs, aba SC7) ficam para uma próxima etapa.")
+                st.caption(":material/info: Lista todos os pedidos do item (exceto Cancelado). "
+                           "A exclusão de **Elimin. Resíduo / Reprovado** depende de uma fonte de "
+                           "status confiável (aba **FUP 2026** do Relatório de SCs, ainda não ingerida) "
+                           "— hoje esses status não existem na base, então nada é contado errado.")
 
             cob = it.get("dias_cobertura")
             giro = ficha["giro"]
@@ -3244,7 +3200,11 @@ elif pagina == "Ficha 360":
             g2.metric("Consumo/dia", f"{_g1(it.get('consumo_medio_diario'))} {un}/dia", delta=tend_txt,
                       delta_color="inverse", help="Média diária de saídas (janela 30d).")
             g3.metric("Giro anual", _g(giro["giro_anual"]),
-                      help=f"Tempo médio em estoque: "
+                      help="Quantas vezes o estoque \"vira\" no ano: "
+                           "(saídas dos últimos 90 d ÷ estoque médio das fotos diárias) × (365 ÷ 90). "
+                           "Base: estoque_snapshots (fotos diárias do saldo) + saídas de movimentações. "
+                           "Maior = gira mais rápido; menor = parado. "
+                           f"Tempo médio em estoque: "
                            f"{giro['tempo_medio_dias'] if giro['tempo_medio_dias'] else '—'} d · "
                            f"baseado em {giro['n_snapshots']} fotos.")
             lt_calc = it.get("lead_time_calculado")
@@ -3316,7 +3276,7 @@ elif pagina == "Ficha 360":
                         "Fornecedor": f["fornecedor"], "Último Preço": f["ultimo_preco"],
                         "Moeda": f["moeda"], "Nº Compras": f["n_compras"],
                         "Lead Time (d)": f["lead_time_fornecedor"], "E-mail": f["email"] or "—",
-                        ":material/star:": ":material/star:" if f.get("melhor") else "",
+                        "Melhor preço": "⭐" if f.get("melhor") else "",
                     } for f in fs]), hide_index=True, width="stretch")
 
             # ── Histórico de SCs / POs ────────────────────────────────────────
@@ -3457,7 +3417,7 @@ elif pagina == "Ajuda":
                 fb_desc = st.text_area("Descrição", height=120,
                                        placeholder="Descreva a sugestão, o problema ou a ideia em detalhes...")
                 fb_pagina = st.selectbox("Página/área relacionada (opcional)",
-                                         ["—", "Dashboard", "Inventário", "Gerenciar Itens",
+                                         ["—", "Dashboard", "Saldo em Estoque", "Gerenciar Itens",
                                           "Movimentações", "Requisição", "Controle de SC",
                                           "Configurações", "Geral"], index=0)
                 enviado = st.form_submit_button(":material/mail: Enviar Feedback", type="primary", width="stretch")

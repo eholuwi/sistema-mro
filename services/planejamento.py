@@ -115,25 +115,13 @@ def lead_time_efetivo(item):
 
 
 def estoque_seguranca_efetivo(item):
-    """Estoque de segurança a usar + origem. Prioridade: manual (gestor) > calculado
-    (sugestão consumo × lead × 1,5) > piso pelo mínimo do gestor > não definido.
-    Retorna (valor:float, origem:str).
+    """v3.7.0 — Estoque de segurança DESATIVADO. Retorna sempre (0, "não utilizado").
 
-    v3.4.0: itens SEM consumo zeravam o calculado (consumo × … = 0) — ~40% do catálogo
-    são spares/sem giro. Quando não há base de consumo mas o gestor definiu um mínimo,
-    a segurança efetiva cai para o `estoque_minimo` (o mínimo já é o buffer desejado
-    do gestor), em vez de exibir um "0" que parece falta de proteção. Coerente com o
-    gatilho de reposição, que já dispara em estoque ≤ mínimo."""
-    ss = _num(item.get("estoque_seguranca"))
-    if ss > 0:
-        return ss, "manual (gestor)"
-    ssc = _num(item.get("estoque_seguranca_calculado"))
-    if ssc > 0:
-        return ssc, "calculado (sugestão)"
-    minimo = _num(item.get("estoque_minimo"))
-    if minimo > 0:
-        return minimo, "piso (mínimo do gestor)"
-    return 0.0, "não definido"
+    Decisão do PO: o buffer do MRO passou a ser o próprio **Mínimo do Neidson** (não
+    deixar o material atingir o mínimo nem passar do máximo). O gatilho de piso
+    (`estoque_atual ≤ estoque_minimo`, em `precisa_repor`) cobre a proteção que a
+    segurança antes dava. Mantida como no-op para não quebrar chamadores legados."""
+    return 0.0, "não utilizado"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -141,20 +129,18 @@ def estoque_seguranca_efetivo(item):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def calcular_ponto_reposicao(item):
-    """Ponto de pedido (ROP) = consumo_diário × lead_time + estoque_segurança.
+    """Ponto de pedido (ROP) = consumo_diário × lead_time (v3.7.0 — sem estoque de
+    segurança; o buffer é o próprio Mínimo do Neidson).
 
     Devolve o número e os componentes/origens (para a transparência da UI)."""
     consumo = _num(item.get("consumo_medio_diario"))
     lt, lt_org, lt_mat = lead_time_efetivo(item)
-    ss, ss_org = estoque_seguranca_efetivo(item)
     return {
-        "rop": round(consumo * lt + ss, 2),
+        "rop": round(consumo * lt, 2),
         "consumo_diario": consumo,
         "lead_time": lt,
         "lead_time_origem": lt_org,
         "lead_time_maturidade": lt_mat,
-        "estoque_seguranca": ss,
-        "estoque_seguranca_origem": ss_org,
     }
 
 
@@ -327,8 +313,6 @@ def montar_sugestao(item, incluir_fornecedor=True):
         "lead_time": calc["lead_time"],
         "lead_time_origem": calc["lead_time_origem"],
         "lead_time_maturidade": calc["lead_time_maturidade"],
-        "estoque_seguranca": calc["estoque_seguranca"],
-        "estoque_seguranca_origem": calc["estoque_seguranca_origem"],
         "alvo": qtd["alvo"],
         "alvo_neidson": qtd["alvo_neidson"],
         "alvo_horizonte": qtd["alvo_horizonte"],

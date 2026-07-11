@@ -68,16 +68,13 @@ def test_lead_time_default_quando_desconhecido():
     assert mat == "lead time desconhecido"
 
 
-def test_estoque_seguranca_manual_tem_prioridade():
+def test_estoque_seguranca_desativado_v370():
+    # v3.7.0: Estoque de Segurança desativado — sempre 0 (o buffer virou o Mínimo do
+    # Neidson). A função é mantida como no-op; qualquer manual/calculado é ignorado.
     ss, origem = P.estoque_seguranca_efetivo(
-        _item(estoque_seguranca=25, estoque_seguranca_calculado=99))
-    assert ss == 25 and "manual" in origem
-
-
-def test_estoque_seguranca_fallback_calculado():
-    ss, origem = P.estoque_seguranca_efetivo(
-        _item(estoque_seguranca=0, estoque_seguranca_calculado=8))
-    assert ss == 8 and "calculado" in origem
+        _item(estoque_seguranca=25, estoque_seguranca_calculado=99, estoque_minimo=8))
+    assert ss == 0
+    assert origem == "não utilizado"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -85,9 +82,11 @@ def test_estoque_seguranca_fallback_calculado():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def test_rop_formula():
+    # v3.7.0: ROP = consumo × lead_time (sem estoque de segurança).
     calc = P.calcular_ponto_reposicao(
         _item(consumo_medio_diario=2.0, lead_time_dias=10, estoque_seguranca=5))
-    assert calc["rop"] == pytest.approx(2.0 * 10 + 5)  # 25
+    assert calc["rop"] == pytest.approx(2.0 * 10)  # 20
+    assert "estoque_seguranca" not in calc
 
 
 def test_bem_estocado_nao_repor():
