@@ -15,46 +15,53 @@ from __future__ import annotations
 ACCENT = "#F36F21"        # laranja Inventus — constante nos dois temas
 ACCENT_HOVER = "#d65a12"
 
-# Tokens de cor por tema. O dark reproduz o que estava hardcoded em services/styles.py
-# e nos gráficos; o light é o espelho.
+# Tokens de cor por tema (v4.0.0 — redesign profissional laranja/cinza; CLARO é o padrão).
+# O claro usa uma tela cinza-clara com superfícies brancas + sombras leves; o escuro é o
+# espelho coerente. Ambos carregam shadow/shadow_lg/accent_tint p/ o CSS global.
 _TEMAS = {
     "dark": {
         "plotly_template": "plotly_dark",
-        "bg_sidebar":   "#050505",
-        "bg_main":      "#0E0E0E",
-        "bg_card":      "#1A1A1A",
-        "bg_metric":    "#121212",
-        "bg_grid":      "#0A0A0A",   # grid de métricas da sidebar
-        "bg_th":        "#252525",   # cabeçalho de tabela
-        "bg_expander":  "#121212",
-        "bg_input_foco":"#222222",
-        "borda":        "#2A2A2A",
-        "texto":        "#FFFFFF",
-        "texto_suave":  "#B3B3B3",
-        "accent_borda": "#0E0E0E",   # borda das barras (contraste no escuro)
-        "menu_hover":   "#1A1A1A",
-        "menu_sel_bg":  "#1A1A1A",
-        "painel_bg":    "#1e2130",   # divs inline (ex.: cartões de contexto)
-        "painel_borda": "#3e424b",
+        "bg_sidebar":   "#17181C",
+        "bg_main":      "#0E0F12",
+        "bg_card":      "#1F2126",
+        "bg_metric":    "#17181C",
+        "bg_grid":      "#1F2126",   # grid de métricas da sidebar
+        "bg_th":        "#22242A",   # cabeçalho de tabela
+        "bg_expander":  "#17181C",
+        "bg_input_foco":"#22242A",
+        "borda":        "#2A2C31",
+        "texto":        "#F4F5F7",
+        "texto_suave":  "#A0A6B0",
+        "accent_borda": "#0E0F12",   # borda das barras (contraste no escuro)
+        "menu_hover":   "#1F2126",
+        "menu_sel_bg":  "#2A1B10",   # laranja bem escuro no item selecionado
+        "painel_bg":    "#1F2126",   # divs inline (ex.: cartões de contexto)
+        "painel_borda": "#2A2C31",
+        "accent_tint":  "#2A1B10",   # tint do accent (anel de foco/seleção)
+        "shadow":       "0 1px 3px rgba(0,0,0,.45)",
+        "shadow_lg":    "0 8px 24px rgba(0,0,0,.55)",
     },
     "light": {
         "plotly_template": "plotly_white",
-        "bg_sidebar":   "#F4F5F7",
-        "bg_main":      "#FFFFFF",
-        "bg_card":      "#F5F6F8",
+        "bg_sidebar":   "#FFFFFF",
+        "bg_main":      "#F6F7F9",
+        "bg_card":      "#FFFFFF",
         "bg_metric":    "#FFFFFF",
-        "bg_grid":      "#EEF0F3",
-        "bg_th":        "#EEF0F3",
-        "bg_expander":  "#FAFBFC",
+        "bg_grid":      "#F1F3F5",
+        "bg_th":        "#F1F3F5",
+        "bg_expander":  "#FCFCFD",
         "bg_input_foco":"#FFFFFF",
-        "borda":        "#D9DCE1",
-        "texto":        "#0E1117",
-        "texto_suave":  "#4A4F57",
+        "borda":        "#E4E7EB",
+        "texto":        "#1A1D21",
+        "texto_suave":  "#5B6470",
         "accent_borda": "#FFFFFF",
-        "menu_hover":   "#E6E9EF",
-        "menu_sel_bg":  "#FFE9DC",   # laranja bem claro no item selecionado
-        "painel_bg":    "#F0F2F6",
-        "painel_borda": "#D0D3D9",
+        "menu_hover":   "#F1F3F5",
+        "menu_sel_bg":  "#FFF1E8",   # laranja bem claro no item selecionado
+        "painel_bg":    "#F6F7F9",
+        "painel_borda": "#E4E7EB",
+        "accent_tint":  "#FFF1E8",   # tint do accent (anel de foco/seleção)
+        "shadow":       "0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.07)",
+        "shadow_lg":    "0 6px 18px rgba(16,24,40,.10)",
     },
 }
 

@@ -4,14 +4,13 @@ from services.tema import paleta
 
 
 def inject_custom_css(pal=None):
-    """Injeta o CSS global da identidade Inventus Power, AGORA theme-aware (v2.11.0).
+    """Injeta o CSS global da identidade Inventus Power, theme-aware (v4.0.0 — redesign).
 
     Recebe a paleta de `services.tema.paleta()` e emite as variáveis do `:root` a partir
     dela; todo o restante do CSS usa `var(--...)`, então a MESMA folha serve para claro e
-    escuro — basta a paleta mudar. Antes o dark ficava preso por `!important`; agora o app
-    acompanha o tema ativo (☰ → Settings → Theme). `pal=None` → dark (compat)."""
+    escuro — basta a paleta mudar. Padrão CLARO (v4.0.0). `pal=None` → light (compat)."""
     if pal is None:
-        pal = paleta("dark")
+        pal = paleta("light")
     c = pal["css"]
 
     # Apenas o :root é gerado a partir da paleta; o corpo do CSS referencia as variáveis.
@@ -19,6 +18,7 @@ def inject_custom_css(pal=None):
         :root {{
             --primary-orange: {c['accent']};
             --primary-hover: {c['accent_hover']};
+            --accent-tint: {c['accent_tint']};
             --bg-sidebar: {c['bg_sidebar']};
             --bg-main: {c['bg_main']};
             --bg-card: {c['bg_card']};
@@ -30,86 +30,68 @@ def inject_custom_css(pal=None):
             --border-color: {c['borda']};
             --text-white: {c['texto']};
             --text-gray: {c['texto_suave']};
+            --shadow: {c['shadow']};
+            --shadow-lg: {c['shadow_lg']};
         }}
     """
 
     st.markdown("""
     <style>
         /* --- 1. FONTES --- */
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
     """ + root + """
         /* --- 2. SIDEBAR --- */
         section[data-testid="stSidebar"] {
             background-color: var(--bg-sidebar) !important;
             border-right: 1px solid var(--border-color);
-            width: 280px !important;
+            width: 288px !important;
         }
 
         .sidebar-title {
             font-family: 'Inter', sans-serif;
-            font-weight: 700;
-            font-size: 1.5rem;
+            font-weight: 800;
+            font-size: 1.4rem;
+            letter-spacing: -0.02em;
             color: var(--text-white);
-            margin-bottom: 2rem;
+            margin-bottom: 1.5rem;
             display: flex;
-            align-items: center;
-            gap: 10px;
+            align-items: baseline;
+            gap: 8px;
         }
 
         .sidebar-title span { color: var(--primary-orange); }
 
-        div[data-testid="stSidebarNav"] ul li a {
-            background-color: transparent !important;
-            color: var(--text-gray) !important;
-            font-family: 'Inter', sans-serif;
-            font-weight: 500;
-            padding: 12px 15px !important;
-            margin: 2px 0 !important;
-            border-radius: 6px;
-            transition: all 0.2s ease;
-        }
-
-        div[data-testid="stSidebarNav"] ul li a:hover {
-            background-color: var(--bg-card) !important;
-            color: var(--text-white) !important;
-        }
-
-        div[data-testid="stSidebarNav"] ul li a[aria-current="page"] {
-            background-color: var(--bg-card) !important;
-            color: var(--text-white) !important;
-            border-left: 4px solid var(--primary-orange);
-            font-weight: 600;
-        }
-
+        /* Grade de KPIs da sidebar — tiles individuais */
         .sidebar-metrics-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin-top: 20px;
-            margin-bottom: 20px;
-            padding: 10px;
-            background-color: var(--bg-grid);
-            border-radius: 8px;
-            border: 1px solid var(--border-color);
+            gap: 8px;
+            margin: 12px 0 18px;
         }
 
-        .metric-card { text-align: left; padding: 5px; }
-        .metric-label { font-size: 0.8rem; color: var(--text-gray); font-family: 'Inter', sans-serif; display: flex; align-items: center; gap: 5px; }
-        .metric-value { font-size: 1.8rem; font-weight: 700; color: var(--text-white); font-family: 'JetBrains Mono', monospace; margin-top: 5px; }
+        .metric-card {
+            text-align: left;
+            padding: 11px 12px;
+            background-color: var(--bg-grid);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+        }
+        .metric-label { font-size: 0.72rem; color: var(--text-gray); font-family: 'Inter', sans-serif; font-weight: 600; letter-spacing: 0.3px; display: flex; align-items: center; gap: 6px; }
+        .metric-value { font-size: 1.5rem; font-weight: 700; color: var(--text-white); font-family: 'JetBrains Mono', monospace; margin-top: 4px; letter-spacing: -0.02em; }
         .dot { height: 8px; width: 8px; border-radius: 50%; display: inline-block; }
-        .dot-yellow { background-color: #FFC107; }
-        .dot-red { background-color: #FF4444; }
+        .dot-yellow { background-color: #D97706; }
+        .dot-red { background-color: #DC2626; }
 
-        .progress-container { margin-top: 10px; margin-bottom: 20px; }
-        .progress-label { font-size: 0.9rem; color: var(--text-gray); margin-bottom: 5px; }
+        .progress-container { margin: 6px 0 4px; }
+        .progress-label { font-size: 0.78rem; color: var(--text-gray); font-weight: 600; letter-spacing: 0.3px; margin-bottom: 6px; }
 
         .user-profile {
-            display: flex; align-items: center; gap: 12px; padding: 15px 10px;
-            border-top: 1px solid var(--border-color); margin-top: auto;
+            display: flex; align-items: center; gap: 12px; padding: 14px 4px 4px;
+            border-top: 1px solid var(--border-color); margin-top: 12px;
         }
         .user-avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid var(--border-color); }
-        .user-info h4 { margin: 0; font-size: 0.95rem; color: var(--text-white); font-weight: 600; }
-        .user-info p { margin: 0; font-size: 0.8rem; color: var(--primary-orange); font-weight: 500; }
+        .user-info h4 { margin: 0; font-size: 0.92rem; color: var(--text-white); font-weight: 600; }
+        .user-info p { margin: 0; font-size: 0.78rem; color: var(--primary-orange); font-weight: 600; }
 
         section[data-testid="stSidebar"] input,
         section[data-testid="stSidebar"] select,
@@ -127,39 +109,40 @@ def inject_custom_css(pal=None):
             font-family: 'Inter', sans-serif;
         }
 
-        h1, h2, h3, h4, h5, h6 { color: var(--text-white) !important; font-weight: 700; }
+        h1, h2, h3, h4, h5, h6 { color: var(--text-white) !important; font-weight: 700; letter-spacing: -0.01em; }
+        h1 { font-weight: 800; }
         p, label, div, span, li { color: var(--text-gray); }
 
         /* MÉTRICAS (ST.METRIC) COMO CARDS */
         [data-testid="stMetric"] {
             background-color: var(--bg-metric) !important;
-            padding: 15px !important;
-            border-radius: 8px !important;
+            padding: 16px 18px !important;
+            border-radius: 12px !important;
             border: 1px solid var(--border-color) !important;
-            text-align: center;
-            transition: all 0.2s ease !important;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            box-shadow: var(--shadow);
+            transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease !important;
         }
 
         [data-testid="stMetric"]:hover {
             border-color: var(--primary-orange) !important;
             transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(243, 111, 33, 0.15);
+            box-shadow: var(--shadow-lg);
         }
 
         [data-testid="stMetricLabel"] {
             color: var(--text-gray) !important;
-            font-size: 0.9rem;
-            font-weight: 500;
+            font-size: 0.72rem;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.6px;
         }
 
         [data-testid="stMetricValue"] {
             color: var(--text-white) !important;
             font-family: 'JetBrains Mono', monospace !important;
             font-weight: 700;
-            font-size: 1.8rem;
+            font-size: 1.7rem;
+            letter-spacing: -0.02em;
         }
 
         [data-testid="stMetricDelta"] {
@@ -167,35 +150,42 @@ def inject_custom_css(pal=None):
             font-weight: 600;
         }
 
-        /* BOTÕES PRIMÁRIOS (OUTLINE LARANJA) */
+        /* CONTÊINERES COM BORDA (st.container(border=True)) COMO CARDS */
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            border-radius: 12px !important;
+            box-shadow: var(--shadow);
+        }
+
+        /* BOTÕES PRIMÁRIOS (SÓLIDO LARANJA) */
         div.stButton > button[kind="primary"] {
-            background-color: transparent !important;
-            color: var(--primary-orange) !important;
-            border: 2px solid var(--primary-orange) !important;
-            border-radius: 6px !important;
+            background-color: var(--primary-orange) !important;
+            color: #FFFFFF !important;
+            border: 1px solid var(--primary-orange) !important;
+            border-radius: 8px !important;
             font-weight: 700 !important;
-            padding: 0.5rem 1.5rem !important;
-            transition: all 0.3s ease !important;
-            box-shadow: none !important;
+            padding: 0.5rem 1.4rem !important;
+            box-shadow: 0 1px 2px rgba(243,111,33,0.35) !important;
+            transition: all 0.15s ease !important;
         }
 
         div.stButton > button[kind="primary"]:hover {
-            background-color: var(--primary-orange) !important;
-            color: #FFFFFF !important;
-            border-color: var(--primary-orange) !important;
-            transform: translateY(-2px) !important;
-            box-shadow: 0 4px 12px rgba(243, 111, 33, 0.4) !important;
+            background-color: var(--primary-hover) !important;
+            border-color: var(--primary-hover) !important;
+            transform: translateY(-1px) !important;
+            box-shadow: var(--shadow-lg) !important;
         }
 
         div.stButton > button[kind="secondary"] {
             background-color: transparent !important;
             border: 1px solid var(--border-color) !important;
             color: var(--text-gray) !important;
+            border-radius: 8px !important;
+            font-weight: 600 !important;
         }
 
         div.stButton > button[kind="secondary"]:hover {
             background-color: var(--bg-card) !important;
-            border-color: var(--text-white) !important;
+            border-color: var(--text-gray) !important;
             color: var(--text-white) !important;
         }
 
@@ -209,8 +199,8 @@ def inject_custom_css(pal=None):
             background-color: var(--bg-card) !important;
             border: 1px solid var(--border-color) !important;
             color: var(--text-white) !important;
-            border-radius: 6px !important;
-            transition: all 0.2s ease !important;
+            border-radius: 8px !important;
+            transition: all 0.15s ease !important;
         }
 
         .stTextInput > div > div > input:focus,
@@ -220,7 +210,7 @@ def inject_custom_css(pal=None):
         .stDateInput > div > div > input:focus,
         .stMultiSelect > div > div > div:focus-within {
             border-color: var(--primary-orange) !important;
-            box-shadow: 0 0 0 1px var(--primary-orange) !important;
+            box-shadow: 0 0 0 3px var(--accent-tint) !important;
             background-color: var(--bg-input-focus) !important;
         }
 
@@ -231,8 +221,8 @@ def inject_custom_css(pal=None):
         .stDateInput label,
         .stMultiSelect label {
             color: var(--text-gray) !important;
-            font-size: 0.85rem !important;
-            font-weight: 600 !important;
+            font-size: 0.75rem !important;
+            font-weight: 700 !important;
             text-transform: uppercase !important;
             letter-spacing: 0.5px !important;
         }
@@ -241,14 +231,17 @@ def inject_custom_css(pal=None):
         .dataframe {
             background-color: var(--bg-card) !important;
             color: var(--text-gray) !important;
-            border-radius: 8px !important;
+            border-radius: 10px !important;
             overflow: hidden !important;
         }
 
         .dataframe th {
             background-color: var(--bg-th) !important;
             color: var(--text-white) !important;
-            border-bottom: 2px solid var(--border-color) !important;
+            border-bottom: 1px solid var(--border-color) !important;
+            text-transform: uppercase;
+            font-size: 0.72rem;
+            letter-spacing: 0.4px;
         }
 
         .dataframe td {
@@ -261,14 +254,14 @@ def inject_custom_css(pal=None):
             background-color: var(--bg-card) !important;
             color: var(--text-white) !important;
             border: 1px solid var(--border-color) !important;
-            border-radius: 6px !important;
+            border-radius: 8px !important;
         }
 
         .streamlit-expanderContent {
             background-color: var(--bg-expander) !important;
             border: 1px solid var(--border-color) !important;
             border-top: none !important;
-            border-radius: 0 0 6px 6px !important;
+            border-radius: 0 0 8px 8px !important;
         }
 
     </style>

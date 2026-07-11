@@ -72,18 +72,18 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 3.11.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 4.0.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
     """Tema escolhido pelo usuário ('light'/'dark'), lido da URL (?tema=) para persistir
-    ao recarregar. Padrão ESCURO. O Streamlit 1.57 não troca o tema por código, então
+    ao recarregar. Padrão CLARO (v4.0.0). O Streamlit 1.57 não troca o tema por código, então
     o app o controla: um botão na sidebar grava `?tema=` e o CSS/paleta reaplica tudo."""
     try:
-        v = st.query_params.get("tema", "dark")
+        v = st.query_params.get("tema", "light")
     except Exception:
-        v = "dark"
-    return "light" if v == "light" else "dark"
+        v = "light"
+    return "dark" if v == "dark" else "light"
 
 
 # Paleta única do tema escolhido — consumida pelo CSS global, pelo option_menu e pelos
@@ -143,7 +143,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 3.11.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 4.0.0</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -166,7 +166,7 @@ with st.sidebar:
 
     # 2b. Tema (claro/escuro) — controlado pelo app e lembrado na URL (?tema=).
     # O Streamlit 1.57 não troca o tema por código; aqui gravamos a escolha e o topo do
-    # script reaplica a paleta. Padrão escuro. (Tabelas seguem o tema base do config.)
+    # script reaplica a paleta. Padrão claro. (Tabelas seguem o tema base do config.)
     _op_tema = {"Claro": "light", "Escuro": "dark"}
     _lbl_atual = "Escuro" if PAL["tipo"] == "dark" else "Claro"
     _escolha_tema = st.radio("Tema", list(_op_tema.keys()),
@@ -3011,8 +3011,8 @@ elif pagina == "Ficha 360":
                     st.image(ficha["imagem_abs"], use_container_width=True)
                 else:
                     st.markdown(
-                        "<div style='border:1px dashed #444;border-radius:8px;"
-                        "padding:32px;text-align:center;color:#888;'>Sem imagem</div>",
+                        f"<div style='border:1px dashed {PAL['painel_borda']};border-radius:8px;"
+                        f"padding:32px;text-align:center;color:{PAL['texto_suave']};'>Sem imagem</div>",
                         unsafe_allow_html=True)
                 with st.expander(":material/image: Imagem do produto"):
                     up = st.file_uploader(
@@ -3435,12 +3435,12 @@ elif pagina == "Configurações":
     with st.container(border=True):
         st.subheader(":material/palette: Aparência")
         _tema_txt = ":material/dark_mode: Escuro" if PAL["tipo"] == "dark" else ":material/light_mode: Claro"
-        st.markdown(f"**Tema atual:** {_tema_txt}  ·  **Padrão:** :material/dark_mode: Escuro")
+        st.markdown(f"**Tema atual:** {_tema_txt}  ·  **Padrão:** :material/light_mode: Claro")
         st.caption("Para alternar entre **claro** e **escuro**, use o botão **Tema** na **barra "
                    "lateral** (abaixo do menu). A escolha é lembrada ao recarregar (fica na URL). "
                    "O fundo, os textos, o menu e os gráficos acompanham. :material/warning: Observação: no modo "
-                   "claro, as **tabelas** podem continuar escuras — é uma limitação do Streamlit "
-                   "(as grades seguem o tema base); no modo escuro fica tudo consistente.")
+                   "escuro, as **tabelas** podem continuar claras — é uma limitação do Streamlit "
+                   "(as grades seguem o tema base); no modo claro (padrão) fica tudo consistente.")
         st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Importação da base do Neidson — Tipo, Mínimo, Máximo, Lead Time (Item 1) ──

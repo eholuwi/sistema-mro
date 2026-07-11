@@ -1,9 +1,12 @@
-# Tema da marca — MRO Inventus Power (v2.11.0)
-# Padrão ESCURO + cor de marca (laranja). A troca claro/escuro é feita por um
-# BOTÃO na barra lateral do app (não pelo menu ☰), que reaplica services/tema.paleta()
-# no CSS global, no option_menu e nos gráficos. As tabelas nativas (st.dataframe) seguem
-# este tema base — por isso o padrão escuro fica 100% consistente.
+# Tema da marca — MRO Inventus Power (v4.0.0 — redesign)
+# Padrão CLARO + cor de marca (laranja). A troca claro/escuro é feita por um BOTÃO na
+# barra lateral do app (não pelo menu ☰), que reaplica services/tema.paleta() no CSS
+# global, no option_menu e nos gráficos. As tabelas nativas (st.dataframe) seguem este
+# tema base — por isso o padrão claro fica 100% consistente.
 [theme]
-base = "dark"
+base = "light"
 primaryColor = "#F36F21"
+backgroundColor = "#F6F7F9"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1A1D21"
 font = "sans serif"
