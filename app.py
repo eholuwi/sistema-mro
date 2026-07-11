@@ -19,7 +19,7 @@ from services.db_functions import (
     buscar_item_por_id, listar_inventario, salvar_item, desmarcar_inventariado,
     registrar_movimentacao, listar_movimentacoes,
     criar_sc, atualizar_sc, registrar_recebimento_sc, listar_scs,
-    listar_itens_sc, buscar_scs_por_item, exportar_inventario_df,
+    listar_itens_sc, buscar_scs_por_item, itens_com_sc_aberta, exportar_inventario_df,
     listar_valores, adicionar_valor_lista, remover_valor_lista,
     listar_setores_conhecidos, sincronizar_setores_config,
     criar_requisicao, listar_requisicoes, listar_itens_requisicao,
@@ -72,7 +72,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 3.9.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 3.10.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -143,7 +143,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 3.9.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 3.10.0</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -392,20 +392,6 @@ def _render_dash_compras_mro(vm):
                 st.caption("Sem volume no ano.")
 
     st.divider()
-    st.markdown("#### 🚨 Painel de Prioridades — a fila do dia (mais velho primeiro)")
-    if vm["painel_prioridades"]:
-        dfp = pd.DataFrame([{
-            "Aging (d)": (p["aging"] if p["aging"] >= 0 else None),
-            "SC": p["sc"], "Item": (p["item"] or "")[:36], "PN": p["pn"],
-            "Comprador": p["comprador"],
-        } for p in vm["painel_prioridades"][:50]])
-        st.dataframe(dfp, hide_index=True, width="stretch", height=380,
-                     column_config={"Aging (d)": st.column_config.NumberColumn(format="%d")})
-        st.caption(f"{len(vm['painel_prioridades'])} itens em aberto no ano · exibindo os 50 mais antigos.")
-    else:
-        st.success(":material/check_circle: Nenhum item em aberto no ano corrente.")
-
-    st.divider()
     ca, cb = st.columns(2)
     with ca:
         with st.container(border=True):
@@ -444,9 +430,9 @@ def _render_dash_compras_mro(vm):
                    lambda x: x["fornecedor"][:22], "valor", lambda v: _brl_compact(v))
     with cd:
         _bloco_top("📦 Setores (demanda em aberto)", vm["por_departamento"],
-                   lambda x: (x["departamento"] or "—"), "n", lambda v: f"{int(v)}")
+                   lambda x: (x["departamento"] or "—"), "n", lambda v: f"{int(v)}", height=340)
     _bloco_top("👨‍💼 Solicitantes (demanda em aberto)", vm["por_solicitante"],
-               lambda x: (x["solicitante"] or "—")[:28], "n", lambda v: f"{int(v)}")
+               lambda x: (x["solicitante"] or "—")[:28], "n", lambda v: f"{int(v)}", height=340)
 
     _bloco_top("📅 Lead Time por Fornecedor (dias)", vm["lead_time_fornecedor"],
                lambda x: x["fornecedor"][:24], "dias", lambda v: f"{v:g}d",
@@ -701,14 +687,14 @@ def _barh(labels, values, textos, cor=None, height=300):
         y=labels, x=values, orientation="h",
         marker=dict(color=cor or PAL["accent"], line=dict(width=1, color=PAL["accent_borda"])),
         text=textos, textposition="auto",
-        textfont=dict(size=11, color=PAL["texto"]), hoverinfo="skip"))
+        textfont=dict(size=15, color=PAL["texto"]), hoverinfo="skip"))
     fig.update_layout(
         template=PAL["plotly_template"], height=height,
         margin=dict(l=0, r=16, t=6, b=0), paper_bgcolor=PAL["paper_bg"],
         plot_bgcolor=PAL["plot_bg"], showlegend=False,
         font=dict(family="Inter", color=PAL["texto"]),
         xaxis=dict(showgrid=False, zeroline=False, visible=False),
-        yaxis=dict(showgrid=False, tickfont=dict(size=11, color=PAL["texto"])))
+        yaxis=dict(showgrid=False, tickfont=dict(size=13, color=PAL["texto"])))
     return fig
 
 
@@ -1478,7 +1464,7 @@ elif pagina == "Saldo em Estoque":
             "local_armazenagem",
             "estoque_minimo", "estoque_maximo", "estoque_atual",
             "status_material", "previsao_ruptura_dias", "data_inventario",
-            "lead_time_dias", "sc_numero", "status_sc", "sc_po",
+            "lead_time_dias",
             "caixa_identificacao" # Adicionado para visualização rápida da obs
         ]
         cols_show = [c for c in cols_show if c in df.columns]
@@ -1515,9 +1501,6 @@ elif pagina == "Saldo em Estoque":
                 "previsao_ruptura_dias": st.column_config.NumberColumn("Dias Ruptura", format="%d"),
                 "data_inventario": st.column_config.TextColumn("Inventariado", width="small"),
                 "lead_time_dias": st.column_config.NumberColumn("Lead Time", format="%d"),
-                "sc_numero": st.column_config.TextColumn("Nº SC", width="small"),
-                "status_sc": st.column_config.TextColumn("Status SC", width="small"),
-                "sc_po": st.column_config.TextColumn("P.O.", width="small"),
                 "caixa_identificacao": st.column_config.TextColumn("Obs. Inventário", width="medium"), # Nova coluna na tabela
                 "Un?": st.column_config.TextColumn("Un?", width="small",
                     help=":material/warning: = comprado em unidade diferente da de estoque e ainda sem fator de conversão."),
@@ -2437,13 +2420,6 @@ elif pagina == "Controle de SC":
                    "O sistema **recomenda**; o comprador decide e cria a SC. Nada aqui "
                    "sobrescreve a base do Compras (mín/máx/lead time/categoria).")
 
-        _mat = obter_maturidade_dados()
-        st.caption(
-            f":material/calendar_month: Indicadores de série baseados em ~{_mat['dias']} dias de histórico"
-            + (f" (desde {fmt(_mat['data_inicio'])})" if _mat.get('data_inicio') else "")
-            + " — amadurecem conforme os dados acumulam."
-        )
-
         incluir_sem_mov = st.checkbox(
             "⚪ Mostrar itens sem movimentação (revisão)", value=False, key="rep_incl_semmov",
             help="Por padrão, itens que nunca tiveram consumo real ficam fora da fila. "
@@ -2469,17 +2445,16 @@ elif pagina == "Controle de SC":
                        "residual cobrem o horizonte planejado para todos os itens.")
         else:
             # --- Filtros ---
-            cflt1, cflt2 = st.columns(2)
-            with cflt1:
-                so_criticos = st.checkbox("🔴 Só críticos", value=False, key="rep_so_crit",
-                                          help="Itens no/abaixo do ponto de pedido (ROP).")
-            with cflt2:
-                setores = sorted({s["setor"] for s in sugestoes if s["setor"] and s["setor"] != "—"})
-                f_setor = st.selectbox("Setor (consumo real)", ["Todos"] + setores, key="rep_setor")
+            # v3.10.0: a fila do Assistente mostra SÓ material CRÍTICO (no/abaixo do ROP)
+            # e que AINDA não tem SC aberta — é exatamente o que precisa virar SC agora.
+            _itens_com_sc = itens_com_sc_aberta()
+            base_criticos = [s for s in sugestoes
+                             if s["prioridade_tier"] == 0 and s["item_id"] not in _itens_com_sc]
 
-            filtradas = sugestoes
-            if so_criticos:
-                filtradas = [s for s in filtradas if s["prioridade_tier"] == 0]
+            setores = sorted({s["setor"] for s in base_criticos if s["setor"] and s["setor"] != "—"})
+            f_setor = st.selectbox("Setor (consumo real)", ["Todos"] + setores, key="rep_setor")
+
+            filtradas = base_criticos
             if f_setor != "Todos":
                 filtradas = [s for s in filtradas if s["setor"] == f_setor]
 
@@ -2491,32 +2466,11 @@ elif pagina == "Controle de SC":
                 dd = datetime.strptime(ca, "%Y-%m-%d").strftime("%d/%m/%Y")
                 return f"⏰ {dd}" if s.get("comprar_atrasado") else dd
 
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Itens a repor", len(filtradas))
-            k2.metric("🔴 Críticos", sum(1 for s in filtradas if s["prioridade_tier"] == 0))
-            k3.metric(":material/block: Parada de Linha", sum(1 for s in filtradas if s["parada_linha"]))
-
-            # --- 🔴 Críticos automáticos (versão auto da lista CRÍTICOS manual) ---
-            criticos = [s for s in filtradas if s["prioridade_tier"] == 0]
-            if criticos:
-                with st.expander(f"🔴 Críticos automáticos ({len(criticos)}) — comprar primeiro",
-                                 expanded=True):
-                    st.caption("Itens no/abaixo do ponto de pedido (ROP): vão romper por consumo. "
-                               "Ordenados pela data-limite de compra.")
-                    crit_ord = sorted(criticos, key=lambda s: s.get("comprar_ate") or "9999-99-99")
-                    st.dataframe(
-                        pd.DataFrame([{
-                            "PN": s["part_number"],
-                            "Item": s["nome_item"],
-                            "Cobertura(d)": (s["cobertura_dias"]
-                                             if s["cobertura_dias"] < PREVISAO_RUPTURA_SEM_RISCO else None),
-                            "Comprar até": _cate(s),
-                            "Qtd": s["qtd_sugerida"],
-                            "Un": s["unidade"],
-                            "Fornecedor": s["fornecedor_sugerido"] or "—",
-                        } for s in crit_ord]),
-                        hide_index=True, width="stretch",
-                    )
+            st.caption(f"🔴 **{len(filtradas)}** item(ns) crítico(s) sem SC — no/abaixo do ponto "
+                       "de pedido (ROP) e ainda sem SC aberta.")
+            if not filtradas:
+                st.success(":material/check_circle: Nenhum item crítico sem SC agora — tudo o que "
+                           "está no/abaixo do ROP já tem SC aberta.")
 
             st.divider()
 

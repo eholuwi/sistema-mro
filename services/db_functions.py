@@ -1630,6 +1630,23 @@ def buscar_scs_por_item(item_id, apenas_abertas=True):
         """,(item_id,)).fetchall()
     return [dict(r) for r in rows]
 
+
+def itens_com_sc_aberta(conn=None):
+    """Conjunto de item_id que têm ao menos uma SC ABERTA (saldo residual > 0 e SC não
+    Cancelada) — mesma definição de 'aberta' de listar_scs(apenas_abertas=True). Usado pelo
+    Assistente (v3.10.0) para mostrar só material crítico que ainda NÃO virou SC."""
+    with transaction(conn) as c:
+        rows = c.execute("""
+            SELECT DISTINCT isc.item_id
+            FROM itens_sc isc JOIN solicitacoes_compra sc ON sc.id = isc.sc_id
+            WHERE sc.status NOT IN ('Cancelado')
+              AND COALESCE(isc.saldo_residual,
+                           isc.quantidade_solicitada - isc.quantidade_recebida) > 0
+              AND isc.item_id IS NOT NULL
+        """).fetchall()
+    return {r["item_id"] for r in rows}
+
+
 def listar_recebimentos_sc(limit=300):
     with transaction() as conn:
         rows = conn.execute("""

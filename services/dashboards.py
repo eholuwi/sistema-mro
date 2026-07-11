@@ -288,7 +288,11 @@ def montar_visao_compras_mro(hoje=None):
     setor_dom = setor_dominante_por_item([it["item_id"] for it in itens_d3])
     dep_cont, sol_cont = Counter(), Counter()
     for it in itens_d3:
-        dep_cont[setor_dom.get(it["item_id"], "—")] += 1
+        # v3.10.0: item sem setor nomeado no consumo real fica FORA de Setores
+        # (nada de balde "—"); Solicitantes mantém o fallback.
+        _setor = setor_dom.get(it["item_id"])
+        if _setor:
+            dep_cont[_setor] += 1
         sol_cont[(it["solicitante"] or "—").title()] += 1
     por_departamento = [{"departamento": k, "n": v} for k, v in dep_cont.most_common()]
     por_solicitante = [{"solicitante": k, "n": v} for k, v in sol_cont.most_common(10)]
