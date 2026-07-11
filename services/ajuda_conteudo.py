@@ -23,13 +23,13 @@ GUIAS_PERSONA = {
 Você cuida do **físico**: dá baixa, recebe, confere e consulta os materiais. O sistema é
 seu **apoio** — a base do Compras (mínimo/máximo/categoria) fica intocada.
 
-**1. Dar baixa — `:material/assignment: Requisição`**
+**1. Dar baixa — `:material/sync: Movimentação` → `:material/assignment: Requisição`**
 - Preencha o cabeçalho (setor, emitente, centro de custo).
 - Pesquise o item (o card mostra o **DISPONÍVEL**), informe *Qtd Solicitada/Atendida* e
   **Adicione à lista**; ao final, **registre a requisição**.
 - Isso é o **consumo real** — alimenta cobertura, giro e o padrão de demanda.
 
-**2. Receber de uma SC — `:material/receipt_long: Controle de SC` → `:material/inventory_2: Receber Material`**
+**2. Receber material — `:material/sync: Movimentação` → `:material/inventory_2: Receber Material`**
 - Dois modos: **Por Material** (começa pelo item) ou **Por SC / PO** (escolhe a SC e
   recebe **todos os itens pendentes** de uma vez).
 - Informe a quantidade **na unidade de compra** (ex.: litros). Se houver **conversão**, o
@@ -83,7 +83,7 @@ MANUAL = [
     {
         "tela": ":material/bar_chart: Dashboard",
         "intro": "A tela de abertura, agora com **abas por público** no topo (mesmo padrão de "
-                 "Controle de SC / Movimentações): cada perfil "
+                 "Controle de SC / Movimentação): cada perfil "
                  "(:material/person: Comprador · :material/bar_chart: Gestão · :material/calendar_month: KPI Mensal) vê só o que importa para o seu trabalho.",
         "itens": [
             _item(
@@ -256,8 +256,8 @@ MANUAL = [
         ],
     },
     {
-        "tela": ":material/assignment: Requisição",
-        "intro": "Onde o almoxarifado dá baixa (entrega material para quem pediu).",
+        "tela": ":material/sync: Movimentação → Requisição",
+        "intro": "Aba da Movimentação onde o almoxarifado dá baixa (entrega material para quem pediu).",
         "itens": [
             _item(
                 "Cabeçalho (setor, emitente, centro de custo, autorizador)",
@@ -288,7 +288,8 @@ MANUAL = [
     },
     {
         "tela": ":material/receipt_long: Controle de SC",
-        "intro": "O centro do comprador: solicitações, reposição, fornecedores, recebimento e importação.",
+        "intro": "O centro do comprador: solicitações, reposição, fornecedores e importação. "
+                 "(O **recebimento** mudou para a **Movimentação → Receber Material**.)",
         "itens": [
             _item(
                 "Aba 'Assistente de Reposição' — fila e 'Comprar até'",
@@ -315,16 +316,6 @@ MANUAL = [
                 "Marca o **melhor** = menor último preço; monta um **rascunho de e-mail** "
                 "(copiável) — o sistema prepara, você envia.",
                 "Mostra quem vende mais barato e escreve o e-mail de pedido de preço pra você.",
-            ),
-            _item(
-                "Aba 'Receber Material' (com conversão)",
-                "Dar entrada no estoque quando o material chega.",
-                "O item da SC e o fator de conversão cadastrado.",
-                "Você digita a quantidade **na unidade de compra**; o estoque sobe já convertido: "
-                "**incremento = qtd ÷ fator** (ex.: 5 L ÷ 5 = +1 GL). O saldo da SC segue na "
-                "unidade de compra.",
-                "Chegou a mercadoria? Você diz quanto veio (em litros, por exemplo) e o sistema "
-                "guarda na conta certa (galões), sem você fazer conta.",
             ),
             _item(
                 "Aba 'Importar Relatório de SCs'",
@@ -363,8 +354,9 @@ MANUAL = [
         ],
     },
     {
-        "tela": ":material/sync: Movimentações",
-        "intro": "O histórico e as análises de tudo que entrou e saiu.",
+        "tela": ":material/sync: Movimentação",
+        "intro": "O centro do almoxarifado físico: **Analytics**, **Receber Material**, "
+                 "**Requisição**, **Ajuste Rápido** e **Histórico Completo** — tudo que entra e sai.",
         "itens": [
             _item(
                 "Analytics (volume, divergências, rupturas) + export",
@@ -374,6 +366,16 @@ MANUAL = [
                 "compra e rupturas; permite exportar em Excel.",
                 "São gráficos que mostram 'quanto entrou e saiu ao longo do tempo' e onde houve "
                 "problema (faltou, ou veio diferente do pedido).",
+            ),
+            _item(
+                "Aba 'Receber Material' (com conversão)",
+                "Dar entrada no estoque quando o material chega (v3.8.0: veio do Controle de SC).",
+                "O item da SC e o fator de conversão cadastrado.",
+                "Dois modos — **Por Material** ou **Por SC / PO**. Você digita a quantidade **na "
+                "unidade de compra**; o estoque sobe já convertido: **incremento = qtd ÷ fator** "
+                "(ex.: 5 L ÷ 5 = +1 GL). O saldo da SC segue na unidade de compra.",
+                "Chegou a mercadoria? Você diz quanto veio (em litros, por exemplo) e o sistema "
+                "guarda na conta certa (galões), sem você fazer conta.",
             ),
         ],
     },

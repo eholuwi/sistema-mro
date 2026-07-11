@@ -64,7 +64,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 3.7.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 3.8.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -135,18 +135,19 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 3.7.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 3.8.0</span>
     </div>
     """, unsafe_allow_html=True)
 
     # 2. Navegação (Option Menu)
 
-    opcoes_limpas = ["Dashboard", "Saldo em Estoque", "Ficha 360", "Gerenciar Itens", "Movimentações", "Requisição", "Controle de SC", "Ajuda", "Configurações"]
+    # v3.8.0 — "Requisição" saiu do menu (virou aba da Movimentação); "Movimentações" → "Movimentação".
+    opcoes_limpas = ["Dashboard", "Saldo em Estoque", "Ficha 360", "Gerenciar Itens", "Movimentação", "Controle de SC", "Ajuda", "Configurações"]
 
     escolha_limpa = option_menu(
         menu_title=None,
         options=opcoes_limpas,
-        icons=["bar-chart-fill", "box-seam", "card-image", "plus-circle", "arrow-repeat", "clipboard-check", "receipt", "question-circle", "gear"],
+        icons=["bar-chart-fill", "box-seam", "card-image", "plus-circle", "arrow-repeat", "receipt", "question-circle", "gear"],
         menu_icon="cast",
         default_index=0,
         styles=PAL["option_menu_styles"],
@@ -831,6 +832,336 @@ def _receber_por_sc(centros):
             if recebidos and not erros:
                 time.sleep(1.5)
                 st.rerun()
+
+
+def _render_receber_material():
+    """Recebimento de material — Por Material (item → SC/avulsa) ou Por SC / PO.
+    v3.8.0: movido do Controle de SC para uma aba da Movimentação. `_receber_por_sc`
+    é module-level; nada de estado global além do já usado."""
+    _modo_rec = st.radio(
+        "Como quer receber?", ["📦 Por Material", "📋 Por SC / PO"],
+        horizontal=True, key="rec_modo",
+        help="Por Material começa pelo item; Por SC / PO escolhe a SC e recebe todos os itens pendentes de uma vez.")
+    if _modo_rec == "📋 Por SC / PO":
+        _receber_por_sc(listar_valores("centro_custo"))
+        return
+    with st.container(border=True):
+        st.markdown("### :material/inventory_2: Registrar Recebimento de Material")
+        st.caption("Vincule a uma SC aberta ou registre como entrada avulsa.")
+
+        centros = listar_valores("centro_custo")
+        _, item_rec, _ = sel_material("Material *", "sel_rec")
+
+        if item_rec:
+            # v2.9.0: conversão de unidades. A qtd recebida é informada na UNIDADE
+            # DE COMPRA; o estoque/ledger vive na UNIDADE DE ESTOQUE. fator=1 (itens
+            # de UM única) → sem diferença, tudo como antes.
+            _fator_rec = float(item_rec.get('fator_conversao') or 1.0) or 1.0
+            _ue_rec = item_rec.get('unidade') or 'UN'
+            _uc_rec = item_rec.get('unidade_compra') or _ue_rec
+            _tem_conv = abs(_fator_rec - 1.0) > 1e-9 and _uc_rec.upper() != _ue_rec.upper()
+
+            st.markdown(f"`{item_rec['part_number']}` — **{item_rec['nome_item']}** | Saldo Atual: `{item_rec['estoque_atual']}` {_ue_rec}")
+            if item_rec.get("unidade_divergente"):
+                st.warning(":material/warning: Este item é comprado em unidade diferente da de estoque e ainda "
+                           "**não tem fator de conversão** definido — o recebimento somará a "
+                           "quantidade crua. Cadastre o fator em **Gerenciar Itens → Conversão "
+                           "de unidades** antes de receber.")
+
+            scs_item = buscar_scs_por_item(item_rec["id"], apenas_abertas=True)
+            sc_sel = None
+
+            if scs_item:
+                vincular = st.checkbox(":material/link: Vincular a uma S.C. Aberta", value=True)
+                if vincular:
+                    opc_sc = {f"SC {s['numero_sc']} | PO: {s.get('po_item') or '—'} | Saldo: {s['pendente']} {_uc_rec}": s for s in scs_item}
+                    sel_sc_str = st.selectbox("Selecionar SC", list(opc_sc.keys()), label_visibility="collapsed")
+                    sc_sel = opc_sc[sel_sc_str]
+
+                    with st.container(border=True):
+                        st.markdown(f":material/check_circle: **SC {sc_sel['numero_sc']}** | PO: `{sc_sel['numero_po'] or '—'}` | Fornecedor: {sc_sel.get('fornecedor_item') or sc_sel['fornecedor'] or '—'}")
+                        st.markdown(f"Solicitado: `{sc_sel['quantidade_solicitada']}` | Negociado: `{sc_sel.get('quantidade_negociada') or sc_sel['quantidade_solicitada']}` | Recebido: `{sc_sel['quantidade_recebida']}` | **Saldo Residual: `{sc_sel['pendente']}` {_uc_rec}**")
+            else:
+                st.info("ℹ️ Nenhuma SC aberta para este material. A entrada será registrada como avulsa.")
+
+            # v2.9.0: qtd fora do form → conversão em tempo real (form não faz rerun).
+            limite_rec = float(sc_sel["pendente"]) if sc_sel else None
+            qtd_default = min(1.0, limite_rec) if limite_rec else 1.0
+            lbl_qtd = f"Qtd Recebida (em {_uc_rec}) *" if _tem_conv else "Qtd Recebida *"
+            if limite_rec:
+                qtd_r = st.number_input(lbl_qtd, min_value=0.01, max_value=limite_rec, step=1.0, value=qtd_default, key="rec_qtd")
+            else:
+                qtd_r = st.number_input(lbl_qtd, min_value=0.01, step=1.0, key="rec_qtd")
+            if _tem_conv:
+                _incr = qtd_r / _fator_rec
+                st.caption(f":material/straighten: **{qtd_r:g} {_uc_rec}** ÷ fator {_fator_rec:g} = **+{_incr:g} {_ue_rec}** no estoque.")
+
+            with st.form("form_rec"):
+                st.markdown("##### :material/download: Dados do Recebimento")
+                c2, c3 = st.columns(2)
+                # v2.7.1: Fornecedor não é obrigatório (pré-preenche da SC quando há).
+                forn   = c2.text_input("Fornecedor", value=(sc_sel.get("fornecedor_item") or sc_sel.get("fornecedor") or "") if sc_sel else "")
+                dt_r   = c3.date_input("Data Recebimento", value=date.today())
+
+                # v2.7.1: CC não é obrigatório — recebimentos MRO caem no Almoxarifado
+                # por padrão (quase todas as SCs deste time vão para o MRO).
+                _cc_opts = centros if centros else ["—"]
+                _cc_default = next((i for i, c in enumerate(_cc_opts)
+                                    if "ALMOXARIFADO" in str(c).upper()), 0)
+                cc_r   = st.selectbox("Centro de Custo", _cc_opts, index=_cc_default,
+                                      help="Padrão MRO: Almoxarifado. Ajuste se necessário.")
+                obs_nf = st.text_input("Nota Fiscal / Documento *" if sc_sel else "Obs / Nota Fiscal")
+
+                rec_b  = st.form_submit_button(":material/download: Confirmar Recebimento", width="stretch", type="primary")
+
+            if rec_b:
+                if sc_sel and not obs_nf.strip():
+                    st.warning(":material/warning: Informe o número da Nota Fiscal para rastreabilidade.")
+                elif sc_sel:
+                    # qtd_r na UM de compra; registrar_recebimento_sc converte ao estoque.
+                    ok, msg = registrar_recebimento_sc(
+                        sc_id=sc_sel["id"], item_sc_id=sc_sel["item_sc_id"],
+                        qtd_recebida=qtd_r, centro_custo=cc_r,
+                        solicitante="Almoxarifado", emitente="Almoxarifado",
+                        fornecedor=forn, data_recebimento=str(dt_r), obs_nf=obs_nf
+                    )
+                    if ok: st.success(f":material/check_circle: **Recebimento registrado!** {msg}"); time.sleep(2); st.rerun()
+                    else:  st.error(f":material/cancel: {msg}")
+                else:
+                    # v2.9.0: entrada avulsa converte aqui (registrar_movimentacao é
+                    # primitivo em unidade de ESTOQUE — a conversão é responsabilidade
+                    # da borda, como no recebimento de SC).
+                    _qtd_estoque = qtd_r / _fator_rec
+                    _obs_conv = (f" | convertido {qtd_r:g} {_uc_rec} ÷ {_fator_rec:g} = "
+                                 f"{_qtd_estoque:g} {_ue_rec}") if _tem_conv else ""
+                    ok, msg = registrar_movimentacao(
+                        item_id=item_rec["id"], tipo="entrada", quantidade=_qtd_estoque,
+                        centro_custo=cc_r, solicitante="Almoxarifado", emitente="Almoxarifado",
+                        observacao=f"Fornecedor: {forn} | {obs_nf}{_obs_conv}"
+                    )
+                    if ok: st.success(f":material/check_circle: **Entrada avulsa registrada!** {msg}"); time.sleep(2); st.rerun()
+                    else:  st.error(f":material/cancel: {msg}")
+
+
+def _render_requisicao():
+    """Requisição de material — Nova Requisição + Histórico. v3.8.0: movido da página
+    própria para uma aba da Movimentação. Usa guarda if/else (NÃO st.stop()) no fluxo
+    de sucesso, para não matar as abas irmãs da Movimentação."""
+    st.markdown("### :material/assignment: Requisição de Material")
+    st.caption("Registre a saída de material por requisição e acompanhe o histórico completo "
+               "por setor, emitente e autorizador.")
+
+    aba_nova, aba_hist_req = st.tabs([":material/edit_note: Nova Requisição", ":material/history: Histórico"])
+
+    autorizadores_lista = listar_valores("autorizador") or ["Gestor", "Líder", "Reserva"]
+
+    with aba_nova:
+        if "itens_req" not in st.session_state: st.session_state.itens_req = []
+        if "req_confirmada" not in st.session_state: st.session_state.req_confirmada = None
+
+        # v3.8.0: guarda if/else (sem st.stop(), que mataria as abas irmãs da Movimentação).
+        if st.session_state.req_confirmada:
+            st.success(f"### :material/check_circle: Requisição {st.session_state.req_confirmada} enviada!")
+            st.info("O estoque foi atualizado e o registro foi salvo no histórico.")
+            if st.button("Iniciar Nova Requisição", width="stretch"):
+                st.session_state.req_confirmada = None
+                st.rerun()
+        else:
+            # Padroniza os setores: registra em Configurações os que só existiam no
+            # histórico (uma vez por sessão, idempotente) e monta o select a partir da
+            # união (Configurações + histórico de movimentações/requisições).
+            if not st.session_state.get("_setores_sync"):
+                sincronizar_setores_config()
+                st.session_state["_setores_sync"] = True
+
+            # --- BLOCO 1: IDENTIFICAÇÃO ---
+            with st.container():
+                st.markdown("##### 1. Identificação da Demanda")
+                c1, c2, c3 = st.columns(3)
+                req_setor = c1.selectbox(
+                    "Setor Solicitante *", options=[""] + listar_setores_conhecidos(),
+                    index=0, accept_new_options=True,
+                    help="Escolha um setor já usado ou digite um novo para padronizar o cadastro.")
+                req_emit  = c2.text_input("Nome do Emitente *")
+                opcoes_cc = [""] + (listar_valores("centro_custo") or [])
+                req_cc    = c3.selectbox("Centro de Custo *", options=opcoes_cc, index=0)
+
+            st.markdown("---")
+
+            # --- BLOCO 2: SELEÇÃO DE MATERIAIS ---
+            with st.container():
+                st.markdown("##### 2. Adicionar Materiais")
+                _, item_req_add, _ = sel_material("Pesquise o material para requisitar", "sel_req_add")
+
+                if item_req_add:
+                    # Card de disponibilidade rápida (cores acompanham o tema via PAL)
+                    st.markdown(f"""
+                        <div style="border: 1px solid {PAL['painel_borda']}; padding: 10px; border-radius: 5px; background-color: {PAL['painel_bg']}; margin-bottom: 10px;">
+                            <span style="color: {PAL['accent']}; font-weight: bold;">DISPONÍVEL:</span> {item_req_add.get('estoque_atual',0)} {item_req_add.get('unidade','UN')}
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                with st.form("form_add_item_req", clear_on_submit=True):
+                    ci1, ci2 = st.columns(2)
+                    qtd_sol = ci1.number_input("Qtd Solicitada *", min_value=1.0, step=1.0, value=1.0)
+                    qtd_ate = ci2.number_input("Qtd Atendida *", min_value=0.0, step=1.0, value=1.0)
+                    add_item = st.form_submit_button(":material/add: ADICIONAR À LISTA", width="stretch")
+
+                if add_item:
+                    if not item_req_add:
+                        st.warning(":material/warning: Selecione um material antes de adicionar.")
+                    elif qtd_ate > item_req_add.get("estoque_atual", 0):
+                        st.error(f":material/cancel: Saldo insuficiente! Estoque: {item_req_add.get('estoque_atual', 0)}")
+                    else:
+                        st.session_state.itens_req.append({
+                            "item_id": item_req_add["id"], "part_number": item_req_add["part_number"],
+                            "nome_item": item_req_add["nome_item"], "unidade": item_req_add.get("unidade","UN"),
+                            "estoque_disponivel": item_req_add.get("estoque_atual",0),
+                            "quantidade_solicitada": qtd_sol, "quantidade_atendida": qtd_ate,
+                        })
+                        st.rerun()
+
+            # --- LISTA DE ITENS TEMPORÁRIA ---
+            if st.session_state.itens_req:
+                st.markdown("###### :material/inventory_2: Itens na Requisição Atual:")
+                for idx, it in enumerate(st.session_state.itens_req):
+                    with st.expander(f"{it['part_number']} — {it['nome_item']}", expanded=True):
+                        c_info, c_del = st.columns([5, 1])
+                        c_info.write(f"**Atendido:** {it['quantidade_atendida']} / **Solicitado:** {it['quantidade_solicitada']} {it['unidade']}")
+
+                        if c_del.button("Remover", key=f"rm_req_{idx}", type="primary"):
+                            st.session_state.itens_req.pop(idx)
+                            st.rerun()
+            else:
+                st.info("Aguardando adição de materiais...")
+
+            st.markdown("---")
+
+            # --- BLOCO 3: REGRAS ESPECIAIS ---
+            destinatarios_txt = ""
+            sesmt_resp = ""
+            with st.container():
+                st.markdown("##### 3. Regras de Entrega e SESMT")
+                col_ei, col_sesmt = st.columns(2)
+                with col_ei:
+                    entrega_ind = st.checkbox(":material/inventory_2: Entrega Individual (EPI/Uniforme)")
+                    if entrega_ind:
+                        destinatarios_txt = st.text_area("Lista de Destinatários *",
+                            placeholder="MATRÍCULA — NOME (um por linha)", height=100)
+                with col_sesmt:
+                    is_sesmt = st.checkbox(":material/engineering: Requer Aprovação SESMT")
+                    if is_sesmt:
+                        sesmt_resp = st.text_input("Responsável SESMT *")
+
+            # --- BLOCO 4: AUTORIZAÇÃO E FINALIZAÇÃO ---
+            with st.container():
+                st.markdown("##### 4. Autorização Final")
+                ca1, ca2 = st.columns(2)
+                aut_tipo = ca1.selectbox("Tipo de Autorizador *", autorizadores_lista)
+                aut_nome = ca2.text_input("Assinatura / Nome do Autorizador *")
+                obs_req  = st.text_area("Observações Gerais da Requisição", height=70)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button(":material/check_circle: FINALIZAR E ATUALIZAR ESTOQUE", type="primary", width="stretch"):
+                erros = []
+                if not req_setor or not req_emit or not aut_nome: erros.append("Campos obrigatórios com (*) não preenchidos.")
+                if not st.session_state.itens_req: erros.append("A lista de materiais está vazia.")
+                if entrega_ind and not destinatarios_txt: erros.append("Para entrega individual, informe os destinatários.")
+
+                if erros:
+                    for e in erros: st.error(e)
+                else:
+                    with st.spinner("Processando requisição e baixando estoque..."):
+                        destinatarios = []
+                        if entrega_ind and destinatarios_txt:
+                            for linha in destinatarios_txt.strip().split("\n"):
+                                if "—" in linha or "-" in linha:
+                                    sep = "—" if "—" in linha else "-"
+                                    p = linha.split(sep, 1)
+                                    destinatarios.append({"matricula": p[0].strip(), "nome": p[1].strip() if len(p)>1 else ""})
+
+                        ok, resultado = criar_requisicao(
+                            setor=req_setor, emitente=req_emit, centro_custo=req_cc,
+                            autorizador_tipo=aut_tipo, autorizador_nome=aut_nome,
+                            entrega_individual=entrega_ind, destinatarios=destinatarios,
+                            sesmt=is_sesmt, sesmt_responsavel=sesmt_resp if is_sesmt else "",
+                            itens=st.session_state.itens_req, observacoes=obs_req
+                        )
+
+                        if ok:
+                            st.session_state.itens_req = []
+                            st.session_state.req_confirmada = resultado
+                            st.rerun()
+                        else:
+                            st.error(f"Erro no processamento: {resultado}")
+
+    # --- ABA: HISTÓRICO ---
+    with aba_hist_req:
+        st.markdown("### :material/history: Histórico de Requisições")
+        reqs = listar_requisicoes(limit=500)
+        if not reqs:
+            st.info("Nenhuma requisição registrada até o momento.")
+        else:
+            df_all = pd.DataFrame(reqs)
+
+            # v3.4.0 — resumo em métricas
+            _itens = int(pd.to_numeric(df_all.get("total_itens"), errors="coerce").fillna(0).sum())
+            m1, m2, m3 = st.columns(3)
+            m1.metric(":material/receipt_long: Requisições", len(df_all))
+            m2.metric(":material/inventory_2: Itens requisitados", _itens)
+            m3.metric(":material/domain: Setores atendidos", int(df_all["setor"].nunique()))
+
+            # v3.4.0 — filtros (setor + busca livre)
+            fc1, fc2 = st.columns(2)
+            setores_op = ["Todos"] + sorted(s for s in df_all["setor"].dropna().unique())
+            f_set = fc1.selectbox("Setor", setores_op, key="hist_req_setor")
+            f_txt = fc2.text_input(":material/search: Buscar (Nº, emitente ou autorizador)", key="hist_req_busca")
+
+            fil = df_all.copy()
+            if f_set != "Todos":
+                fil = fil[fil["setor"] == f_set]
+            if f_txt.strip():
+                t = f_txt.strip().lower()
+                fil = fil[fil.apply(
+                    lambda r: t in str(r.get("numero_requisicao", "")).lower()
+                    or t in str(r.get("emitente", "")).lower()
+                    or t in str(r.get("autorizador_nome", "")).lower(), axis=1)]
+
+            # v3.4.0 — mini-gráfico: requisições por setor
+            if not fil.empty:
+                by_set = fil["setor"].fillna("—").value_counts()
+                if len(by_set):
+                    st.plotly_chart(
+                        _barv(list(by_set.index), [int(v) for v in by_set.values]),
+                        width="stretch", config={"displayModeBar": False})
+
+            df_reqs = fil[["numero_requisicao", "data_hora", "setor", "emitente",
+                           "autorizador_nome", "total_itens"]].copy()
+            df_reqs.columns = ["Nº Req", "Data/Hora", "Setor", "Emitente", "Autorizador", "Qtd Itens"]
+            st.dataframe(df_reqs, width="stretch", hide_index=True)
+
+            st.markdown("---")
+            st.markdown("#### :material/search: Detalhes da Requisição")
+            opcoes_req = {f"REQ-{r['numero_requisicao']} | {r['setor']} | {str(r['data_hora'])[:10]}": r
+                          for r in fil.to_dict("records")}
+            sel_req = st.selectbox("Escolha uma requisição para ver os detalhes:",
+                                   [""] + list(opcoes_req.keys()))
+
+            if sel_req:
+                r_det = opcoes_req[sel_req]
+                with st.container(border=True):
+                    st.markdown(f"**Resumo REQ-{r_det['numero_requisicao']}** · "
+                                f"{str(r_det.get('data_hora',''))[:16]}")
+                    c_a, c_b, c_c = st.columns(3)
+                    c_a.write(f":material/person: **Emitente:** {r_det['emitente']}")
+                    c_b.write(f":material/edit: **Autorizador:** {r_det['autorizador_nome']}")
+                    c_c.write(f":material/apartment: **C.Custo:** {r_det['centro_custo']}")
+
+                    itens_det = listar_itens_requisicao(r_det["id"])
+                    if itens_det:
+                        df_det = pd.DataFrame(itens_det)[["part_number", "nome_item", "quantidade_solicitada", "quantidade_atendida", "unidade"]]
+                        df_det.columns = ["PN", "Material", "Solicitado", "Atendido", "UN"]
+                        st.dataframe(df_det, width="stretch", hide_index=True)
 
 
 def _linhas(x, series, height=260):
@@ -1555,15 +1886,25 @@ elif pagina == "Gerenciar Itens":
 # ══════════════════════════════════════════════════════════════════════════════
 # MOVIMENTAÇÕES
 # ══════════════════════════════════════════════════════════════════════════════
-elif pagina == "Movimentações":
-    st.title(":material/sync: Controle de Estoque")
+elif pagina == "Movimentação":
+    st.title(":material/sync: Movimentação")
 
-    # --- TABS: AJUSTE, HISTÓRICO E DASHBOARD ---
-    tab_dash, tab_ajuste, tab_hist = st.tabs([":material/bar_chart: Analytics", ":material/balance: Ajuste Rápido", ":material/history: Histórico Completo"])
+    # v3.8.0 — Requisição e Receber Material aninhados aqui (abas), ao lado de Analytics,
+    # Ajuste Rápido e Histórico. Os corpos vivem em _render_receber_material /
+    # _render_requisicao (module-level) — sem duplicar nem mover blocos indentados.
+    tab_dash, tab_rec, tab_req, tab_ajuste, tab_hist = st.tabs([
+        ":material/bar_chart: Analytics", ":material/inventory_2: Receber Material",
+        ":material/assignment: Requisição", ":material/balance: Ajuste Rápido",
+        ":material/history: Histórico Completo"])
 
     centros = listar_valores("centro_custo") or ["Geral"]
 
-    # === TAB 1: AJUSTE RÁPIDO DE ESTOQUE ===
+    with tab_rec:
+        _render_receber_material()
+    with tab_req:
+        _render_requisicao()
+
+    # === TAB: AJUSTE RÁPIDO DE ESTOQUE ===
     with tab_ajuste:
         with st.container(border=True):
             st.subheader(":material/balance: Ajuste Manual de Saldo")
@@ -1920,236 +2261,16 @@ elif pagina == "Movimentações":
                 st.warning(":material/lightbulb: **Ação Recomendada:** Revise o **Estoque Mínimo** e o **Lead Time** destes itens imediatamente para evitar paradas de linha.")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# REQUISIÇÃO
-# ══════════════════════════════════════════════════════════════════════════════
-elif pagina == "Requisição":
-    st.title(":material/assignment: Requisição de Material")
-    st.caption("Registre a saída de material por requisição e acompanhe o histórico completo "
-               "por setor, emitente e autorizador.")
-
-    aba_nova, aba_hist_req = st.tabs([":material/edit_note: Nova Requisição", ":material/history: Histórico"])
-    
-    # Configurações de contexto
-    autorizadores_lista = listar_valores("autorizador") or ["Gestor", "Líder", "Reserva"]
-    centros = listar_valores("centro_custo")
-
-    with aba_nova:
-        if "itens_req" not in st.session_state: st.session_state.itens_req = []
-        if "req_confirmada" not in st.session_state: st.session_state.req_confirmada = None
-
-        # --- FEEDBACK DE SUCESSO ---
-        if st.session_state.req_confirmada:
-            st.success(f"### :material/check_circle: Requisição {st.session_state.req_confirmada} enviada!")
-            st.info("O estoque foi atualizado e o registro foi salvo no histórico.")
-            if st.button("Iniciar Nova Requisição", width="stretch"):
-                st.session_state.req_confirmada = None
-                st.rerun()
-            st.stop()
-
-        # Padroniza os setores: registra em Configurações os que só existiam no
-        # histórico (uma vez por sessão, idempotente) e monta o select a partir da
-        # união (Configurações + histórico de movimentações/requisições).
-        if not st.session_state.get("_setores_sync"):
-            sincronizar_setores_config()
-            st.session_state["_setores_sync"] = True
-
-        # --- BLOCO 1: IDENTIFICAÇÃO ---
-        with st.container():
-            st.markdown("##### 1. Identificação da Demanda")
-            c1, c2, c3 = st.columns(3)
-            req_setor = c1.selectbox(
-                "Setor Solicitante *", options=[""] + listar_setores_conhecidos(),
-                index=0, accept_new_options=True,
-                help="Escolha um setor já usado ou digite um novo para padronizar o cadastro.")
-            req_emit  = c2.text_input("Nome do Emitente *")
-            opcoes_cc = [""] + (listar_valores("centro_custo") or [])
-            req_cc    = c3.selectbox("Centro de Custo *", options=opcoes_cc, index=0)
-
-        st.markdown("---")
-
-        # --- BLOCO 2: SELEÇÃO DE MATERIAIS ---
-        with st.container():
-            st.markdown("##### 2. Adicionar Materiais")
-            _, item_req_add, _ = sel_material("Pesquise o material para requisitar", "sel_req_add")
-            
-            if item_req_add:
-                # Card de disponibilidade rápida (cores acompanham o tema via PAL)
-                st.markdown(f"""
-                    <div style="border: 1px solid {PAL['painel_borda']}; padding: 10px; border-radius: 5px; background-color: {PAL['painel_bg']}; margin-bottom: 10px;">
-                        <span style="color: {PAL['accent']}; font-weight: bold;">DISPONÍVEL:</span> {item_req_add.get('estoque_atual',0)} {item_req_add.get('unidade','UN')}
-                    </div>
-                """, unsafe_allow_html=True)
-
-            with st.form("form_add_item_req", clear_on_submit=True):
-                ci1, ci2 = st.columns(2)
-                qtd_sol = ci1.number_input("Qtd Solicitada *", min_value=1.0, step=1.0, value=1.0)
-                qtd_ate = ci2.number_input("Qtd Atendida *", min_value=0.0, step=1.0, value=1.0)
-                add_item = st.form_submit_button(":material/add: ADICIONAR À LISTA", width="stretch")
-
-            if add_item:
-                if not item_req_add:
-                    st.warning(":material/warning: Selecione um material antes de adicionar.")
-                elif qtd_ate > item_req_add.get("estoque_atual", 0):
-                    st.error(f":material/cancel: Saldo insuficiente! Estoque: {item_req_add.get('estoque_atual', 0)}")
-                else:
-                    st.session_state.itens_req.append({
-                        "item_id": item_req_add["id"], "part_number": item_req_add["part_number"],
-                        "nome_item": item_req_add["nome_item"], "unidade": item_req_add.get("unidade","UN"),
-                        "estoque_disponivel": item_req_add.get("estoque_atual",0),
-                        "quantidade_solicitada": qtd_sol, "quantidade_atendida": qtd_ate,
-                    })
-                    st.rerun()
-
-        # --- LISTA DE ITENS TEMPORÁRIA ---
-        if st.session_state.itens_req:
-            st.markdown("###### :material/inventory_2: Itens na Requisição Atual:")
-            for idx, it in enumerate(st.session_state.itens_req):
-                with st.expander(f"{it['part_number']} — {it['nome_item']}", expanded=True):
-                    c_info, c_del = st.columns([5, 1])
-                    c_info.write(f"**Atendido:** {it['quantidade_atendida']} / **Solicitado:** {it['quantidade_solicitada']} {it['unidade']}")
-                    
-                    if c_del.button("Remover", key=f"rm_req_{idx}", type="primary"):
-                        st.session_state.itens_req.pop(idx)
-                        st.rerun()
-        else:
-            st.info("Aguardando adição de materiais...")
-
-        st.markdown("---")
-
-        # --- BLOCO 3: REGRAS ESPECIAIS ---
-        with st.container():
-            st.markdown("##### 3. Regras de Entrega e SESMT")
-            col_ei, col_sesmt = st.columns(2)
-            with col_ei:
-                entrega_ind = st.checkbox(":material/inventory_2: Entrega Individual (EPI/Uniforme)")
-                if entrega_ind:
-                    destinatarios_txt = st.text_area("Lista de Destinatários *", 
-                        placeholder="MATRÍCULA — NOME (um por linha)", height=100)
-            with col_sesmt:
-                is_sesmt = st.checkbox(":material/engineering: Requer Aprovação SESMT")
-                if is_sesmt:
-                    sesmt_resp = st.text_input("Responsável SESMT *")
-
-        # --- BLOCO 4: AUTORIZAÇÃO E FINALIZAÇÃO ---
-        with st.container():
-            st.markdown("##### 4. Autorização Final")
-            ca1, ca2 = st.columns(2)
-            aut_tipo = ca1.selectbox("Tipo de Autorizador *", autorizadores_lista)
-            aut_nome = ca2.text_input("Assinatura / Nome do Autorizador *")
-            obs_req  = st.text_area("Observações Gerais da Requisição", height=70)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button(":material/check_circle: FINALIZAR E ATUALIZAR ESTOQUE", type="primary", width="stretch"):
-            erros = []
-            if not req_setor or not req_emit or not aut_nome: erros.append("Campos obrigatórios com (*) não preenchidos.")
-            if not st.session_state.itens_req: erros.append("A lista de materiais está vazia.")
-            if entrega_ind and not destinatarios_txt: erros.append("Para entrega individual, informe os destinatários.")
-            
-            if erros:
-                for e in erros: st.error(e)
-            else:
-                with st.spinner("Processando requisição e baixando estoque..."):
-                    destinatarios = []
-                    if entrega_ind and destinatarios_txt:
-                        for linha in destinatarios_txt.strip().split("\n"):
-                            if "—" in linha or "-" in linha:
-                                sep = "—" if "—" in linha else "-"
-                                p = linha.split(sep, 1)
-                                destinatarios.append({"matricula": p[0].strip(), "nome": p[1].strip() if len(p)>1 else ""})
-                    
-                    ok, resultado = criar_requisicao(
-                        setor=req_setor, emitente=req_emit, centro_custo=req_cc,
-                        autorizador_tipo=aut_tipo, autorizador_nome=aut_nome,
-                        entrega_individual=entrega_ind, destinatarios=destinatarios,
-                        sesmt=is_sesmt, sesmt_responsavel=sesmt_resp if is_sesmt else "",
-                        itens=st.session_state.itens_req, observacoes=obs_req
-                    )
-                    
-                    if ok:
-                        st.session_state.itens_req = []
-                        st.session_state.req_confirmada = resultado
-                        st.rerun()
-                    else:
-                        st.error(f"Erro no processamento: {resultado}")
-
-    # --- ABA: HISTÓRICO ---
-    with aba_hist_req:
-        st.markdown("### :material/history: Histórico de Requisições")
-        reqs = listar_requisicoes(limit=500)
-        if not reqs:
-            st.info("Nenhuma requisição registrada até o momento.")
-        else:
-            df_all = pd.DataFrame(reqs)
-
-            # v3.4.0 — resumo em métricas
-            _itens = int(pd.to_numeric(df_all.get("total_itens"), errors="coerce").fillna(0).sum())
-            m1, m2, m3 = st.columns(3)
-            m1.metric(":material/receipt_long: Requisições", len(df_all))
-            m2.metric(":material/inventory_2: Itens requisitados", _itens)
-            m3.metric(":material/domain: Setores atendidos", int(df_all["setor"].nunique()))
-
-            # v3.4.0 — filtros (setor + busca livre)
-            fc1, fc2 = st.columns(2)
-            setores_op = ["Todos"] + sorted(s for s in df_all["setor"].dropna().unique())
-            f_set = fc1.selectbox("Setor", setores_op, key="hist_req_setor")
-            f_txt = fc2.text_input(":material/search: Buscar (Nº, emitente ou autorizador)", key="hist_req_busca")
-
-            fil = df_all.copy()
-            if f_set != "Todos":
-                fil = fil[fil["setor"] == f_set]
-            if f_txt.strip():
-                t = f_txt.strip().lower()
-                fil = fil[fil.apply(
-                    lambda r: t in str(r.get("numero_requisicao", "")).lower()
-                    or t in str(r.get("emitente", "")).lower()
-                    or t in str(r.get("autorizador_nome", "")).lower(), axis=1)]
-
-            # v3.4.0 — mini-gráfico: requisições por setor
-            if not fil.empty:
-                by_set = fil["setor"].fillna("—").value_counts()
-                if len(by_set):
-                    st.plotly_chart(
-                        _barv(list(by_set.index), [int(v) for v in by_set.values]),
-                        width="stretch", config={"displayModeBar": False})
-
-            df_reqs = fil[["numero_requisicao", "data_hora", "setor", "emitente",
-                           "autorizador_nome", "total_itens"]].copy()
-            df_reqs.columns = ["Nº Req", "Data/Hora", "Setor", "Emitente", "Autorizador", "Qtd Itens"]
-            st.dataframe(df_reqs, width="stretch", hide_index=True)
-
-            st.markdown("---")
-            st.markdown("#### :material/search: Detalhes da Requisição")
-            opcoes_req = {f"REQ-{r['numero_requisicao']} | {r['setor']} | {str(r['data_hora'])[:10]}": r
-                          for r in fil.to_dict("records")}
-            sel_req = st.selectbox("Escolha uma requisição para ver os detalhes:",
-                                   [""] + list(opcoes_req.keys()))
-
-            if sel_req:
-                r_det = opcoes_req[sel_req]
-                with st.container(border=True):
-                    st.markdown(f"**Resumo REQ-{r_det['numero_requisicao']}** · "
-                                f"{str(r_det.get('data_hora',''))[:16]}")
-                    c_a, c_b, c_c = st.columns(3)
-                    c_a.write(f":material/person: **Emitente:** {r_det['emitente']}")
-                    c_b.write(f":material/edit: **Autorizador:** {r_det['autorizador_nome']}")
-                    c_c.write(f":material/apartment: **C.Custo:** {r_det['centro_custo']}")
-
-                    itens_det = listar_itens_requisicao(r_det["id"])
-                    if itens_det:
-                        df_det = pd.DataFrame(itens_det)[["part_number", "nome_item", "quantidade_solicitada", "quantidade_atendida", "unidade"]]
-                        df_det.columns = ["PN", "Material", "Solicitado", "Atendido", "UN"]
-                        st.dataframe(df_det, width="stretch", hide_index=True)
-                        
-# ══════════════════════════════════════════════════════════════════════════════
 # CONTROLE DE SC
 # ══════════════════════════════════════════════════════════════════════════════
 elif pagina == "Controle de SC":
     st.title(":material/receipt_long: Controle de SC")
     
     # Estrutura de abas mantida conforme solicitado
-    aba_mon, aba_assist, aba_forn, aba_nova_sc, aba_rec, aba_ed, aba_h, aba_import = st.tabs([
+    # v3.8.0 — "Receber Material" saiu daqui (agora vive na Movimentação). 7 abas.
+    aba_mon, aba_assist, aba_forn, aba_nova_sc, aba_ed, aba_h, aba_import = st.tabs([
     ":material/sensors: Monitor", ":material/psychology: Assistente de Reposição", ":material/apartment: Fornecedores & Cotação", ":material/add: Nova SC",
-    ":material/inventory_2: Receber Material", ":material/sync: Detalhes SC", ":material/history: Histórico", ":material/download: Importar Relatório de SCs"
+    ":material/sync: Detalhes SC", ":material/history: Histórico", ":material/download: Importar Relatório de SCs"
     ])
     # ══════════════════════════════════════════════════════════════════════════════
     # 📡 MONITOR DE COMPRAS 
@@ -2775,115 +2896,6 @@ elif pagina == "Controle de SC":
                     st.error(f":material/cancel: {msg}")
 
     # ══════════════════════════════════════════════════════════════════════════════
-    #  📦 RECEBER MATERIAL (Grid Inteligente + Feedback Visual Aprimorado)
-    # ══════════════════════════════════════════════════════════════════════════════
-    with aba_rec:
-        _modo_rec = st.radio(
-            "Como quer receber?", ["📦 Por Material", "📋 Por SC / PO"],
-            horizontal=True, key="rec_modo",
-            help="Por Material começa pelo item; Por SC / PO escolhe a SC e recebe todos os itens pendentes de uma vez.")
-        if _modo_rec == "📋 Por SC / PO":
-            _receber_por_sc(listar_valores("centro_custo"))
-        else:
-          with st.container(border=True):
-            st.markdown("### :material/inventory_2: Registrar Recebimento de Material")
-            st.caption("Vincule a uma SC aberta ou registre como entrada avulsa.")
-            
-            centros = listar_valores("centro_custo")
-            _, item_rec, _ = sel_material("Material *", "sel_rec")
-
-            if item_rec:
-                # v2.9.0: conversão de unidades. A qtd recebida é informada na UNIDADE
-                # DE COMPRA; o estoque/ledger vive na UNIDADE DE ESTOQUE. fator=1 (itens
-                # de UM única) → sem diferença, tudo como antes.
-                _fator_rec = float(item_rec.get('fator_conversao') or 1.0) or 1.0
-                _ue_rec = item_rec.get('unidade') or 'UN'
-                _uc_rec = item_rec.get('unidade_compra') or _ue_rec
-                _tem_conv = abs(_fator_rec - 1.0) > 1e-9 and _uc_rec.upper() != _ue_rec.upper()
-
-                # UX: Card de contexto do item selecionado
-                st.markdown(f"`{item_rec['part_number']}` — **{item_rec['nome_item']}** | Saldo Atual: `{item_rec['estoque_atual']}` {_ue_rec}")
-                if item_rec.get("unidade_divergente"):
-                    st.warning(":material/warning: Este item é comprado em unidade diferente da de estoque e ainda "
-                               "**não tem fator de conversão** definido — o recebimento somará a "
-                               "quantidade crua. Cadastre o fator em **Gerenciar Itens → Conversão "
-                               "de unidades** antes de receber.")
-
-                scs_item = buscar_scs_por_item(item_rec["id"], apenas_abertas=True)
-                sc_sel = None
-
-                if scs_item:
-                    vincular = st.checkbox(":material/link: Vincular a uma S.C. Aberta", value=True)
-                    if vincular:
-                        opc_sc = {f"SC {s['numero_sc']} | PO: {s.get('po_item') or '—'} | Saldo: {s['pendente']} {_uc_rec}": s for s in scs_item}
-                        sel_sc_str = st.selectbox("Selecionar SC", list(opc_sc.keys()), label_visibility="collapsed")
-                        sc_sel = opc_sc[sel_sc_str]
-
-                        with st.container(border=True):
-                            st.markdown(f":material/check_circle: **SC {sc_sel['numero_sc']}** | PO: `{sc_sel['numero_po'] or '—'}` | Fornecedor: {sc_sel.get('fornecedor_item') or sc_sel['fornecedor'] or '—'}")
-                            st.markdown(f"Solicitado: `{sc_sel['quantidade_solicitada']}` | Negociado: `{sc_sel.get('quantidade_negociada') or sc_sel['quantidade_solicitada']}` | Recebido: `{sc_sel['quantidade_recebida']}` | **Saldo Residual: `{sc_sel['pendente']}` {_uc_rec}**")
-                else:
-                    st.info("ℹ️ Nenhuma SC aberta para este material. A entrada será registrada como avulsa.")
-
-                # v2.9.0: qtd fora do form → conversão em tempo real (form não faz rerun).
-                limite_rec = float(sc_sel["pendente"]) if sc_sel else None
-                qtd_default = min(1.0, limite_rec) if limite_rec else 1.0
-                lbl_qtd = f"Qtd Recebida (em {_uc_rec}) *" if _tem_conv else "Qtd Recebida *"
-                if limite_rec:
-                    qtd_r = st.number_input(lbl_qtd, min_value=0.01, max_value=limite_rec, step=1.0, value=qtd_default, key="rec_qtd")
-                else:
-                    qtd_r = st.number_input(lbl_qtd, min_value=0.01, step=1.0, key="rec_qtd")
-                if _tem_conv:
-                    _incr = qtd_r / _fator_rec
-                    st.caption(f":material/straighten: **{qtd_r:g} {_uc_rec}** ÷ fator {_fator_rec:g} = **+{_incr:g} {_ue_rec}** no estoque.")
-
-                with st.form("form_rec"):
-                    st.markdown("##### :material/download: Dados do Recebimento")
-                    c2, c3 = st.columns(2)
-                    # v2.7.1: Fornecedor não é obrigatório (pré-preenche da SC quando há).
-                    forn   = c2.text_input("Fornecedor", value=(sc_sel.get("fornecedor_item") or sc_sel.get("fornecedor") or "") if sc_sel else "")
-                    dt_r   = c3.date_input("Data Recebimento", value=date.today())
-
-                    # v2.7.1: CC não é obrigatório — recebimentos MRO caem no Almoxarifado
-                    # por padrão (quase todas as SCs deste time vão para o MRO).
-                    _cc_opts = centros if centros else ["—"]
-                    _cc_default = next((i for i, c in enumerate(_cc_opts)
-                                        if "ALMOXARIFADO" in str(c).upper()), 0)
-                    cc_r   = st.selectbox("Centro de Custo", _cc_opts, index=_cc_default,
-                                          help="Padrão MRO: Almoxarifado. Ajuste se necessário.")
-                    obs_nf = st.text_input("Nota Fiscal / Documento *" if sc_sel else "Obs / Nota Fiscal")
-
-                    rec_b  = st.form_submit_button(":material/download: Confirmar Recebimento", width="stretch", type="primary")
-
-                if rec_b:
-                    if sc_sel and not obs_nf.strip():
-                        st.warning(":material/warning: Informe o número da Nota Fiscal para rastreabilidade.")
-                    elif sc_sel:
-                        # qtd_r na UM de compra; registrar_recebimento_sc converte ao estoque.
-                        ok, msg = registrar_recebimento_sc(
-                            sc_id=sc_sel["id"], item_sc_id=sc_sel["item_sc_id"],
-                            qtd_recebida=qtd_r, centro_custo=cc_r,
-                            solicitante="Almoxarifado", emitente="Almoxarifado",
-                            fornecedor=forn, data_recebimento=str(dt_r), obs_nf=obs_nf
-                        )
-                        if ok: st.success(f":material/check_circle: **Recebimento registrado!** {msg}"); time.sleep(2); st.rerun()
-                        else:  st.error(f":material/cancel: {msg}")
-                    else:
-                        # v2.9.0: entrada avulsa converte aqui (registrar_movimentacao é
-                        # primitivo em unidade de ESTOQUE — a conversão é responsabilidade
-                        # da borda, como no recebimento de SC).
-                        _qtd_estoque = qtd_r / _fator_rec
-                        _obs_conv = (f" | convertido {qtd_r:g} {_uc_rec} ÷ {_fator_rec:g} = "
-                                     f"{_qtd_estoque:g} {_ue_rec}") if _tem_conv else ""
-                        ok, msg = registrar_movimentacao(
-                            item_id=item_rec["id"], tipo="entrada", quantidade=_qtd_estoque,
-                            centro_custo=cc_r, solicitante="Almoxarifado", emitente="Almoxarifado",
-                            observacao=f"Fornecedor: {forn} | {obs_nf}{_obs_conv}"
-                        )
-                        if ok: st.success(f":material/check_circle: **Entrada avulsa registrada!** {msg}"); time.sleep(2); st.rerun()
-                        else:  st.error(f":material/cancel: {msg}")
-
-    # ══════════════════════════════════════════════════════════════════════════════
     # 🔄 ATUALIZAR STATUS E DADOS DA S.C. (Corrigido: Variáveis definidas antes do uso)
     # ══════════════════════════════════════════════════════════════════════════════
     with aba_ed:
@@ -3418,7 +3430,7 @@ elif pagina == "Ajuda":
                                        placeholder="Descreva a sugestão, o problema ou a ideia em detalhes...")
                 fb_pagina = st.selectbox("Página/área relacionada (opcional)",
                                          ["—", "Dashboard", "Saldo em Estoque", "Gerenciar Itens",
-                                          "Movimentações", "Requisição", "Controle de SC",
+                                          "Movimentação", "Controle de SC",
                                           "Configurações", "Geral"], index=0)
                 enviado = st.form_submit_button(":material/mail: Enviar Feedback", type="primary", width="stretch")
                 if enviado:
