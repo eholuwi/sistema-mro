@@ -477,6 +477,159 @@ def setor_dominante_por_item(item_ids=None, conn=None):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# MONITOR DE SC (v3.9.0) — grade editável e persistente (substitui a planilha FUP)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Colunas MANUAIS (o almox edita e persistem) × TÉCNICAS (o sistema recalcula no sync).
+MONITOR_COLS_MANUAIS = ("status_po", "fornecedor", "comentario", "responsavel")
+MONITOR_COLS_TECNICAS = ("numero_sc", "part_number", "nome_item", "status_calc", "unidade",
+                         "tam_po", "saldo_po", "esgotado_em", "faltando_dias", "po")
+
+
+def _monitor_status(estoque, minimo):
+    """STATUS (criticidade) derivado do estoque físico vs mínimo, p/ o Monitor de SC.
+    Estoque 0 → ESTOQUE Ø; ≤ mínimo → CRÍTICO; senão vazio (decisão do plano/D1)."""
+    e = float(estoque or 0)
+    m = float(minimo or 0)
+    if e <= 0:
+        return "🔴 ESTOQUE Ø"
+    if m > 0 and e <= m:
+        return "🟡 CRÍTICO"
+    return ""
+
+
+def sincronizar_monitor_sc(conn=None, hoje=None, force=False):
+    """Sync diário do Monitor de SC (v3.9.0 / C2). HÍBRIDO:
+      1. Reseta 'Revisado' das linhas cujo revisado_data < hoje (o checkbox reseta todo dia).
+      2. Recalcula/upserta as colunas TÉCNICAS de cada item PENDENTE de SC aberta, por
+         linha_id estável ('sys:<itens_sc.id>') — PRESERVA as colunas manuais e o tombstone
+         'removido'. Linhas de sistema que saíram do pendente ficam inativas (ativo=0), sem
+         perder anotações; itens novos viram linha nova.
+    Idempotente e gated por dia (tabela monitor_sc_sync) — pode rodar a cada abertura do
+    app. `force=True` ignora o gate (ex.: logo após um import). Retorna nº de linhas de
+    sistema ativas."""
+    hoje = hoje or date.today()
+    hoje_iso = hoje.strftime("%Y-%m-%d")
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with transaction(conn) as c:
+        if not force:
+            r = c.execute("SELECT ultima_sync FROM monitor_sc_sync WHERE id=1").fetchone()
+            if r and r["ultima_sync"] == hoje_iso:
+                return -1  # já sincronizado hoje
+
+        # 1) Reset diário do "Revisado pelo Almox".
+        c.execute(
+            "UPDATE monitor_sc SET revisado=0 "
+            "WHERE revisado=1 AND (revisado_data IS NULL OR revisado_data < ?)", (hoje_iso,))
+
+        # 2) Desativa todas as linhas de sistema; as pendentes serão reativadas no upsert.
+        c.execute("UPDATE monitor_sc SET ativo=0 WHERE origem='sistema'")
+
+        rows = c.execute(f"""
+            SELECT isc.id AS item_sc_id, sc.numero_sc,
+                   isc.numero_po AS po_item, sc.numero_po AS po_sc,
+                   inv.part_number, inv.nome_item, inv.unidade,
+                   inv.estoque_atual, inv.estoque_minimo, inv.previsao_ruptura_dias,
+                   isc.quantidade_solicitada AS tam_po,
+                   COALESCE(isc.saldo_residual,
+                            isc.quantidade_solicitada - isc.quantidade_recebida) AS saldo_po
+            FROM itens_sc isc
+            JOIN solicitacoes_compra sc ON sc.id = isc.sc_id
+            JOIN inventario inv ON inv.id = isc.item_id
+            WHERE sc.status NOT IN ('Recebido', 'Cancelado')
+              AND COALESCE(isc.saldo_residual,
+                           isc.quantidade_solicitada - isc.quantidade_recebida) > 0
+        """).fetchall()
+        ativos = 0
+        for r in rows:
+            linha_id = f"sys:{r['item_sc_id']}"
+            status_calc = _monitor_status(r["estoque_atual"], r["estoque_minimo"])
+            rupt = r["previsao_ruptura_dias"]
+            esgotado_em, faltando = None, None
+            if rupt is not None and rupt < PREVISAO_RUPTURA_SEM_RISCO:
+                faltando = round(float(rupt), 1)
+                esgotado_em = (hoje + timedelta(days=int(rupt))).strftime("%Y-%m-%d")
+            po = (r["po_item"] or r["po_sc"] or "")
+            c.execute("""
+                INSERT INTO monitor_sc
+                    (linha_id, numero_sc, part_number, nome_item, status_calc, unidade,
+                     tam_po, saldo_po, esgotado_em, faltando_dias, po, origem, ativo, data_atualizacao)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?, 'sistema', 1, ?)
+                ON CONFLICT(linha_id) DO UPDATE SET
+                    numero_sc=excluded.numero_sc, part_number=excluded.part_number,
+                    nome_item=excluded.nome_item, status_calc=excluded.status_calc,
+                    unidade=excluded.unidade, tam_po=excluded.tam_po, saldo_po=excluded.saldo_po,
+                    esgotado_em=excluded.esgotado_em, faltando_dias=excluded.faltando_dias,
+                    po=excluded.po, ativo=1, data_atualizacao=excluded.data_atualizacao
+            """, (linha_id, r["numero_sc"], r["part_number"], r["nome_item"], status_calc,
+                  r["unidade"], r["tam_po"], r["saldo_po"], esgotado_em, faltando, po, agora))
+            ativos += 1
+
+        c.execute(
+            "INSERT INTO monitor_sc_sync (id, ultima_sync) VALUES (1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET ultima_sync=excluded.ultima_sync", (hoje_iso,))
+    return ativos
+
+
+def listar_monitor_sc(conn=None):
+    """Linhas VISÍVEIS do Monitor: itens de sistema ainda pendentes (ativo=1) + linhas
+    manuais, exceto tombstones (removido=1). Mais urgente primeiro (menor 'faltando')."""
+    with transaction(conn) as c:
+        rows = c.execute("""
+            SELECT * FROM monitor_sc
+            WHERE removido=0 AND (origem='manual' OR ativo=1)
+            ORDER BY (faltando_dias IS NULL), faltando_dias ASC, numero_sc
+        """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def salvar_monitor_sc(registros, linha_ids_originais, conn=None, hoje=None):
+    """Persiste as edições do grid do Monitor (C3). `registros` = lista de dicts (colunas
+    do banco + 'linha_id' possivelmente vazio para linhas novas). Faz UPDATE das linhas
+    existentes (técnicas + manuais + revisado), INSERT das novas (origem='manual') e, para
+    as que sumiram do grid, tombstone (sistema → removido=1) ou DELETE (manual). Retorna
+    (atualizadas, inseridas, removidas)."""
+    import uuid as _uuid
+    hoje_iso = (hoje or date.today()).strftime("%Y-%m-%d")
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    editaveis = list(MONITOR_COLS_TECNICAS) + list(MONITOR_COLS_MANUAIS)
+    orig = set(linha_ids_originais or [])
+    vistos, upd, ins = set(), 0, 0
+    with transaction(conn) as c:
+        for reg in registros:
+            lid = reg.get("linha_id")
+            lid = None if (lid is None or str(lid).strip() == "" or str(lid).lower() == "nan") else str(lid)
+            dados = {col: reg.get(col) for col in editaveis}
+            rev = 1 if reg.get("revisado") in (True, 1, "1", "true", "True") else 0
+            dados["revisado"] = rev
+            dados["revisado_data"] = hoje_iso if rev else None
+            if lid and lid in orig:
+                vistos.add(lid)
+                sets = ", ".join(f"{k}=?" for k in dados)
+                c.execute(f"UPDATE monitor_sc SET {sets}, data_atualizacao=? WHERE linha_id=?",
+                          (*dados.values(), agora, lid))
+                upd += 1
+            else:
+                new_lid = f"man:{_uuid.uuid4().hex[:12]}"
+                cols = list(dados.keys()) + ["linha_id", "origem", "ativo", "removido", "data_atualizacao"]
+                vals = list(dados.values()) + [new_lid, "manual", 1, 0, agora]
+                c.execute(f"INSERT INTO monitor_sc ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", vals)
+                ins += 1
+        rem = 0
+        for lid in orig - vistos:
+            r = c.execute("SELECT origem FROM monitor_sc WHERE linha_id=?", (lid,)).fetchone()
+            if not r:
+                continue
+            if r["origem"] == "sistema":
+                c.execute("UPDATE monitor_sc SET removido=1, data_atualizacao=? WHERE linha_id=?",
+                          (agora, lid))
+            else:
+                c.execute("DELETE FROM monitor_sc WHERE linha_id=?", (lid,))
+            rem += 1
+    return upd, ins, rem
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MOVIMENTAÇÕES
 # ══════════════════════════════════════════════════════════════════════════════
 

@@ -413,6 +413,53 @@ def criar_banco():
         # com incluir_mro=0). Idempotente — não há UI admin para marcar manualmente.
         c.execute("UPDATE solicitantes_mro SET incluir_mro=1 WHERE nome_norm=?", (_norm,))
 
+    # ── Monitor de SC (v3.9.0) — grade editável e persistente do Almoxarifado ──────
+    # Substitui a planilha FUP por e-mail. HÍBRIDO: o sistema preenche/atualiza as
+    # colunas TÉCNICAS todo dia (por linha_id estável); o almox edita as MANUAIS
+    # (status_po/fornecedor/comentario/responsavel) e marca "Revisado" (reset diário).
+    # `linha_id` = 'sys:<itens_sc.id>' para linhas de sistema (estável mesmo com PN
+    # repetido em SCs diferentes ou a mesma SC/PN 2×) e 'man:<uuid>' para linhas manuais.
+    # `ativo` esconde itens que saíram do pendente sem perder as anotações; `removido`
+    # é o tombstone de linha de sistema apagada à mão. Backup antes de criar a tabela.
+    _monitor_novo = "monitor_sc" not in {
+        r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if _monitor_novo:
+        _backup_db("pre-monitor-sc-v390")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS monitor_sc (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            linha_id      TEXT NOT NULL UNIQUE,
+            numero_sc     TEXT,
+            part_number   TEXT,
+            nome_item     TEXT,
+            status_calc   TEXT,
+            unidade       TEXT,
+            tam_po        REAL,
+            saldo_po      REAL,
+            esgotado_em   TEXT,
+            faltando_dias REAL,
+            po            TEXT,
+            status_po     TEXT,
+            fornecedor    TEXT,
+            comentario    TEXT,
+            responsavel   TEXT,
+            revisado      INTEGER DEFAULT 0,
+            revisado_data TEXT,
+            origem        TEXT DEFAULT 'sistema',
+            ativo         INTEGER DEFAULT 1,
+            removido      INTEGER DEFAULT 0,
+            data_criacao  TEXT DEFAULT CURRENT_TIMESTAMP,
+            data_atualizacao TEXT
+        )
+    """)
+    # Marcador do sync diário (1 linha) — evita re-sincronizar a cada rerun.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS monitor_sc_sync (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            ultima_sync TEXT
+        )
+    """)
+
     cols_sc = {r[1] for r in conn.execute("PRAGMA table_info(solicitacoes_compra)")}
     novas_cols_sc = {
         "solicitante": "TEXT",
@@ -568,7 +615,7 @@ def criar_banco():
 
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 3.8.0")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 3.9.0")
 
 
 def _migrar(conn):

@@ -31,6 +31,7 @@ from services.db_functions import (
     listar_historico_part_number, buscar_item_por_pn,
     registrar_feedback, listar_feedbacks, atualizar_feedback,
     importar_relatorio_scs, tirar_snapshot_estoque,
+    sincronizar_monitor_sc, listar_monitor_sc, salvar_monitor_sc,
     obter_maturidade_dados, calcular_giro,
     obter_valor_imobilizado, obter_evolucao_valor_imobilizado,
     obter_evolucao_preco, obter_abc_valor,
@@ -64,7 +65,14 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 3.8.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+# v3.9.0 — sync diário do Monitor de SC (mesmo hook "1ª abertura do dia"): recalcula as
+# colunas técnicas das SCs abertas e reseta o "Revisado". Gated por dia (no-op nas demais).
+try:
+    sincronizar_monitor_sc()
+except Exception:
+    pass
+
+st.set_page_config(page_title="MRO Inventus Power 3.9.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -135,7 +143,7 @@ with st.sidebar:
     # 1. Cabeçalho com Logo/Título
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 3.8.0</span>
+        <span style="font-size: 1.8rem;">MRO Inventus 3.9.0</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -2276,147 +2284,75 @@ elif pagina == "Controle de SC":
     # 📡 MONITOR DE COMPRAS 
     # ══════════════════════════════════════════════════════════════════════════════
     with aba_mon:
-        st.markdown("### :material/sensors: Monitor de Compras")
-        st.caption("Acompanhe todas as SCs abertas. Colunas críticas destacadas para leitura rápida.")
-        
-        # UX: Filtros rápidos
-        c_filt1, c_filt2 = st.columns([3, 2])
-        with c_filt1:
-            f_busca = st.text_input(":material/search: Buscar PN, Nº SC ou Fornecedor", placeholder="Ex: SC-2026, 123456, SKF...", key="busca_monitor_sc")
-        with c_filt2:
-            f_crise = st.checkbox(f":material/emergency: Focar apenas em Ruptura < {RUPTURA_CRISE_DIAS} dias", value=False, key="filtro_ruptura_sc")
+        st.markdown("### :material/sensors: Monitor de SC")
+        st.caption("Grade viva das SCs abertas — substitui a planilha FUP que ia por e-mail. "
+                   "O **sistema** preenche e atualiza as colunas técnicas todo dia; o "
+                   "**almoxarifado** edita as manuais (STATUS PO, Fornecedor, Comentário, "
+                   "Responsável), adiciona/apaga linhas e marca **Revisado**. Salve no botão abaixo.")
 
-        scs = listar_scs(apenas_abertas=True)
-        if not scs:
-            st.success(":material/check_circle: Nenhuma SC aberta! Operação fluida.")
+        _mtop1, _mtop2 = st.columns([3, 1])
+        with _mtop2:
+            if st.button(":material/sync: Sincronizar agora", width="stretch", key="monitor_sync_btn",
+                         help="Recalcula as colunas técnicas a partir das SCs abertas (força o sync do dia)."):
+                sincronizar_monitor_sc(force=True)
+                st.rerun()
+
+        _mon_linhas = listar_monitor_sc()
+        _MON_COLS = ["SC", "Produto", "Descrição", "STATUS", "Un", "TAM PO", "Saldo PO",
+                     "Esgotado em", "Faltando (d)", "PO", "STATUS PO", "Fornecedor",
+                     "Comentário", "Responsável", "Revisado", "linha_id"]
+        if _mon_linhas:
+            _df_mon = pd.DataFrame([{
+                "SC": l["numero_sc"], "Produto": l["part_number"], "Descrição": l["nome_item"],
+                "STATUS": l["status_calc"], "Un": l["unidade"], "TAM PO": l["tam_po"],
+                "Saldo PO": l["saldo_po"], "Esgotado em": l["esgotado_em"],
+                "Faltando (d)": l["faltando_dias"], "PO": l["po"], "STATUS PO": l["status_po"],
+                "Fornecedor": l["fornecedor"], "Comentário": l["comentario"],
+                "Responsável": l["responsavel"], "Revisado": bool(l["revisado"]),
+                "linha_id": l["linha_id"],
+            } for l in _mon_linhas])
         else:
-            dados = []
-            for sc in scs:
-                importancias = (sc.get('importancias_itens') or "").split(',')
-                
-                for item in listar_itens_sc(sc['id']):
-                    pend = item.get('saldo_residual') or item.get('pendente', 0)
-                    if pend <= 0: continue  # UX: Foca apenas no que exige ação
-                    
-                    inv = buscar_item_por_id(item['item_id'])
-                    qty_min = inv.get('estoque_minimo', 0 ) if inv else 0
-                    
-                    # ✅ CORREÇÃO: Usar a previsão de ruptura REAL do inventário
-                    # Em vez de calcular (Estoque + Pendente) / Consumo, usamos o campo já existente
-                    dias_ruptura_real = inv.get('previsao_ruptura_dias', PREVISAO_RUPTURA_SEM_RISCO) if inv else PREVISAO_RUPTURA_SEM_RISCO
-                    if dias_ruptura_real is None:
-                        dias_ruptura_real = PREVISAO_RUPTURA_SEM_RISCO
-                    
-                    # Formatação para exibição na tabela
-                    if dias_ruptura_real >= PREVISAO_RUPTURA_SEM_RISCO:
-                        rupt_display = "∞"
-                    else:
-                        rupt_display = f"{dias_ruptura_real:.1f}"
+            _df_mon = pd.DataFrame({c: pd.Series(dtype="object") for c in _MON_COLS})
+            st.info("Nenhuma linha no Monitor ainda. Ao abrir com SCs em aberto, o sistema preenche "
+                    "as linhas técnicas; você também pode adicionar linhas manuais abaixo.")
 
-                    # ✅ CORREÇÃO: Definir 'forn' e 'po' ANTES de usar no dicionário
-                    forn = item.get('fornecedor_item') or sc.get('fornecedor') or "—"
-                    po = item.get('numero_po') or sc.get('numero_po') or "—"
+        _mon_edit = st.data_editor(
+            _df_mon, num_rows="dynamic", hide_index=True, width="stretch", height=560,
+            key="monitor_editor",
+            column_config={
+                "Revisado": st.column_config.CheckboxColumn(
+                    "Revisado", help="Marque quando confirmar que o material é necessário — "
+                                     "o comprador confia nesse sinal. Reseta todo dia."),
+                "TAM PO": st.column_config.NumberColumn(format="%.0f"),
+                "Saldo PO": st.column_config.NumberColumn(format="%.0f"),
+                "Faltando (d)": st.column_config.NumberColumn(format="%.1f"),
+                "linha_id": None,
+            },
+        )
 
-                    # Lógica semafórica de trâmite baseada no Status Real do Banco
-                    status_db = sc.get('status', 'Aguardando Aprovação')
-                    
-                    if status_db == "Aguardando Aprovação":
-                        status_display, cor = "Aguardando Aprovação", "🔴"
-                    elif status_db == "Em Cotação":
-                        status_display, cor = "Em Cotação", "🟡"
-                    elif status_db == "Pedido Emitido":
-                        status_display, cor = "Pedido Emitido", "🔵"
-                    elif status_db == "Aguardando Entrega":
-                        status_display, cor = "Aguardando Entrega", "🔵"
-                    elif status_db == "Parcial":
-                        status_display, cor = "Recebimento Parcial", "🟠"
-                    elif status_db == "Recebido":
-                        status_display, cor = "Recebido", "🟢"
-                    else:
-                        # Fallback visual antigo se status for genérico
-                        if forn != "—": status_display, cor = "Aguardando Entrega", "🔵"
-                        elif po != "—": status_display, cor = "Verificar Fornecedor", "🟡"
-                        else: status_display, cor = "Abrir Cotação", "🔴"
+        def _mon_nz(v):
+            return None if (v is None or (isinstance(v, float) and pd.isna(v))) else v
 
-                    # Cálculo de Aging (Dias desde abertura)
-                    dias = item.get('dias_atendimento', 0) 
-                    dias_v = f"🔴 {dias}d" if dias > AGING_CRITICO_DIAS else (f"🟡 {dias}d" if dias > AGING_ALERTA_DIAS else f"🟢 {dias}d")
-                    
-                    # 📊 CHAVES DE ORDENAÇÃO
-                    # Agora ordenamos pela ruptura REAL do inventário
-                    sort_ruptura = dias_ruptura_real if dias_ruptura_real < PREVISAO_RUPTURA_SEM_RISCO else ORDENACAO_RUPTURA_INFINITO
-                    crit_rank = 1 if 'Parada de Linha' in importancias else (2 if 'Importante' in importancias else 3)
-                    
-                    dados.append({
-                        "SC": sc['numero_sc'],
-                        "Importância.": "🔴 Crítico" if 'Parada de Linha' in importancias else ("🟡 Importante" if 'Importante' in importancias else "🔵 Administrativo"),
-                        "PN": f"{item['part_number']}",
-                        "Item": item['nome_item'],
-                        "Solicitado": f"{pend} {item['unidade']}",
-                        "Estoque": f"{inv.get('estoque_atual', '—')} {item['unidade']}" if inv else "—",
-                        "Qty Mín": f"{qty_min} {item['unidade']}",
-                        "Ruptura (d)": rupt_display,
-                        "Trâmite": f"{cor} {status_display}",
-                        "Aging": dias_v,
-                        "Fornecedor": forn,
-                        "PO": po,
-                        "Prev. NF": item.get('data_prev_nfe') or sc.get('data_prev_entrega') or "—",
-                        "Justificativa": item.get('observacao_item') or "—",
-                        "_sort_ruptura": sort_ruptura,
-                        "_sort_crit": crit_rank,
-                        "_sort_aging": dias
-                    })
+        if st.button("💾 Salvar alterações do Monitor", type="primary", key="monitor_salvar"):
+            _registros = [{
+                "numero_sc": _mon_nz(r.get("SC")), "part_number": _mon_nz(r.get("Produto")),
+                "nome_item": _mon_nz(r.get("Descrição")), "status_calc": _mon_nz(r.get("STATUS")),
+                "unidade": _mon_nz(r.get("Un")), "tam_po": _mon_nz(r.get("TAM PO")),
+                "saldo_po": _mon_nz(r.get("Saldo PO")), "esgotado_em": _mon_nz(r.get("Esgotado em")),
+                "faltando_dias": _mon_nz(r.get("Faltando (d)")), "po": _mon_nz(r.get("PO")),
+                "status_po": _mon_nz(r.get("STATUS PO")), "fornecedor": _mon_nz(r.get("Fornecedor")),
+                "comentario": _mon_nz(r.get("Comentário")), "responsavel": _mon_nz(r.get("Responsável")),
+                "revisado": bool(r.get("Revisado")), "linha_id": _mon_nz(r.get("linha_id")),
+            } for _, r in _mon_edit.iterrows()]
+            _u, _i, _d = salvar_monitor_sc(_registros, [l["linha_id"] for l in _mon_linhas])
+            st.success(f":material/check_circle: Monitor salvo — {_u} atualizada(s), {_i} nova(s), {_d} removida(s).")
+            time.sleep(1.2); st.rerun()
 
-            df = pd.DataFrame(dados)
-            if df.empty:
-                st.info("Nenhum item pendente encontrado nas SCs abertas.")
-            else:
-                # UX: Filtro client-side
-                if f_crise:
-                    df = df[df["_sort_ruptura"] < RUPTURA_CRISE_DIAS]
-                if f_busca:
-                    b = f_busca.lower()
-                    df = df[
-                        df["SC"].str.lower().str.contains(b) | 
-                        df["PN"].str.lower().str.contains(b) | 
-                        df["Fornecedor"].str.lower().str.contains(b) |
-                        df["Item"].str.lower().str.contains(b)
-                    ]
+        st.caption(":material/info: **Revisado pelo Almox:** o almox revisa a linha; marcado = o comprador "
+                   "confia que aquele material é necessário. O sinal **reseta automaticamente todo dia**. "
+                   "As colunas técnicas (SC, Produto, STATUS, Saldo PO, Faltando…) são recalculadas no "
+                   "sync diário; as manuais e as linhas que você adicionar persistem.")
 
-                # 🚀 ORDENAÇÃO AUTOMÁTICA POR URGÊNCIA REAL (Invisível mas funcional)
-                # Garante que a linha #1 seja sempre o mais crítico do sistema AGORA
-                df = df.sort_values(['_sort_ruptura', '_sort_crit', '_sort_aging'], ascending=True)
-
-                col_cfg = {
-                    # ✅ REMOVIDO da config: "🎯 Prioridade": ...
-                    "SC": st.column_config.TextColumn("SC", width="small"),
-                    "Importância.": st.column_config.TextColumn("Importância.", width="small"),
-                    "PN": st.column_config.TextColumn("Part Number", width="small"),
-                    "Item": st.column_config.TextColumn("Descrição", width="large"),
-                    "Solicitado": st.column_config.TextColumn("Solicitado", width="small"),
-                    "Estoque": st.column_config.TextColumn("Estoque Atual", width="small"),
-                    "Qty Mín": st.column_config.TextColumn("Mínimo", width="small"),
-                    "Ruptura (d)": st.column_config.TextColumn("Ruptura", width="small"),
-                    "Trâmite": st.column_config.TextColumn("Trâmite", width="medium"),
-                    "Aging": st.column_config.TextColumn("Aging", width="small"),
-                    "Fornecedor": st.column_config.TextColumn("Fornecedor", width="medium"),
-                    "PO": st.column_config.TextColumn("PO", width="small"),
-                    "Prev. NF": st.column_config.TextColumn("Prev. NF", width="small"),
-                    "Justificativa": st.column_config.TextColumn("Justificativa", width="large"),
-                    "_sort_ruptura": None, "_sort_crit": None, "_sort_aging": None  # Sempre ocultas
-                }
-
-                st.dataframe(
-                    df.drop(columns=["_sort_ruptura", "_sort_crit", "_sort_aging"]),
-                    width="stretch",
-                    hide_index=True,
-                    column_config=col_cfg,
-                    height=600,
-                    row_height=34
-                )
-                
-                st.caption(":material/bar_chart: Ordenado automaticamente por: 1º Dias até Ruptura | 2º Impacto na Produção | 3º Tempo de Espera")
-                                    
      # ══════════════════════════════════════════════════════════════════════════════
     #   📥 IMPORTAR PROTHEUS
     # ═══════════════════════════════════════════════════════════════════════════════
@@ -2433,6 +2369,11 @@ elif pagina == "Controle de SC":
                     with st.spinner("Processando abas do Relatório de SCs..."):
                         ok, resultado = importar_relatorio_scs(arquivo, arquivo.name)
                     if ok:
+                        # v3.9.0 — refaz o sync do Monitor de SC para refletir o import na hora.
+                        try:
+                            sincronizar_monitor_sc(force=True)
+                        except Exception:
+                            pass
                         scm = resultado.get("SCM", {}) or {}
                         if isinstance(scm, dict) and not scm.get("erro"):
                             st.markdown("**:material/description: SCM — Solicitações + Preço**")
