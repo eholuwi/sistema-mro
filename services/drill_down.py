@@ -71,6 +71,9 @@ _PRED_INV = {
     "compra_urgente": _urgente,
     "com_valor":      lambda i: (i.get("estoque_atual") or 0) > 0,
     "cobertura":      lambda i: (not i.get("sem_movimentacao")) and i.get("dias_cobertura") is not None and i.get("dias_cobertura") != PREVISAO_RUPTURA_SEM_RISCO,
+    # KPI Mensal (executivo)
+    "ruptura":        lambda i: (not i.get("sem_movimentacao")) and (i.get("estoque_atual") or 0) <= 0,
+    "com_consumo":    lambda i: not i.get("sem_movimentacao"),
 }
 
 
@@ -151,6 +154,90 @@ def rows_saidas_item(pn, dias=30):
         """, (pn, ini)).fetchall()
     return pd.DataFrame([dict(r) for r in rows],
                         columns=["Data", "Qtd", "Setor", "Responsável", "Obs"])
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# v4.5.4 — Provedores do Dashboard KPI Mensal (executivo, YTD). Reaproveitam os
+# MESMOS cálculos do view-model (services/dashboards.py) para garantir acuracidade.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _df_consumo(itens):
+    """Lista de consumo YTD (dicts com qtd/valor) -> DataFrame de exibição."""
+    df = pd.DataFrame(itens)
+    if df.empty:
+        return df
+    if "valor" in df.columns:
+        df = df.sort_values("valor", ascending=False)
+    ren = {"part_number": "PN", "nome_item": "Material", "tipo_material": "Tipo",
+           "unidade": "UN", "qtd": "Qtd consumida", "valor": "Valor (R$)",
+           "pct_acumulado": "% acum.", "classe": "Classe"}
+    return df[[c for c in ren if c in df.columns]].rename(columns=ren)
+
+
+def rows_consumo_ytd(ano=None):
+    """Itens com consumo real no ano (YTD). len == 'Itens movimentados (YTD)' e a soma
+    de Valor == 'Consumido no ano'."""
+    from services.dashboards import _consumo_ytd_por_item
+    return _df_consumo(_consumo_ytd_por_item(ano or date.today().year))
+
+
+def rows_abc_ytd_classe(classe="A", ano=None):
+    """Itens de uma classe da Curva ABC do KPI Mensal (YTD). Espelha _classificar_abc."""
+    from services.dashboards import _consumo_ytd_por_item, _classificar_abc
+    itens, _tot = _classificar_abc(_consumo_ytd_por_item(ano or date.today().year))
+    return _df_consumo([x for x in itens if x.get("classe") == classe])
+
+
+def rows_consumo_ytd_tipo(tipo, ano=None):
+    """Itens consumidos YTD de um tipo de material — compõe o donut 'Consumo por tipo'."""
+    from services.dashboards import _consumo_ytd_por_item
+    itens = _consumo_ytd_por_item(ano or date.today().year)
+    return _df_consumo([x for x in itens if (x.get("tipo_material") or "—") == tipo])
+
+
+def rows_requisicoes_ano(ano=None):
+    """Requisições com consumo real no ano (distintas) — compõe 'Requisições (YTD)'."""
+    ano = ano or date.today().year
+    with transaction() as conn:
+        rows = conn.execute(f"""
+            SELECT DISTINCT r.numero_requisicao AS "Nº Req", r.data_hora AS "Data/Hora",
+                   r.setor AS Setor, r.emitente AS Emitente, r.autorizador_nome AS Autorizador
+            FROM requisicoes r JOIN movimentacoes m ON m.requisicao_id = r.id
+            WHERE {SAIDA_REAL_WHERE} AND strftime('%Y', m.data_hora) = ?
+            ORDER BY r.data_hora DESC
+        """, (str(ano),)).fetchall()
+    return pd.DataFrame([dict(r) for r in rows],
+                        columns=["Nº Req", "Data/Hora", "Setor", "Emitente", "Autorizador"])
+
+
+def rows_saidas_mes(ym):
+    """Saídas reais (requisições) de um mês (YYYY-MM) — compõe o 'Consumo mês a mês'."""
+    with transaction() as conn:
+        rows = conn.execute(f"""
+            SELECT DATE(m.data_hora) AS Data, m.quantidade AS Qtd, inv.part_number AS PN,
+                   inv.nome_item AS Material, m.setor AS Setor, m.emitente AS Responsável
+            FROM movimentacoes m JOIN inventario inv ON inv.id = m.item_id
+            WHERE {SAIDA_REAL_WHERE} AND substr(m.data_hora,1,7) = ?
+            ORDER BY m.data_hora DESC
+        """, (ym,)).fetchall()
+    return pd.DataFrame([dict(r) for r in rows],
+                        columns=["Data", "Qtd", "PN", "Material", "Setor", "Responsável"])
+
+
+def rows_criticos_reposicao():
+    """Itens críticos do KPI Mensal = sugestões de reposição de prioridade máxima
+    (tier 0). Espelha comprador['kpis']['criticos']."""
+    from services.planejamento import gerar_sugestoes_reposicao
+    sug = [s for s in gerar_sugestoes_reposicao() if s.get("prioridade_tier") == 0]
+    df = pd.DataFrame(sug)
+    if df.empty:
+        return df
+    pref = ["part_number", "nome_item", "estoque_atual", "estoque_minimo",
+            "qtd_sugerida", "dias_cobertura"]
+    cols = [c for c in pref if c in df.columns] or list(df.columns)[:8]
+    ren = {"part_number": "PN", "nome_item": "Material", "estoque_atual": "Estoque",
+           "estoque_minimo": "Mínimo", "qtd_sugerida": "Sugerido", "dias_cobertura": "Cobertura (d)"}
+    return df[cols].rename(columns={k: v for k, v in ren.items() if k in cols})
 
 
 def rows_requisicoes_dia():

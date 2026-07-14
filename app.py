@@ -73,7 +73,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 4.5.3", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 4.5.4", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -239,7 +239,7 @@ with st.sidebar:
     # v4.1.0 — versão do sistema no rodapé da barra de navegação
     st.markdown(
         "<div style='text-align:center; margin-top:10px; color: var(--primary-orange); "
-        "font-weight:700; font-size:0.8rem; letter-spacing:0.5px;'>v4.5.3</div>",
+        "font-weight:700; font-size:0.8rem; letter-spacing:0.5px;'>v4.5.4</div>",
         unsafe_allow_html=True,
     )
 
@@ -1519,6 +1519,10 @@ def _dialog_drill_down(df: pd.DataFrame, titulo: str = "Detalhes") -> None:
 
 def _render_dash_executivo(vm):
     """:material/insights: Mensal — panorama do ano corrente (YTD): KPIs em R$/serviço, séries, ABC e vários Top 10."""
+    from services.drill_down import (rows_inventario_filtro, rows_consumo_ytd,
+                                     rows_requisicoes_ano, rows_criticos_reposicao,
+                                     rows_abc_ytd_classe, rows_consumo_ytd_tipo,
+                                     rows_saidas_mes, rows_padrao_demanda)
     ano = vm["ano"]
     st.subheader(f":material/insights: Panorama {ano} — visão executiva")
     st.caption(f"Tudo nesta tela é do **ano corrente ({ano})**, de 1º de janeiro até hoje. "
@@ -1528,29 +1532,35 @@ def _render_dash_executivo(vm):
     k = vm["kpis"]; vd = vm["valor_detalhe"]
     # ── Faixa 1: financeiro / volume ──
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric(":material/payments: Valor imobilizado", _dash_fmt_brl(k["valor_imobilizado"]),
-              help="Capital parado em estoque hoje: Σ(estoque × preço de referência).")
-    c2.metric(":material/shopping_cart: Consumido no ano (YTD)", _dash_fmt_brl(k["valor_consumido_ytd"]),
-              help="Valor total consumido de 1º/jan até hoje (saídas reais × preço).")
-    c3.metric(":material/assignment: Requisições (YTD)", f"{k['n_requisicoes_ytd']:,}".replace(",", "."),
-              help="Nº de requisições atendidas no ano corrente.")
-    c4.metric(":material/inventory_2: Itens movimentados (YTD)", k["itens_consumidos_ytd"],
-              help="Quantos itens diferentes tiveram consumo real no ano.")
+    _card_drill(c1, ":material/payments: Valor imobilizado", _dash_fmt_brl(k["valor_imobilizado"]), "kpi_imob",
+                lambda: rows_inventario_filtro("com_valor"),
+                help="Capital parado em estoque hoje: Σ(estoque × preço de referência).")
+    _card_drill(c2, ":material/shopping_cart: Consumido no ano (YTD)", _dash_fmt_brl(k["valor_consumido_ytd"]), "kpi_cons",
+                lambda: rows_consumo_ytd(),
+                help="Valor total consumido de 1º/jan até hoje (saídas reais × preço).")
+    _card_drill(c3, ":material/assignment: Requisições (YTD)", f"{k['n_requisicoes_ytd']:,}".replace(",", "."), "kpi_req",
+                lambda: rows_requisicoes_ano(),
+                help="Nº de requisições atendidas no ano corrente.")
+    _card_drill(c4, ":material/inventory_2: Itens movimentados (YTD)", k["itens_consumidos_ytd"], "kpi_itmov",
+                lambda: rows_consumo_ytd(),
+                help="Quantos itens diferentes tiveram consumo real no ano.")
     st.caption(f":material/info: Valoração: {vd['itens_valorados']} itens com preço · "
                f"{vd['itens_sem_preco']} com estoque sem preço (subestima o total).")
 
     # ── Faixa 2: operação / serviço ──
     o1, o2, o3, o4 = st.columns(4)
     ns = k["nivel_servico"]
-    o1.metric(":material/ads_click: Nível de serviço", f"{ns}%" if ns is not None else "—",
-              help="% dos itens com consumo real fora de ruptura. Proxy de disponibilidade.")
+    _card_drill(o1, ":material/ads_click: Nível de serviço", f"{ns}%" if ns is not None else "—", "kpi_ns",
+                lambda: rows_inventario_filtro("com_consumo"),
+                help="% dos itens com consumo real fora de ruptura. Proxy de disponibilidade.")
     gm = k["giro_medio"]
-    o2.metric(":material/sync: Giro médio (ano)", f"{gm}x" if gm is not None else "—",
-              help="Quantas vezes o estoque se renova por ano, em média.")
-    o3.metric("🔴 Críticos", k["criticos"], delta_color="off",
-              help="Itens que já precisam de compra agora (abaixo do ponto de pedido).")
-    o4.metric(":material/emergency: Rupturas", k["rupturas"], delta_color="off",
-              help="Itens com consumo real e estoque zerado — risco imediato.")
+    _card_drill(o2, ":material/sync: Giro médio (ano)", f"{gm}x" if gm is not None else "—", "kpi_giro",
+                lambda: rows_inventario_filtro("com_consumo"),
+                help="Quantas vezes o estoque se renova por ano, em média.")
+    _card_drill(o3, "🔴 Críticos", k["criticos"], "kpi_crit", lambda: rows_criticos_reposicao(),
+                delta_color="off", help="Itens que já precisam de compra agora (abaixo do ponto de pedido).")
+    _card_drill(o4, ":material/emergency: Rupturas", k["rupturas"], "kpi_rup", lambda: rows_inventario_filtro("ruptura"),
+                delta_color="off", help="Itens com consumo real e estoque zerado — risco imediato.")
 
     st.markdown("---")
 
@@ -1564,6 +1574,9 @@ def _render_dash_executivo(vm):
             if cm:
                 df = pd.DataFrame([{"Mês": _mes_label(x["mes"]), "Valor (R$)": x["valor"]} for x in cm])
                 st.bar_chart(df.set_index("Mês"), color="#F36F21", height=300)
+                _drill_select("kpi_ch_mensal", [x["mes"] for x in cm],
+                              lambda l: f"Consumo de {_mes_label(l)}",
+                              lambda l: rows_saidas_mes(l), display=[_mes_label(x["mes"]) for x in cm])
             else:
                 st.caption("Sem consumo real no ano ainda.")
     with colC:
@@ -1574,6 +1587,9 @@ def _render_dash_executivo(vm):
                 st.plotly_chart(_donut([x["tipo"] for x in comp], [x["valor"] for x in comp],
                                        height=300, fmt=_brl_compact),
                                 width="stretch", config={"displayModeBar": False})
+                _tipos = [x["tipo"] for x in comp if x["tipo"] != "Outros"]
+                _drill_select("kpi_ch_comp", _tipos, lambda l: f"Consumo YTD · {l}",
+                              lambda l: rows_consumo_ytd_tipo(l))
             else:
                 st.caption("Sem consumo valorado no ano.")
 
@@ -1583,9 +1599,12 @@ def _render_dash_executivo(vm):
         st.markdown("#### :material/emoji_events: Curva ABC por valor consumido (ano corrente)")
         st.caption("Poucos itens concentram a maior parte do gasto — classe A = os que mais pesam.")
         ca, cb, cc = st.columns(3)
-        ca.metric("🅰️ Classe A", classes.get("A", 0), help="Itens que somam até 80% do valor consumido.")
-        cb.metric("🅱️ Classe B", classes.get("B", 0), delta_color="off", help="De 80% a 95% do valor.")
-        cc.metric("🅲 Classe C", classes.get("C", 0), delta_color="off", help="Os 5% finais do valor.")
+        _card_drill(ca, "🅰️ Classe A", classes.get("A", 0), "kpi_abc_a", lambda: rows_abc_ytd_classe("A"),
+                    help="Itens que somam até 80% do valor consumido.")
+        _card_drill(cb, "🅱️ Classe B", classes.get("B", 0), "kpi_abc_b", lambda: rows_abc_ytd_classe("B"),
+                    delta_color="off", help="De 80% a 95% do valor.")
+        _card_drill(cc, "🅲 Classe C", classes.get("C", 0), "kpi_abc_c", lambda: rows_abc_ytd_classe("C"),
+                    delta_color="off", help="Os 5% finais do valor.")
         if abc["itens"]:
             st.plotly_chart(
                 _barh([f"{x['part_number']} · {str(x['nome_item'])[:18]}" for x in abc["itens"]][::-1],
@@ -1646,6 +1665,8 @@ def _render_dash_executivo(vm):
             dados_dem = [{"Padrão": p, "Itens": dem.get(p, 0)} for p in ordem if dem.get(p, 0)]
             if dados_dem:
                 st.bar_chart(pd.DataFrame(dados_dem).set_index("Padrão"), color="#F7941E", height=240)
+                _drill_select("kpi_ch_dem", [d["Padrão"] for d in dados_dem],
+                              lambda l: f"Padrão de demanda · {l}", lambda l: rows_padrao_demanda(l))
             else:
                 st.caption("Sem consumo real suficiente para classificar.")
             xyz = vm["destaques"]["xyz"]
