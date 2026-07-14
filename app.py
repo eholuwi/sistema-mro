@@ -72,7 +72,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 4.1.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 4.2.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -479,6 +479,9 @@ def _render_dash_compras_mro(vm):
     """:material/shopping_cart: Dashboard Compras MRO (§1) — analytics de compras sobre o
     Relatório de SCs: KPIs, Painel de Prioridades, aging, comparativo por comprador,
     fornecedores e demanda por setor/solicitante. Escopo: ANO CORRENTE."""
+    from services.drill_down import rows_itens_em_aberto
+    from services.ajuda_conteudo import AJUDA_DADOS
+
     k = vm["kpis"]
     ch, cw = st.columns([3, 1])
     ch.markdown("### :material/shopping_cart: Dashboard Compras MRO · Inventus Power")
@@ -576,6 +579,12 @@ def _render_dash_compras_mro(vm):
     _bloco_top("📅 Lead Time por Fornecedor (dias)", vm["lead_time_fornecedor"],
                lambda x: x["fornecedor"][:24], "dias", lambda v: f"{v:g}d",
                caption="Tempo médio Emissão → PO por fornecedor — maior = alvo de negociação.")
+
+    # ── Drill-down: Itens em Aberto ──
+    if st.session_state.get("drill_down_itens_em_aberto"):
+        from services.drill_down import rows_itens_em_aberto
+        with st.dialog("📦 Itens em Aberto"):
+            _dialog_drill_down(rows_itens_em_aberto(), titulo="Itens em Aberto", chave_ajuda="itens_em_aberto")
 
 
 def _render_dash_comprador(vm):
@@ -1368,6 +1377,70 @@ def _bloco_top(titulo, itens, label_fn, value_key, value_fmt, cor=None,
         textos = [value_fmt(x[value_key]) for x in itens][::-1]
         st.plotly_chart(_barh(labels, values, textos, cor, height, label_outside),
                         width="stretch", config={"displayModeBar": False})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers de Drill-down e Ajuda (v4.2.0) — explicabilidade clicável
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _ajuda_popover(titulo: str, chave_ajuda: str = None) -> None:
+    """Renderiza um título com popover "?" lado a lado.
+    Se chave_ajuda está em AJUDA_DADOS, mostra o texto. Caso contrário, silencia."""
+    from services.ajuda_conteudo import AJUDA_DADOS
+    c1, c2 = st.columns([0.9, 0.1])
+    c1.write(titulo)
+    if chave_ajuda and chave_ajuda in AJUDA_DADOS:
+        with c2.popover("❓"):
+            st.markdown(AJUDA_DADOS[chave_ajuda], help=None)
+
+
+def _card_clicavel(label: str, valor, chave_ajuda: str = None, rows_provider=None, delta=None) -> None:
+    """Card com métrica clicável. Se rows_provider é fornecido, renderiza botão "Detalhes"
+    que salva em session_state e abre dialog no próximo rerun."""
+    from services.ajuda_conteudo import AJUDA_DADOS
+
+    col1, col2 = st.columns([0.85, 0.15])
+    with col1:
+        st.metric(label, valor, delta=delta,
+                  help=AJUDA_DADOS.get(chave_ajuda, "") if chave_ajuda else None)
+
+    if rows_provider and col2.button("🔍", key=f"detalhes_{chave_ajuda}", help="Ver detalhes"):
+        st.session_state[f"drill_down_{chave_ajuda}"] = True
+        st.session_state[f"drill_down_data_{chave_ajuda}"] = rows_provider()
+
+
+def _dialog_drill_down(df: pd.DataFrame, titulo: str = "Detalhes") -> None:
+    """Renderiza um dialog com tabela, busca e export. Reutilizável para qualquer DataFrame."""
+    if not isinstance(df, pd.DataFrame):
+        st.error("Dados não disponíveis")
+        return
+
+    if df.empty:
+        st.info(f"Sem registros para '{titulo}'.")
+        return
+
+    st.caption(f"{len(df):,} registros".replace(",", "."))
+
+    # Buscador simples (filtro global)
+    busca = st.text_input("🔍 Buscar", key=f"search_{titulo}")
+    if busca:
+        mask = df.astype(str).apply(lambda x: x.str.contains(busca, case=False, na=False)).any(axis=1)
+        df_filtrado = df[mask]
+    else:
+        df_filtrado = df
+
+    # Tabela interativa
+    st.dataframe(df_filtrado, use_container_width=True)
+
+    # Botão de download (CSV)
+    csv = df_filtrado.to_csv(index=False)
+    st.download_button(
+        label="📥 Baixar CSV",
+        data=csv,
+        file_name=f"{titulo}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+        mime="text/csv",
+        key=f"download_{titulo}"
+    )
 
 
 def _render_dash_executivo(vm):
