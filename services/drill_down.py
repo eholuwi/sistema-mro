@@ -16,9 +16,111 @@ DataFrame). O consumo real usa o fragmento canônico SAIDA_REAL_WHERE.
 
 import pandas as pd
 from datetime import date, timedelta
-from services.constants import SAIDA_REAL_WHERE
+from services.constants import SAIDA_REAL_WHERE, PREVISAO_RUPTURA_SEM_RISCO
 from services.db_functions import transaction, listar_inventario
-from services.dashboards import montar_visao_compras_mro
+from services.dashboards import montar_visao_compras_mro, _faixa_cobertura
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# v4.5.0 — Provedores parametrizados p/ drill-down do Dashboard Almoxarifado.
+# Espelham EXATAMENTE os filtros do view-model (services/dashboards.py) para que a
+# tabela aberta ao clicar componha o mesmo número do card.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _df_itens(itens):
+    """Lista de itens (dicts de listar_inventario) -> DataFrame de exibição."""
+    cols = [("part_number", "PN"), ("nome_item", "Material"),
+            ("estoque_atual", "Estoque"), ("estoque_minimo", "Mínimo"),
+            ("dias_cobertura", "Cobertura (d)"), ("status_material", "Status"),
+            ("importancia", "Criticidade"), ("local_armazenagem", "Local")]
+    rows = [{lbl: i.get(k) for k, lbl in cols} for i in itens]
+    return pd.DataFrame(rows, columns=[lbl for _, lbl in cols])
+
+
+def _urgente(i):
+    """Mesma regra de 'compra_urgente' de montar_visao_almoxarifado."""
+    est = i.get("estoque_atual") or 0
+    mn = i.get("estoque_minimo") or 0
+    if not (mn > 0 and est <= mn):
+        return False
+    parada = i.get("importancia") == "Parada de Linha"
+    com_giro = not i.get("sem_movimentacao")
+    return parada or (est <= 0 and com_giro)
+
+
+def _tem(campo, i, termo):
+    return termo in (i.get(campo) or "")
+
+
+# Predicados por chave — espelham o if/elif dos view-models (gestão + almoxarifado).
+_PRED_INV = {
+    "todos":          lambda i: True,
+    # Distribuição "base de compra" (só itens com consumo) — status_material
+    "ok":             lambda i: not i.get("sem_movimentacao") and _tem("status_material", i, "OK"),
+    "atencao":        lambda i: not i.get("sem_movimentacao") and _tem("status_material", i, "ATENÇÃO"),
+    "comprar":        lambda i: not i.get("sem_movimentacao") and _tem("status_material", i, "COMPRAR"),
+    "sem_mov":        lambda i: bool(i.get("sem_movimentacao")),
+    "zerados":        lambda i: (i.get("estoque_atual") or 0) <= 0,
+    "inventariado":   lambda i: bool(i.get("data_inventario")),
+    # Saúde física (TODO material) — status_estoque_fisico
+    "fis_ok":         lambda i: (i.get("estoque_atual") or 0) > 0 and not _tem("status_estoque_fisico", i, "COMPRAR") and not _tem("status_estoque_fisico", i, "ATENÇÃO"),
+    "fis_atencao":    lambda i: (i.get("estoque_atual") or 0) > 0 and _tem("status_estoque_fisico", i, "ATENÇÃO"),
+    "fis_critico":    lambda i: (i.get("estoque_atual") or 0) > 0 and _tem("status_estoque_fisico", i, "COMPRAR"),
+    "fis_zerado":     lambda i: (i.get("estoque_atual") or 0) <= 0,
+    # KPIs
+    "compra_urgente": _urgente,
+    "com_valor":      lambda i: (i.get("estoque_atual") or 0) > 0,
+    "cobertura":      lambda i: (not i.get("sem_movimentacao")) and i.get("dias_cobertura") is not None and i.get("dias_cobertura") != PREVISAO_RUPTURA_SEM_RISCO,
+}
+
+
+def rows_inventario_filtro(filtro="todos"):
+    """Itens do inventário filtrados por `filtro` (ver _PRED_INV). DataFrame de exibição."""
+    pred = _PRED_INV.get(filtro, lambda i: True)
+    return _df_itens([i for i in listar_inventario() if pred(i)])
+
+
+def rows_mov_periodo(tipo="entrada", periodo="hoje"):
+    """Movimentações por tipo/período (entradas ou saídas reais). Espelha o _periodo do vm:
+    hoje = data exata; semana = últimos 7 dias; mês = últimos 30 dias."""
+    hoje = date.today()
+    if periodo == "hoje":
+        cond, arg = "substr(m.data_hora,1,10) = ?", hoje.strftime("%Y-%m-%d")
+    elif periodo == "semana":
+        cond, arg = "substr(m.data_hora,1,10) >= ?", (hoje - timedelta(days=7)).strftime("%Y-%m-%d")
+    else:
+        cond, arg = "substr(m.data_hora,1,10) >= ?", (hoje - timedelta(days=30)).strftime("%Y-%m-%d")
+    where_tipo = "m.tipo='entrada'" if tipo == "entrada" else SAIDA_REAL_WHERE
+
+    with transaction() as conn:
+        rows = conn.execute(f"""
+            SELECT DATE(m.data_hora) AS Data, inv.part_number AS PN, inv.nome_item AS Material,
+                   m.quantidade AS Qtd, m.emitente AS Responsável, m.observacao AS Obs
+            FROM movimentacoes m JOIN inventario inv ON inv.id = m.item_id
+            WHERE {where_tipo} AND {cond}
+            ORDER BY m.data_hora DESC
+        """, (arg,)).fetchall()
+    return pd.DataFrame([dict(r) for r in rows], columns=["Data", "PN", "Material", "Qtd", "Responsável", "Obs"])
+
+
+def rows_padrao_demanda(padrao):
+    """Itens classificados com um padrão de demanda (Suave/Intermitente/Errático/…).
+    Espelha o Counter(padrao_demanda) do view-model de gestão."""
+    return _df_itens([i for i in listar_inventario() if (i.get("padrao_demanda") or "") == padrao])
+
+
+def rows_requisicoes_dia():
+    """Requisições emitidas hoje (cada linha = 1 requisição)."""
+    hoje = date.today().strftime("%Y-%m-%d")
+    with transaction() as conn:
+        rows = conn.execute("""
+            SELECT numero_requisicao AS "Nº Req", data_hora AS "Data/Hora",
+                   setor AS Setor, emitente AS Emitente, autorizador_nome AS Autorizador
+            FROM requisicoes WHERE substr(data_hora,1,10) = ?
+            ORDER BY data_hora DESC
+        """, (hoje,)).fetchall()
+    return pd.DataFrame([dict(r) for r in rows],
+                        columns=["Nº Req", "Data/Hora", "Setor", "Emitente", "Autorizador"])
 
 
 def rows_itens_em_aberto(filtro_fornecedor: str = None) -> pd.DataFrame:
@@ -170,27 +272,14 @@ def rows_entradas_saidas(periodo: str = "hoje") -> pd.DataFrame:
     return df[cols_disponiveis] if cols_disponiveis else df
 
 
-def rows_cobertura_faixa(faixa: str = "<7") -> pd.DataFrame:
-    """Itens filtrados por faixa de cobertura (dias até acabar o estoque).
-    Colunas: part_number, nome_item, dias_cobertura, estoque_atual, consumo_medio_diario."""
-    inventario = listar_inventario()  # lista de dicts
-    if not inventario:
-        return pd.DataFrame()
-
-    # Faixas de cobertura (dias)
-    faixa_map = {
-        "<7": lambda d: (d is not None and d < 7),
-        "7-15": lambda d: (d is not None and 7 <= d < 15),
-        "15-30": lambda d: (d is not None and 15 <= d < 30),
-        "30+": lambda d: (d is not None and d >= 30),
-    }
-
-    filtro_fn = faixa_map.get(faixa)
-    rows = [r for r in inventario if filtro_fn(r.get("dias_cobertura"))] if filtro_fn else inventario
-    df = pd.DataFrame(rows) if rows else pd.DataFrame()
-    if df.empty:
-        return df
-
-    colunas = ["part_number", "nome_item", "dias_cobertura", "estoque_atual", "consumo_medio_diario"]
-    cols_disponiveis = [c for c in colunas if c in df.columns]
-    return df[cols_disponiveis] if cols_disponiveis else df
+def rows_cobertura_faixa(faixa: str = "≤7") -> pd.DataFrame:
+    """Itens numa faixa de cobertura (≤7, 8-15, 16-30, …), espelhando o gráfico do
+    Almoxarifado: só itens COM consumo e com cobertura válida (exclui a sentinela 999)."""
+    itens = []
+    for i in listar_inventario():
+        cob = i.get("dias_cobertura")
+        if cob is None or cob == PREVISAO_RUPTURA_SEM_RISCO or i.get("sem_movimentacao"):
+            continue
+        if _faixa_cobertura(cob) == faixa:
+            itens.append(i)
+    return _df_itens(itens)

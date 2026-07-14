@@ -73,7 +73,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 4.4.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 4.5.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -239,7 +239,7 @@ with st.sidebar:
     # v4.1.0 — versão do sistema no rodapé da barra de navegação
     st.markdown(
         "<div style='text-align:center; margin-top:10px; color: var(--primary-orange); "
-        "font-weight:700; font-size:0.8rem; letter-spacing:0.5px;'>v4.4.0</div>",
+        "font-weight:700; font-size:0.8rem; letter-spacing:0.5px;'>v4.5.0</div>",
         unsafe_allow_html=True,
     )
 
@@ -261,18 +261,29 @@ def _render_dash_almoxarifado(vm, vm_gestao):
     do dia, entradas/saídas por período, materiais mais movimentados, setores e histórico.
     v4.1.0: incorpora o conteúdo da antiga aba Gestão (2 linhas de distribuição, Top 10 de
     consumo, padrões de demanda e requisições por setor/emitente)."""
+    from services.drill_down import (rows_inventario_filtro, rows_mov_periodo,
+                                     rows_requisicoes_dia, rows_cobertura_faixa,
+                                     rows_padrao_demanda)
     k = vm["kpis"]
     st.markdown("### :material/warehouse: Dashboard do Almoxarifado · Inventus Power")
+    st.caption(":material/ads_click: Clique no 🔍 de qualquer card (ou numa barra dos gráficos) para ver a tabela que compõe o número.")
     r1 = st.columns(3)
-    r1[0].metric("📦 Itens cadastrados", k["itens_cadastrados"])
-    r1[1].metric("📥 Entradas hoje", k["entradas_hoje"])
-    r1[2].metric("📤 Requisições hoje", k["requisicoes_hoje"])
+    _card_drill(r1[0], "📦 Itens cadastrados", k["itens_cadastrados"], "alm_cad",
+                lambda: rows_inventario_filtro("todos"))
+    _card_drill(r1[1], "📥 Entradas hoje", k["entradas_hoje"], "alm_ent_hoje",
+                lambda: rows_mov_periodo("entrada", "hoje"))
+    _card_drill(r1[2], "📤 Requisições hoje", k["requisicoes_hoje"], "alm_req_hoje",
+                lambda: rows_requisicoes_dia())
     r2 = st.columns(4)
-    r2[0].metric("🔴 Compra urgente", k["compra_urgente"], delta_color="inverse")
-    r2[1].metric("⚠️ Sem giro", k["sem_giro"])
-    r2[2].metric("💰 Valor estoque", _brl_compact(k["valor_estoque"]))
-    r2[3].metric("📊 Cobertura média",
-                 f"{k['cobertura_media']}d" if k["cobertura_media"] is not None else "—")
+    _card_drill(r2[0], "🔴 Compra urgente", k["compra_urgente"], "alm_urg",
+                lambda: rows_inventario_filtro("compra_urgente"), delta_color="inverse")
+    _card_drill(r2[1], "⚠️ Sem giro", k["sem_giro"], "alm_semgiro",
+                lambda: rows_inventario_filtro("sem_mov"))
+    _card_drill(r2[2], "💰 Valor estoque", _brl_compact(k["valor_estoque"]), "alm_valor",
+                lambda: rows_inventario_filtro("com_valor"))
+    _card_drill(r2[3], "📊 Cobertura média",
+                f"{k['cobertura_media']}d" if k["cobertura_media"] is not None else "—",
+                "alm_cobmed", lambda: rows_inventario_filtro("cobertura"))
 
     # ── Status dos itens (2 linhas migradas da antiga aba Gestão) ────────────────
     st.divider()
@@ -280,26 +291,33 @@ def _render_dash_almoxarifado(vm, vm_gestao):
     def _pctg(n): return f"{round(n / total_g * 100)}%" if total_g else "0%"
     st.markdown("#### :material/inventory_2: Status dos itens (base de compra — só itens com consumo)")
     s1, s2, s3, s4, s5, s6 = st.columns(6)
-    s1.metric(":material/check_circle: OK", dg["ok"], _pctg(dg["ok"]))
-    s2.metric("🟡 Atenção", dg["atencao"], _pctg(dg["atencao"]), delta_color="off")
-    s3.metric(":material/warning: Críticos", dg["comprar"], _pctg(dg["comprar"]), delta_color="inverse")
-    s4.metric("⚪ Sem movimentação", dg["sem_mov"], _pctg(dg["sem_mov"]), delta_color="off",
-              help="Nunca tiveram saída por requisição — ficam fora da lista de compra.")
-    s5.metric("🔴 Zerados", dg["zerados"], _pctg(dg["zerados"]), delta_color="inverse")
-    s6.metric(":material/search: Inventariado", f"{dg['inventariado']}/{total_g}", _pctg(dg["inventariado"]))
+    _card_drill(s1, ":material/check_circle: OK", dg["ok"], "alm_d_ok",
+                lambda: rows_inventario_filtro("ok"), delta=_pctg(dg["ok"]))
+    _card_drill(s2, "🟡 Atenção", dg["atencao"], "alm_d_at",
+                lambda: rows_inventario_filtro("atencao"), delta=_pctg(dg["atencao"]), delta_color="off")
+    _card_drill(s3, ":material/warning: Críticos", dg["comprar"], "alm_d_cr",
+                lambda: rows_inventario_filtro("comprar"), delta=_pctg(dg["comprar"]), delta_color="inverse")
+    _card_drill(s4, "⚪ Sem movimentação", dg["sem_mov"], "alm_d_sm",
+                lambda: rows_inventario_filtro("sem_mov"), delta=_pctg(dg["sem_mov"]), delta_color="off",
+                help="Nunca tiveram saída por requisição — ficam fora da lista de compra.")
+    _card_drill(s5, "🔴 Zerados", dg["zerados"], "alm_d_ze",
+                lambda: rows_inventario_filtro("zerados"), delta=_pctg(dg["zerados"]), delta_color="inverse")
+    _card_drill(s6, ":material/search: Inventariado", f"{dg['inventariado']}/{total_g}", "alm_d_inv",
+                lambda: rows_inventario_filtro("inventariado"), delta=_pctg(dg["inventariado"]))
 
     sf = vm_gestao["saude_fisica"]
     st.markdown("#### :material/monitor_heart: Status de TODO o material (mesmo sem movimentação)")
     st.caption("Nível físico de **todos** os itens vs. estoque mínimo — inclui os que nunca "
                "tiveram consumo (por isso o total difere da linha acima, que os separa da compra).")
     h1, h2, h3, h4 = st.columns(4)
-    h1.metric("🟢 OK", sf["ok"], _pctg(sf["ok"]), help="Acima do nível confortável (mínimo × 1,2).")
-    h2.metric("🟡 Atenção", sf["atencao"], _pctg(sf["atencao"]), delta_color="off",
-              help="Entre o mínimo e mínimo × 1,2.")
-    h3.metric("🔴 Críticos", sf["critico"], _pctg(sf["critico"]), delta_color="inverse",
-              help="No/abaixo do mínimo, mas ainda com saldo (> 0).")
-    h4.metric("⚫ Zerados", sf["zerado"], _pctg(sf["zerado"]), delta_color="inverse",
-              help="Estoque atual = 0.")
+    _card_drill(h1, "🟢 OK", sf["ok"], "alm_f_ok", lambda: rows_inventario_filtro("fis_ok"),
+                delta=_pctg(sf["ok"]), help="Acima do nível confortável (mínimo × 1,2).")
+    _card_drill(h2, "🟡 Atenção", sf["atencao"], "alm_f_at", lambda: rows_inventario_filtro("fis_atencao"),
+                delta=_pctg(sf["atencao"]), delta_color="off", help="Entre o mínimo e mínimo × 1,2.")
+    _card_drill(h3, "🔴 Críticos", sf["critico"], "alm_f_cr", lambda: rows_inventario_filtro("fis_critico"),
+                delta=_pctg(sf["critico"]), delta_color="inverse", help="No/abaixo do mínimo, mas ainda com saldo (> 0).")
+    _card_drill(h4, "⚫ Zerados", sf["zerado"], "alm_f_ze", lambda: rows_inventario_filtro("fis_zerado"),
+                delta=_pctg(sf["zerado"]), delta_color="inverse", help="Estoque atual = 0.")
 
     st.divider()
     s1c, s2c, s3c = st.columns(3)
@@ -307,17 +325,24 @@ def _render_dash_almoxarifado(vm, vm_gestao):
         with st.container(border=True):
             st.markdown("##### :material/donut_large: Distribuição de Itens por Status")
             d = vm["distribuicao"]
-            st.plotly_chart(
+            _ev = st.plotly_chart(
                 _donut(["OK", "Atenção", "Comprar", "Sem giro"],
                        [d["ok"], d["atencao"], d["comprar"], d["sem_mov"]]),
-                width="stretch", config={"displayModeBar": False})
+                width="stretch", config={"displayModeBar": False},
+                on_select="rerun", key="alm_ch_dist")
+            _dmap = {"OK": "ok", "Atenção": "atencao", "Comprar": "comprar", "Sem giro": "sem_mov"}
+            _chart_drill(_ev, "alm_ch_dist", lambda l: f"Distribuição · {l}",
+                         lambda l: rows_inventario_filtro(_dmap.get(l, "todos")))
     with s2c:
         with st.container(border=True):
             st.markdown("##### :material/timeline: Cobertura (dias)")
             st.caption("Estoque atual ÷ consumo diário = quantos dias o estoque dura no ritmo atual.")
             cf = vm["cobertura_faixa"]
-            st.plotly_chart(_barv([f"{kk} dias" for kk in cf.keys()], [int(v) for v in cf.values()]),
-                            width="stretch", config={"displayModeBar": False})
+            _ev = st.plotly_chart(_barv([f"{kk} dias" for kk in cf.keys()], [int(v) for v in cf.values()]),
+                            width="stretch", config={"displayModeBar": False},
+                            on_select="rerun", key="alm_ch_cob")
+            _chart_drill(_ev, "alm_ch_cob", lambda l: f"Cobertura · {l}",
+                         lambda l: rows_cobertura_faixa(str(l).replace(" dias", "")))
     with s3c:
         with st.container(border=True):
             st.markdown("##### :material/leaderboard: Curva ABC (valor)")
@@ -347,18 +372,24 @@ def _render_dash_almoxarifado(vm, vm_gestao):
             st.caption(f"Hoje **{_hoje_str}** · Semana **{_sem_str}** · Mês **{_mes_str}**")
             en = vm["entradas"]
             e1, e2, e3 = st.columns(3)
-            e1.metric("Hoje", en["hoje"]["n"], help=f"Recebimentos de hoje ({_hoje_str}).")
-            e2.metric("Semana", en["semana"]["n"], help=f"Recebimentos da semana atual — {_sem_str}.")
-            e3.metric("Mês", en["mes"]["n"], help=f"Recebimentos do mês atual — {_mes_str}.")
+            _card_drill(e1, "Hoje", en["hoje"]["n"], "alm_e_h", lambda: rows_mov_periodo("entrada", "hoje"),
+                        help=f"Recebimentos de hoje ({_hoje_str}).")
+            _card_drill(e2, "Semana", en["semana"]["n"], "alm_e_s", lambda: rows_mov_periodo("entrada", "semana"),
+                        help=f"Recebimentos da semana atual — {_sem_str}.")
+            _card_drill(e3, "Mês", en["mes"]["n"], "alm_e_m", lambda: rows_mov_periodo("entrada", "mes"),
+                        help=f"Recebimentos do mês atual — {_mes_str}.")
     with sa:
         with st.container(border=True):
             st.markdown("#### 📤 Saídas (requisições)")
             st.caption(f"Hoje **{_hoje_str}** · Semana **{_sem_str}** · Mês **{_mes_str}**")
             sd = vm["saidas"]
             x1, x2, x3 = st.columns(3)
-            x1.metric("Hoje", sd["hoje"]["n"], help=f"Saídas por requisição de hoje ({_hoje_str}).")
-            x2.metric("Semana", sd["semana"]["n"], help=f"Saídas da semana atual — {_sem_str}.")
-            x3.metric("Mês", sd["mes"]["n"], help=f"Saídas do mês atual — {_mes_str}.")
+            _card_drill(x1, "Hoje", sd["hoje"]["n"], "alm_x_h", lambda: rows_mov_periodo("saida", "hoje"),
+                        help=f"Saídas por requisição de hoje ({_hoje_str}).")
+            _card_drill(x2, "Semana", sd["semana"]["n"], "alm_x_s", lambda: rows_mov_periodo("saida", "semana"),
+                        help=f"Saídas da semana atual — {_sem_str}.")
+            _card_drill(x3, "Mês", sd["mes"]["n"], "alm_x_m", lambda: rows_mov_periodo("saida", "mes"),
+                        help=f"Saídas do mês atual — {_mes_str}.")
 
     tc1, tc2 = st.columns(2)
     with tc1:
@@ -409,10 +440,13 @@ def _render_dash_almoxarifado(vm, vm_gestao):
             dem = vm_gestao["demanda"]
             dados_dem = [(p, dem.get(p, 0)) for p in ordem if dem.get(p, 0)]
             if dados_dem:
-                st.plotly_chart(
+                _ev = st.plotly_chart(
                     _barv([p for p, _ in dados_dem], [n for _, n in dados_dem],
                           textos=[f"{n}" for _, n in dados_dem], height=220),
-                    width="stretch", config={"displayModeBar": False})
+                    width="stretch", config={"displayModeBar": False},
+                    on_select="rerun", key="alm_ch_dem")
+                _chart_drill(_ev, "alm_ch_dem", lambda l: f"Padrão de demanda · {l}",
+                             lambda l: rows_padrao_demanda(l))
             else:
                 st.caption("Ainda sem consumo real suficiente para classificar.")
 
@@ -580,12 +614,6 @@ def _render_dash_compras_mro(vm):
     _bloco_top("📅 Lead Time por Fornecedor (dias)", vm["lead_time_fornecedor"],
                lambda x: x["fornecedor"][:24], "dias", lambda v: f"{v:g}d",
                caption="Tempo médio Emissão → PO por fornecedor — maior = alvo de negociação.")
-
-    # ── Drill-down: Itens em Aberto ──
-    if st.session_state.get("drill_down_itens_em_aberto"):
-        from services.drill_down import rows_itens_em_aberto
-        with st.dialog("📦 Itens em Aberto"):
-            _dialog_drill_down(rows_itens_em_aberto(), titulo="Itens em Aberto", chave_ajuda="itens_em_aberto")
 
 
 def _render_dash_comprador(vm):
@@ -1398,19 +1426,57 @@ def _ajuda_popover(titulo: str, chave_ajuda: str = None) -> None:
             st.markdown(AJUDA_DADOS[chave_ajuda], help=None)
 
 
-def _card_clicavel(label: str, valor, chave_ajuda: str = None, rows_provider=None, delta=None) -> None:
-    """Card com métrica clicável. Se rows_provider é fornecido, renderiza botão "Detalhes"
-    que salva em session_state e abre dialog no próximo rerun."""
-    from services.ajuda_conteudo import AJUDA_DADOS
+def _clear_drill():
+    for _k in ("_drill_titulo", "_drill_df", "_drill_on", "_chart_sig"):
+        st.session_state.pop(_k, None)
 
-    col1, col2 = st.columns([0.85, 0.15])
-    with col1:
-        st.metric(label, valor, delta=delta,
-                  help=AJUDA_DADOS.get(chave_ajuda, "") if chave_ajuda else None)
 
-    if rows_provider and col2.button("🔍", key=f"detalhes_{chave_ajuda}", help="Ver detalhes"):
-        st.session_state[f"drill_down_{chave_ajuda}"] = True
-        st.session_state[f"drill_down_data_{chave_ajuda}"] = rows_provider()
+@st.dialog("🔍 Detalhes", width="large", on_dismiss=_clear_drill)
+def _drill_modal():
+    """Modal reutilizável de drill-down (v4.5.0). Lê título/df de session_state para
+    persistir entre reruns (busca dentro do modal não o fecha)."""
+    titulo = st.session_state.get("_drill_titulo", "Detalhes")
+    _dialog_drill_down(st.session_state.get("_drill_df"), titulo)
+
+
+def _abrir_drill(titulo, df):
+    st.session_state["_drill_titulo"] = titulo
+    st.session_state["_drill_df"] = df
+    st.session_state["_drill_on"] = True
+
+
+def _drill_btn(dkey: str, provider, titulo: str) -> None:
+    """Botão 🔍: ao clicar, computa o provider (lazy) e abre o modal de drill-down."""
+    if st.button("🔍", key=f"drill_{dkey}", help="Ver os itens que compõem este número"):
+        _abrir_drill(titulo, provider())
+
+
+def _card_drill(col, label, valor, dkey, provider, *, help=None, delta=None,
+                delta_color="normal") -> None:
+    """Métrica + botão 🔍 de drill-down na mesma coluna."""
+    with col:
+        st.metric(label, valor, delta=delta, delta_color=delta_color, help=help)
+        _drill_btn(dkey, provider, label)
+
+
+def _chart_drill(ev, dkey: str, titulo_fn, provider_fn) -> None:
+    """Trata a seleção de um st.plotly_chart(on_select='rerun'): abre o drill 1x por
+    barra/fatia selecionada (dedup por assinatura evita loop de rerun)."""
+    try:
+        pts = ev["selection"]["points"] if ev else []
+    except (TypeError, KeyError, IndexError):
+        pts = []
+    if not pts:
+        return
+    rotulo = pts[0].get("label", pts[0].get("x"))
+    if rotulo is None:
+        return
+    sig = f"{dkey}:{rotulo}"
+    if st.session_state.get("_chart_sig") == sig:
+        return
+    st.session_state["_chart_sig"] = sig
+    _abrir_drill(titulo_fn(rotulo), provider_fn(rotulo))
+    st.rerun()
 
 
 def _dialog_drill_down(df: pd.DataFrame, titulo: str = "Detalhes") -> None:
@@ -1434,7 +1500,7 @@ def _dialog_drill_down(df: pd.DataFrame, titulo: str = "Detalhes") -> None:
         df_filtrado = df
 
     # Tabela interativa
-    st.dataframe(df_filtrado, use_container_width=True)
+    st.dataframe(df_filtrado, width="stretch")
 
     # Botão de download (CSV)
     csv = df_filtrado.to_csv(index=False)
@@ -1980,6 +2046,10 @@ if pagina == "Dashboard":
         _render_dash_almoxarifado(montar_visao_almoxarifado(), montar_dashboard(PUBLICO_GESTAO))
     with tab_mensal:
         _render_dash_executivo(montar_dashboard(PUBLICO_EXECUTIVO))
+
+    # v4.5.0 — modal de drill-down: abre quando um card/gráfico clicável marca o estado.
+    if st.session_state.get("_drill_on"):
+        _drill_modal()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INVENTÁRIO
