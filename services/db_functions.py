@@ -648,6 +648,32 @@ def salvar_monitor_sc(registros, linha_ids_originais, conn=None, hoje=None):
     return upd, ins, rem
 
 
+def carregar_monitor_livre():
+    """v4.4.0 — grade LIVRE do Monitor (planilha colável). Retorna a lista de linhas
+    (list de dicts, colunas genéricas A, B, C…) persistida como JSON; [] se vazia."""
+    with transaction() as conn:
+        r = conn.execute("SELECT dados_json FROM monitor_livre WHERE id=1").fetchone()
+    if not r or not r["dados_json"]:
+        return []
+    try:
+        dados = json.loads(r["dados_json"])
+        return dados if isinstance(dados, list) else []
+    except Exception:
+        return []
+
+
+def salvar_monitor_livre(registros):
+    """v4.4.0 — persiste a grade LIVRE do Monitor (lista de dicts) como JSON em linha
+    única (id=1). Independente do grid técnico e do sync. Retorna nº de linhas salvas."""
+    dados = json.dumps(list(registros or []), ensure_ascii=False)
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO monitor_livre (id, dados_json, data_atualizacao) VALUES (1, ?, ?)",
+            (dados, agora))
+    return len(registros or [])
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MOVIMENTAÇÕES
 # ══════════════════════════════════════════════════════════════════════════════

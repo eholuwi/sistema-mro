@@ -460,6 +460,15 @@ def criar_banco():
             ultima_sync TEXT
         )
     """)
+    # v4.4.0 — grade LIVRE do Monitor (planilha colável do Excel, colunas genéricas
+    # A, B, C…). Documento único em JSON; NÃO interfere no grid técnico nem no sync.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS monitor_livre (
+            id               INTEGER PRIMARY KEY CHECK (id = 1),
+            dados_json       TEXT,
+            data_atualizacao TEXT
+        )
+    """)
 
     cols_sc = {r[1] for r in conn.execute("PRAGMA table_info(solicitacoes_compra)")}
     novas_cols_sc = {
@@ -616,7 +625,7 @@ def criar_banco():
 
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 4.3.0")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 4.4.0")
 
 
 def _migrar(conn):
