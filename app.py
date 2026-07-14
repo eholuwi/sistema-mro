@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import json, io, math, os, sys, time, urllib.parse
 from streamlit_option_menu import option_menu
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from services.styles import inject_custom_css
 from services.tema import paleta
 from services.logging_config import setup_logging
@@ -72,7 +72,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 4.0.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 4.1.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -140,10 +140,11 @@ def opcoes_com_atual(base, atual):
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    # 1. Cabeçalho com Logo/Título
+    # 1. Cabeçalho com Logo/Título (v4.1.0 — logo Inventus; versão movida para o rodapé da nav)
+    st.image("inventus_logo.png", width="stretch")
     st.markdown("""
     <div class="sidebar-title">
-        <span style="font-size: 1.8rem;">MRO Inventus 4.0.0</span>
+        <span style="font-size: 1.4rem;">MRO Inventus</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -234,6 +235,13 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    # v4.1.0 — versão do sistema no rodapé da barra de navegação
+    st.markdown(
+        "<div style='text-align:center; margin-top:10px; color: var(--primary-orange); "
+        "font-weight:700; font-size:0.8rem; letter-spacing:0.5px;'>v4.1.0</div>",
+        unsafe_allow_html=True,
+    )
+
 # ══════════════════════════════════════════════════════════════════════════════
 # DASHBOARD — v3.0.0 (por público: 👤 Comprador · 📊 Gestão · 🏛️ Diretoria)
 # Os assemblers puros vivem em services/dashboards.py; aqui é só o desenho (DT-3).
@@ -247,16 +255,17 @@ def _dash_fmt_brl(v):
         return "R$ —"
 
 
-def _render_dash_almoxarifado(vm):
+def _render_dash_almoxarifado(vm, vm_gestao):
     """:material/warehouse: Dashboard do Almoxarifado (§2) — saúde do estoque, prioridades
-    do dia, entradas/saídas por período, materiais mais movimentados, setores e histórico."""
+    do dia, entradas/saídas por período, materiais mais movimentados, setores e histórico.
+    v4.1.0: incorpora o conteúdo da antiga aba Gestão (2 linhas de distribuição, Top 10 de
+    consumo, padrões de demanda e requisições por setor/emitente)."""
     k = vm["kpis"]
     st.markdown("### :material/warehouse: Dashboard do Almoxarifado · Inventus Power")
-    r1 = st.columns(4)
+    r1 = st.columns(3)
     r1[0].metric("📦 Itens cadastrados", k["itens_cadastrados"])
     r1[1].metric("📥 Entradas hoje", k["entradas_hoje"])
     r1[2].metric("📤 Requisições hoje", k["requisicoes_hoje"])
-    r1[3].metric("📉 Estoque baixo", k["estoque_baixo"], delta_color="inverse")
     r2 = st.columns(4)
     r2[0].metric("🔴 Compra urgente", k["compra_urgente"], delta_color="inverse")
     r2[1].metric("⚠️ Sem giro", k["sem_giro"])
@@ -264,51 +273,91 @@ def _render_dash_almoxarifado(vm):
     r2[3].metric("📊 Cobertura média",
                  f"{k['cobertura_media']}d" if k["cobertura_media"] is not None else "—")
 
+    # ── Status dos itens (2 linhas migradas da antiga aba Gestão) ────────────────
     st.divider()
-    s1, s2, s3 = st.columns(3)
-    with s1:
+    dg = vm_gestao["distribuicao"]; total_g = vm_gestao["total"]
+    def _pctg(n): return f"{round(n / total_g * 100)}%" if total_g else "0%"
+    st.markdown("#### :material/inventory_2: Status dos itens (base de compra — só itens com consumo)")
+    s1, s2, s3, s4, s5, s6 = st.columns(6)
+    s1.metric(":material/check_circle: OK", dg["ok"], _pctg(dg["ok"]))
+    s2.metric("🟡 Atenção", dg["atencao"], _pctg(dg["atencao"]), delta_color="off")
+    s3.metric(":material/warning: Críticos", dg["comprar"], _pctg(dg["comprar"]), delta_color="inverse")
+    s4.metric("⚪ Sem movimentação", dg["sem_mov"], _pctg(dg["sem_mov"]), delta_color="off",
+              help="Nunca tiveram saída por requisição — ficam fora da lista de compra.")
+    s5.metric("🔴 Zerados", dg["zerados"], _pctg(dg["zerados"]), delta_color="inverse")
+    s6.metric(":material/search: Inventariado", f"{dg['inventariado']}/{total_g}", _pctg(dg["inventariado"]))
+
+    sf = vm_gestao["saude_fisica"]
+    st.markdown("#### :material/monitor_heart: Status de TODO o material (mesmo sem movimentação)")
+    st.caption("Nível físico de **todos** os itens vs. estoque mínimo — inclui os que nunca "
+               "tiveram consumo (por isso o total difere da linha acima, que os separa da compra).")
+    h1, h2, h3, h4 = st.columns(4)
+    h1.metric("🟢 OK", sf["ok"], _pctg(sf["ok"]), help="Acima do nível confortável (mínimo × 1,2).")
+    h2.metric("🟡 Atenção", sf["atencao"], _pctg(sf["atencao"]), delta_color="off",
+              help="Entre o mínimo e mínimo × 1,2.")
+    h3.metric("🔴 Críticos", sf["critico"], _pctg(sf["critico"]), delta_color="inverse",
+              help="No/abaixo do mínimo, mas ainda com saldo (> 0).")
+    h4.metric("⚫ Zerados", sf["zerado"], _pctg(sf["zerado"]), delta_color="inverse",
+              help="Estoque atual = 0.")
+
+    st.divider()
+    s1c, s2c, s3c = st.columns(3)
+    with s1c:
         with st.container(border=True):
-            st.markdown("##### :material/donut_large: Distribuição")
+            st.markdown("##### :material/donut_large: Distribuição de Itens por Status")
             d = vm["distribuicao"]
             st.plotly_chart(
                 _donut(["OK", "Atenção", "Comprar", "Sem giro"],
                        [d["ok"], d["atencao"], d["comprar"], d["sem_mov"]]),
                 width="stretch", config={"displayModeBar": False})
-    with s2:
+    with s2c:
         with st.container(border=True):
             st.markdown("##### :material/timeline: Cobertura (dias)")
             st.caption("Estoque atual ÷ consumo diário = quantos dias o estoque dura no ritmo atual.")
             cf = vm["cobertura_faixa"]
-            st.plotly_chart(_barv(list(cf.keys()), [int(v) for v in cf.values()]),
+            st.plotly_chart(_barv([f"{kk} dias" for kk in cf.keys()], [int(v) for v in cf.values()]),
                             width="stretch", config={"displayModeBar": False})
-    with s3:
+    with s3c:
         with st.container(border=True):
             st.markdown("##### :material/leaderboard: Curva ABC (valor)")
-            st.caption("Classe por valor consumido em 90 d: A = 80% do valor, B = próximos 15%, C = resto.")
+            st.caption("Classe por valor consumido em 90 d: A = 80% do valor, B = próximos 15%, C = resto. "
+                       "Rótulo = nº de itens · % do valor.")
             a = vm["abc"]
             st.plotly_chart(
                 _barv(["A", "B", "C"], [a["A"]["n"], a["B"]["n"], a["C"]["n"]],
-                      textos=[f"{a['A']['pct']}%", f"{a['B']['pct']}%", f"{a['C']['pct']}%"]),
+                      textos=[f"{a['A']['n']} · {a['A']['pct']}%",
+                              f"{a['B']['n']} · {a['B']['pct']}%",
+                              f"{a['C']['n']} · {a['C']['pct']}%"]),
                 width="stretch", config={"displayModeBar": False})
 
+    # ── Entradas / Saídas com o período explícito (hoje/semana/mês) ──────────────
+    _hoje = date.today()
+    _seg = _hoje - timedelta(days=_hoje.weekday())   # segunda-feira da semana atual
+    _dom = _seg + timedelta(days=6)                  # domingo
+    _wk = _hoje.isocalendar().week
+    _hoje_str = _hoje.strftime("%d/%m/%Y")
+    _sem_str = f"WK {_wk} ({_seg.strftime('%d/%m')}–{_dom.strftime('%d/%m')})"
+    _mes_str = f"{_MESES_PT[_hoje.month].capitalize()}/{_hoje.year}"
     st.divider()
     ea, sa = st.columns(2)
     with ea:
         with st.container(border=True):
             st.markdown("#### 📥 Entradas")
+            st.caption(f"Hoje **{_hoje_str}** · Semana **{_sem_str}** · Mês **{_mes_str}**")
             en = vm["entradas"]
             e1, e2, e3 = st.columns(3)
-            e1.metric("Hoje", en["hoje"]["n"])
-            e2.metric("Semana", en["semana"]["n"])
-            e3.metric("Mês", en["mes"]["n"])
+            e1.metric("Hoje", en["hoje"]["n"], help=f"Recebimentos de hoje ({_hoje_str}).")
+            e2.metric("Semana", en["semana"]["n"], help=f"Recebimentos da semana atual — {_sem_str}.")
+            e3.metric("Mês", en["mes"]["n"], help=f"Recebimentos do mês atual — {_mes_str}.")
     with sa:
         with st.container(border=True):
             st.markdown("#### 📤 Saídas (requisições)")
+            st.caption(f"Hoje **{_hoje_str}** · Semana **{_sem_str}** · Mês **{_mes_str}**")
             sd = vm["saidas"]
             x1, x2, x3 = st.columns(3)
-            x1.metric("Hoje", sd["hoje"]["n"])
-            x2.metric("Semana", sd["semana"]["n"])
-            x3.metric("Mês", sd["mes"]["n"])
+            x1.metric("Hoje", sd["hoje"]["n"], help=f"Saídas por requisição de hoje ({_hoje_str}).")
+            x2.metric("Semana", sd["semana"]["n"], help=f"Saídas da semana atual — {_sem_str}.")
+            x3.metric("Mês", sd["mes"]["n"], help=f"Saídas do mês atual — {_mes_str}.")
 
     tc1, tc2 = st.columns(2)
     with tc1:
@@ -320,6 +369,94 @@ def _render_dash_almoxarifado(vm):
     _bloco_top("🏭 Setores que mais retiram", vm["setores"],
                lambda x: x["setor"], "n", lambda v: f"{int(v)}")
 
+    # ── Top 10 de consumo + Padrões de demanda (migrado da antiga aba Gestão) ────
+    st.divider()
+    colA, colB = st.columns(2)
+    with colA:
+        with st.container(border=True):
+            st.markdown("#### :material/trending_down: Top 10 Itens com mais consumo no mês anterior")
+            dados = obter_dados_dashboard()
+            st.caption(f"Referência: consumo real de {dados['kpis'].get('periodo_abc', '—')}.")
+            df_abc = pd.DataFrame(dados["abc"])
+            if not df_abc.empty:
+                import plotly.graph_objects as go
+                df_abc = df_abc.sort_values("total_saida", ascending=True)
+                df_abc["lbl"] = df_abc.apply(lambda x: f"{x['part_number']} • {str(x['nome_item'])[:15]}", axis=1)
+                fig = go.Figure(data=[go.Bar(
+                    y=df_abc["lbl"], x=df_abc["total_saida"], orientation="h",
+                    marker=dict(color=PAL["accent"], line=dict(width=1, color=PAL["accent_borda"])),
+                    text=df_abc["total_saida"].apply(lambda x: f"{int(x)}"), textposition="outside",
+                    textfont=dict(size=11, color=PAL["texto_suave"]),
+                )])
+                fig.update_layout(
+                    template=PAL["plotly_template"], height=320,
+                    margin=dict(l=0, r=20, t=10, b=0), paper_bgcolor=PAL["paper_bg"],
+                    plot_bgcolor=PAL["plot_bg"], showlegend=False,
+                    font=dict(family="Inter", color=PAL["texto"]),
+                    xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(color=PAL["texto_suave"])),
+                    yaxis=dict(showgrid=False, tickfont=dict(size=11, color=PAL["texto"])))
+                st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+            else:
+                st.info("Sem consumo registrado no período.")
+    with colB:
+        with st.container(border=True):
+            st.markdown("#### :material/science: Padrões de demanda")
+            st.caption("Cada item é lido por duas coisas: **com que regularidade** ele sai e "
+                       "**o quanto o tamanho de cada saída varia**. Juntas, indicam o quão "
+                       "previsível é repor cada material. O número na coluna = quantos itens.")
+            ordem = ["Suave", "Intermitente", "Errático", "Irregular", "Poucos dados"]
+            dem = vm_gestao["demanda"]
+            dados_dem = [(p, dem.get(p, 0)) for p in ordem if dem.get(p, 0)]
+            if dados_dem:
+                st.plotly_chart(
+                    _barv([p for p, _ in dados_dem], [n for _, n in dados_dem],
+                          textos=[f"{n}" for _, n in dados_dem], height=220),
+                    width="stretch", config={"displayModeBar": False})
+            else:
+                st.caption("Ainda sem consumo real suficiente para classificar.")
+
+            _expl = {v["label"]: (v["emoji"], v["explicacao"]) for v in PADROES_DEMANDA.values()}
+            st.markdown("**O que cada padrão significa:**")
+            for p in ["Suave", "Intermitente", "Errático", "Irregular"]:
+                emoji, exp = _expl[p]
+                n = dem.get(p, 0)
+                st.markdown(
+                    f"{emoji} **{p}** — {exp} "
+                    f"<span style='opacity:.65'>· {n} {'item' if n == 1 else 'itens'}</span>",
+                    unsafe_allow_html=True)
+
+            xyz = vm_gestao["xyz"]
+            if xyz:
+                st.caption("**XYZ** mede o quanto o consumo varia de mês a mês "
+                           "(X estável · Y variável · Z errático — baixa confiança com poucos meses): "
+                           f"X {xyz.get('X', 0)} · Y {xyz.get('Y', 0)} · Z {xyz.get('Z', 0)}.")
+
+    with st.container(border=True):
+        st.markdown("#### :material/factory: Requisições por Setor & :material/person: Top Emitentes")
+        reqs = listar_requisicoes(limit=500)
+        if reqs:
+            df_r = pd.DataFrame(reqs)
+            colS, colE = st.columns(2)
+            with colS:
+                if "setor" in df_r.columns and not df_r["setor"].isna().all():
+                    dc = df_r["setor"].value_counts().head(7).reset_index()
+                    dc.columns = ["Setor", "Qtd"]
+                    st.bar_chart(dc.set_index("Setor"), color="#F7941E", height=250)
+                else:
+                    st.caption("Sem dados de setor preenchidos.")
+            with colE:
+                if "emitente" in df_r.columns and not df_r["emitente"].isna().all():
+                    dc = df_r["emitente"].value_counts().head(10).reset_index()
+                    dc.columns = ["Emitente", "Qtd"]
+                    st.dataframe(dc, width="stretch", hide_index=True, height=250,
+                                 column_config={"Qtd": st.column_config.ProgressColumn(
+                                     "Qtd", format="%d", min_value=0,
+                                     max_value=int(dc["Qtd"].max()) if not dc.empty else 100, color="#F7941E")})
+                else:
+                    st.caption("Sem dados de emitente preenchidos.")
+        else:
+            st.caption("Aguardando histórico de requisições.")
+
     st.divider()
     with st.container(border=True):
         st.markdown("#### 📈 Histórico mensal — Entradas × Saídas")
@@ -328,7 +465,8 @@ def _render_dash_almoxarifado(vm):
             st.plotly_chart(
                 _barras_agrupadas([_mes_label(m) for m in h["meses"]],
                                   [("Entradas", h["entradas"], "#22c55e"),
-                                   ("Saídas", h["saidas"], "#ef4444")]),
+                                   ("Saídas", h["saidas"], "#ef4444")],
+                                  mostrar_valores=True),
                 width="stretch", config={"displayModeBar": False})
         else:
             st.caption("Sem movimentações registradas.")
@@ -430,7 +568,8 @@ def _render_dash_compras_mro(vm):
                    lambda x: x["fornecedor"][:22], "valor", lambda v: _brl_compact(v))
     with cd:
         _bloco_top("📦 Setores (demanda em aberto)", vm["por_departamento"],
-                   lambda x: (x["departamento"] or "—"), "n", lambda v: f"{int(v)}", height=340)
+                   lambda x: (x["departamento"] or "—"), "n", lambda v: f"{int(v)}",
+                   height=340, label_outside=True)
     _bloco_top("👨‍💼 Solicitantes (demanda em aberto)", vm["por_solicitante"],
                lambda x: (x["solicitante"] or "—")[:28], "n", lambda v: f"{int(v)}", height=340)
 
@@ -498,8 +637,13 @@ def _render_dash_comprador(vm):
                 st.caption(f"{ag['sem_data']} SC(s) sem data de abertura registrada.")
 
 
-def _render_dash_gestao(vm):
-    """:material/bar_chart: Gestão — saúde da operação: serviço, cobertura, valor, giro, status e demanda."""
+def _render_dash_gestao(vm):  # noqa: v4.1.0 — DEPRECADO / sem uso
+    """:material/bar_chart: Gestão — saúde da operação: serviço, cobertura, valor, giro, status e demanda.
+
+    v4.1.0 — DEPRECADO: a aba "Gestão" foi extinta e todo este conteúdo migrou para
+    `_render_dash_almoxarifado`. Esta função NÃO é mais chamada em lugar nenhum (mantida só
+    até uma limpeza futura). Se precisar ajustar distribuição/padrões/requisições, edite o
+    Almoxarifado — não aqui."""
     k = vm["kpis"]
     c1, c2, c3, c4 = st.columns(4)
     ns = k["nivel_servico"]
@@ -679,18 +823,22 @@ _SERIE_CORES = ["#F36F21", "#F7941E", "#FFB65C", "#6C7A89", "#8E44AD",
                 "#2E86C1", "#27AE60", "#C0392B", "#B3B3B3"]
 
 
-def _barh(labels, values, textos, cor=None, height=300):
+def _barh(labels, values, textos, cor=None, height=300, label_outside=False):
     """Gráfico de barras horizontais (ranking). `labels`/`values`/`textos` já na ordem
-    de exibição (maior no topo = último da lista, convenção do Plotly horizontal)."""
+    de exibição (maior no topo = último da lista, convenção do Plotly horizontal).
+    `label_outside=True` põe o rótulo FORA da barra — evita número girado/minúsculo em
+    barras curtas (ex.: contagens pequenas de Setores em demanda aberta). v4.1.0."""
     import plotly.graph_objects as go
     fig = go.Figure(go.Bar(
         y=labels, x=values, orientation="h",
         marker=dict(color=cor or PAL["accent"], line=dict(width=1, color=PAL["accent_borda"])),
-        text=textos, textposition="auto",
+        text=textos,
+        textposition="outside" if label_outside else "auto",
+        cliponaxis=not label_outside,
         textfont=dict(size=15, color=PAL["texto"]), hoverinfo="skip"))
     fig.update_layout(
         template=PAL["plotly_template"], height=height,
-        margin=dict(l=0, r=16, t=6, b=0), paper_bgcolor=PAL["paper_bg"],
+        margin=dict(l=0, r=44 if label_outside else 16, t=6, b=0), paper_bgcolor=PAL["paper_bg"],
         plot_bgcolor=PAL["plot_bg"], showlegend=False,
         font=dict(family="Inter", color=PAL["texto"]),
         xaxis=dict(showgrid=False, zeroline=False, visible=False),
@@ -751,8 +899,8 @@ def _receber_por_sc(centros):
              f"{int(s.get('total_itens') or 0)} itens · pendente {float(s.get('total_pendente') or 0):g}"): s
             for s in scs
         }
-        _ph = "— selecione uma SC —"
-        sel = st.selectbox("Selecione a SC / PO", [_ph] + list(opc.keys()), key="rec_sc_sel")
+        sel = st.selectbox("Selecione a SC / PO", list(opc.keys()), index=None,
+                           placeholder="Selecione a SC / PO…", key="rec_sc_sel")
         if sel not in opc:
             st.info("Selecione uma SC para ver e receber os itens pendentes.")
             return
@@ -1129,12 +1277,8 @@ def _render_requisicao():
                         _barv(list(by_set.index), [int(v) for v in by_set.values]),
                         width="stretch", config={"displayModeBar": False})
 
-            df_reqs = fil[["numero_requisicao", "data_hora", "setor", "emitente",
-                           "autorizador_nome", "total_itens"]].copy()
-            df_reqs.columns = ["Nº Req", "Data/Hora", "Setor", "Emitente", "Autorizador", "Qtd Itens"]
-            st.dataframe(df_reqs, width="stretch", hide_index=True)
-
-            st.markdown("---")
+            # v4.1.0 — "Detalhes da Requisição" vem ANTES da tabela e mais completo
+            # (emitente, autorizador, centro de custo, setor e a lista de itens).
             st.markdown("#### :material/search: Detalhes da Requisição")
             opcoes_req = {f"REQ-{r['numero_requisicao']} | {r['setor']} | {str(r['data_hora'])[:10]}": r
                           for r in fil.to_dict("records")}
@@ -1146,16 +1290,27 @@ def _render_requisicao():
                 with st.container(border=True):
                     st.markdown(f"**Resumo REQ-{r_det['numero_requisicao']}** · "
                                 f"{str(r_det.get('data_hora',''))[:16]}")
-                    c_a, c_b, c_c = st.columns(3)
+                    c_a, c_b, c_c, c_d = st.columns(4)
                     c_a.write(f":material/person: **Emitente:** {r_det['emitente']}")
                     c_b.write(f":material/edit: **Autorizador:** {r_det['autorizador_nome']}")
                     c_c.write(f":material/apartment: **C.Custo:** {r_det['centro_custo']}")
+                    c_d.write(f":material/domain: **Setor:** {r_det.get('setor') or '—'}")
 
                     itens_det = listar_itens_requisicao(r_det["id"])
                     if itens_det:
                         df_det = pd.DataFrame(itens_det)[["part_number", "nome_item", "quantidade_solicitada", "quantidade_atendida", "unidade"]]
                         df_det.columns = ["PN", "Material", "Solicitado", "Atendido", "UN"]
+                        st.caption(f"{len(df_det)} item(ns) nesta requisição:")
                         st.dataframe(df_det, width="stretch", hide_index=True)
+                    else:
+                        st.caption("Sem itens detalhados para esta requisição.")
+
+            st.markdown("---")
+            st.markdown("##### :material/table_rows: Todas as requisições")
+            df_reqs = fil[["numero_requisicao", "data_hora", "setor", "emitente",
+                           "autorizador_nome", "total_itens"]].copy()
+            df_reqs.columns = ["Nº Req", "Data/Hora", "Setor", "Emitente", "Autorizador", "Qtd Itens"]
+            st.dataframe(df_reqs, width="stretch", hide_index=True)
 
 
 def _linhas(x, series, height=260):
@@ -1175,15 +1330,21 @@ def _linhas(x, series, height=260):
     return fig
 
 
-def _barras_agrupadas(x, series, height=260):
-    """Barras verticais agrupadas. series = [(nome, valores, cor)]. v3.5.0."""
+def _barras_agrupadas(x, series, height=260, mostrar_valores=False):
+    """Barras verticais agrupadas. series = [(nome, valores, cor)]. v3.5.0.
+    `mostrar_valores=True` escreve a quantidade em cima de cada barra — evita depender do
+    hover (ex.: Histórico mensal Entradas × Saídas). v4.1.0."""
     import plotly.graph_objects as go
     fig = go.Figure()
     for nome, vals, cor in series:
-        fig.add_trace(go.Bar(x=x, y=vals, name=nome, marker_color=cor))
+        fig.add_trace(go.Bar(
+            x=x, y=vals, name=nome, marker_color=cor,
+            text=[f"{v:g}" for v in vals] if mostrar_valores else None,
+            textposition="outside" if mostrar_valores else "none",
+            textfont=dict(size=11, color=PAL["texto"]), cliponaxis=False))
     fig.update_layout(
         barmode="group", template=PAL["plotly_template"], height=height,
-        margin=dict(l=0, r=8, t=10, b=0), paper_bgcolor=PAL["paper_bg"],
+        margin=dict(l=0, r=8, t=18 if mostrar_valores else 10, b=0), paper_bgcolor=PAL["paper_bg"],
         plot_bgcolor=PAL["plot_bg"], font=dict(family="Inter", color=PAL["texto"]),
         legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0, font=dict(size=11)),
         xaxis=dict(showgrid=False, tickfont=dict(size=10, color=PAL["texto"])),
@@ -1192,8 +1353,9 @@ def _barras_agrupadas(x, series, height=260):
 
 
 def _bloco_top(titulo, itens, label_fn, value_key, value_fmt, cor=None,
-               height=300, caption=None):
-    """Renderiza um card com um ranking Top N em barras horizontais (maior no topo)."""
+               height=300, caption=None, label_outside=False):
+    """Renderiza um card com um ranking Top N em barras horizontais (maior no topo).
+    `label_outside=True` põe os números fora das barras (bom p/ contagens pequenas)."""
     with st.container(border=True):
         st.markdown(f"#### {titulo}")
         if caption:
@@ -1204,7 +1366,7 @@ def _bloco_top(titulo, itens, label_fn, value_key, value_fmt, cor=None,
         labels = [label_fn(x) for x in itens][::-1]
         values = [x[value_key] for x in itens][::-1]
         textos = [value_fmt(x[value_key]) for x in itens][::-1]
-        st.plotly_chart(_barh(labels, values, textos, cor, height),
+        st.plotly_chart(_barh(labels, values, textos, cor, height, label_outside),
                         width="stretch", config={"displayModeBar": False})
 
 
@@ -1375,19 +1537,16 @@ if pagina == "Dashboard":
         st.info("Nenhum item cadastrado. Vá em **:material/add: Gerenciar Itens** para começar.")
         st.stop()
 
-    # v3.3.0 — abas por público (substitui as "bolinhas"/radio), no mesmo padrão das
-    # telas Controle de SC / Movimentações. Diretoria removida; "Mensal" → "KPI Mensal".
-    tab_comp, tab_gest, tab_almox, tab_mensal = st.tabs(
+    # v4.1.0 — a aba "Gestão" foi extinta; seu conteúdo (2 linhas de distribuição, Top 10
+    # consumo, padrões de demanda, requisições por setor/emitente) migrou para o Almoxarifado.
+    tab_comp, tab_almox, tab_mensal = st.tabs(
         [f":material/person: {PUBLICO_COMPRADOR}",
-         f":material/insights: {PUBLICO_GESTAO}",
          ":material/warehouse: Almoxarifado",
          f":material/calendar_month: {PUBLICO_EXECUTIVO}"])
     with tab_comp:
         _render_dash_compras_mro(montar_visao_compras_mro())
-    with tab_gest:
-        _render_dash_gestao(montar_dashboard(PUBLICO_GESTAO))
     with tab_almox:
-        _render_dash_almoxarifado(montar_visao_almoxarifado())
+        _render_dash_almoxarifado(montar_visao_almoxarifado(), montar_dashboard(PUBLICO_GESTAO))
     with tab_mensal:
         _render_dash_executivo(montar_dashboard(PUBLICO_EXECUTIVO))
 
@@ -1450,20 +1609,11 @@ elif pagina == "Saldo em Estoque":
 
     # --- CONTAINER 2: TABELA PRINCIPAL ---
     with st.container(border=True):
-        # v2.9.0: aviso forward-only de unidade a revisar (comprado em UM ≠ estoque e
-        # ainda sem fator de conversão → recebimento pode somar quantidade crua).
-        if "unidade_divergente" in df.columns:
-            _n_div = int(df["unidade_divergente"].fillna(False).astype(bool).sum())
-            if _n_div:
-                st.warning(f":material/warning: **{_n_div}** item(ns) comprado(s) em unidade diferente da de estoque "
-                           "e ainda **sem fator de conversão**. Revise em **Gerenciar Itens → "
-                           "Conversão de unidades** — até lá o recebimento pode somar quantidade crua.")
-
         cols_show = [
             "part_number", "nome_item", "importancia", "unidade", "tipo_material",
-            "local_armazenagem",
+            "local_armazenagem", "local_armazenagem_2",
             "estoque_minimo", "estoque_maximo", "estoque_atual",
-            "status_material", "previsao_ruptura_dias", "data_inventario",
+            "status_material", "data_inventario",
             "lead_time_dias",
             "caixa_identificacao" # Adicionado para visualização rápida da obs
         ]
@@ -1471,14 +1621,21 @@ elif pagina == "Saldo em Estoque":
 
         df_exib = df[cols_show].copy()
         df_exib["data_inventario"] = df_exib["data_inventario"].apply(lambda v: fmt(v) if v else "—")
-        # v2.9.0: marca visual "⚠️" para itens com unidade a revisar.
-        if "unidade_divergente" in df.columns:
-            df_exib["Un?"] = df["unidade_divergente"].map(lambda v: "Revisar" if v else "")
-        # v2.10.0 (diagnóstico): padrão de demanda (SBC) e classe XYZ derivados.
+        # v4.1.0: "Acaba em" = data estimada de ruptura (hoje + dias de cobertura). Sem consumo
+        # (sentinela 999) ou dados insuficientes → "—" (não existe data prevista de término).
+        def _acaba_em(dias):
+            try:
+                d = int(dias)
+            except (ValueError, TypeError):
+                return "—"
+            if d <= 0 or d >= PREVISAO_RUPTURA_SEM_RISCO:
+                return "—"
+            return (date.today() + timedelta(days=d)).strftime("%d/%m/%Y")
+        if "previsao_ruptura_dias" in df.columns:
+            df_exib["Acaba em"] = df["previsao_ruptura_dias"].apply(_acaba_em)
+        # v2.10.0 (diagnóstico): padrão de demanda (SBC) derivado das saídas reais.
         if "padrao_demanda" in df.columns:
             df_exib["Demanda"] = df["padrao_demanda"].fillna("—")
-        if "classe_xyz" in df.columns:
-            df_exib["XYZ"] = df["classe_xyz"].fillna("—")
 
         num_linhas = len(df_exib)
         altura_tabela = min(40 + (num_linhas * 35), 320) if num_linhas > 0 else 100
@@ -1494,22 +1651,21 @@ elif pagina == "Saldo em Estoque":
                 "unidade": st.column_config.TextColumn("UN", width="small"),
                 "tipo_material": st.column_config.TextColumn("TIPO", width="small"),
                 "local_armazenagem": st.column_config.TextColumn("Localidade", width="small"),
+                "local_armazenagem_2": st.column_config.TextColumn("Localidade (2ª)", width="small",
+                    help="2º ponto de armazenagem do mesmo item (quando houver)."),
                 "estoque_minimo": st.column_config.NumberColumn("Mínimo", format="%d"),
                 "estoque_maximo": st.column_config.NumberColumn("Máximo", format="%d"),
                 "estoque_atual": st.column_config.NumberColumn("Estoque", format="%d"),
                 "status_material": st.column_config.TextColumn("Status Material", width="small"),
-                "previsao_ruptura_dias": st.column_config.NumberColumn("Dias Ruptura", format="%d"),
+                "Acaba em": st.column_config.TextColumn("Acaba em", width="small",
+                    help="Data estimada em que o estoque zera, no ritmo de consumo atual "
+                         "(hoje + dias de cobertura). '—' = sem consumo registrado, sem data prevista."),
                 "data_inventario": st.column_config.TextColumn("Inventariado", width="small"),
                 "lead_time_dias": st.column_config.NumberColumn("Lead Time", format="%d"),
                 "caixa_identificacao": st.column_config.TextColumn("Obs. Inventário", width="medium"), # Nova coluna na tabela
-                "Un?": st.column_config.TextColumn("Un?", width="small",
-                    help=":material/warning: = comprado em unidade diferente da de estoque e ainda sem fator de conversão."),
-                "Demanda": st.column_config.TextColumn("Demanda", width="small",
+                "Demanda": st.column_config.TextColumn("Tipo de Demanda", width="small",
                     help="Padrão de demanda (Syntetos-Boylan) pelas saídas reais: Suave/Intermitente/"
                          "Errático/Irregular. Diagnóstico — não altera a reposição. Detalhe na Ficha 360."),
-                "XYZ": st.column_config.TextColumn("XYZ", width="small",
-                    help="Variabilidade do consumo mensal: X=estável, Y=variável, Z=errático "
-                         "(baixa confiança com poucos meses de histórico)."),
             }
         )
 
@@ -1541,12 +1697,12 @@ elif pagina == "Saldo em Estoque":
 
             # v3.4.0: 2ª locação (opcional) — 2º ponto de armazenagem do mesmo item,
             # independente do Ajuste Rápido de Movimentações (que permanece intacto).
-            _op_l2 = ["—"] + locais_disp
+            _op_l2 = [""] + locais_disp
             _l2_atual = item_inv.get("local_armazenagem_2") or ""
             _idx_l2 = _op_l2.index(_l2_atual) if _l2_atual in _op_l2 else 0
             novo_local_2 = c_l2.selectbox(
                 "Local (2ª Locação)", options=_op_l2, index=_idx_l2,
-                help="Opcional — 2º ponto de armazenagem do mesmo item. '—' = sem 2ª locação.")
+                help="Opcional — 2º ponto de armazenagem do mesmo item. Deixe em branco se não houver.")
             
             # ✅ NOVO CAMPO: Observação Operacional (Texto Livre)
             obs_inventario = st.text_input(
@@ -1562,7 +1718,7 @@ elif pagina == "Saldo em Estoque":
                 
                 # Verifica mudanças operacionais
                 mudou_local = (novo_local != item_inv.get("local_armazenagem"))
-                _l2_val = None if novo_local_2 == "—" else novo_local_2
+                _l2_val = None if not novo_local_2 else novo_local_2
                 _l2_norm = _l2_val or ""
                 mudou_local2 = (_l2_norm != (item_inv.get("local_armazenagem_2") or ""))
                 mudou_obs = (obs_inventario.strip() != (item_inv.get("caixa_identificacao") or "").strip())
@@ -1635,9 +1791,10 @@ elif pagina == "Saldo em Estoque":
             with pd.ExcelWriter(buf, engine="openpyxl") as w:
                 df_exp.to_excel(w, index=False, sheet_name="Inventário")
             st.download_button(
-                "⬇️ Exportar Excel", data=buf.getvalue(),
+                "⬇️ Exportar todos os itens para planilha Excel", data=buf.getvalue(),
                 file_name=f"inventario_mro_{date.today().strftime('%d-%m-%Y')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                help="Baixa a planilha Excel com TODOS os itens do inventário e seus indicadores."
             )
     
 
@@ -1659,7 +1816,7 @@ elif pagina == "Gerenciar Itens":
             with c1:
                 pn_novo = st.text_input("Part Number (PN) *", placeholder="Ex: 12345-ABC")
                 nome_novo = st.text_input("Nome do Item *", placeholder="Ex: Parafuso Sextavado M8")
-                desc_novo = st.text_area("Descrição", placeholder="Informações adicionais sobre o item", height=80)
+                desc_novo = st.text_area("Observação", placeholder="Informações adicionais sobre o item", height=80)
                 un_novo = st.selectbox("Unidade", UNIDADES, index=0)
                 tipo_novo = st.selectbox("Tipo / Categoria", TIPOS, index=0)
             
@@ -1667,7 +1824,7 @@ elif pagina == "Gerenciar Itens":
                 imp_novo = st.selectbox("Importância", IMPORTANCIAS, index=0)
                 loc_novo = st.selectbox("Localidade", listar_valores("local") or ["Geral"], index=0)
                 caixa_novo = st.selectbox("Caixa/ID", listar_valores("local") or ["Geral"], index=0)
-                lead_novo = st.number_input("Lead Time (Dias)", min_value=1, value=7)
+                lead_novo = st.number_input("Lead Time (Dias)", min_value=1, value=20)
 
             c3, c4 = st.columns(2)
             min_novo = c3.number_input("Estoque Mínimo *", min_value=0, value=10)
@@ -1732,11 +1889,10 @@ elif pagina == "Gerenciar Itens":
                 if item_sel.get("unidade_divergente"):
                     st.warning(
                         ":material/warning: **Revisar unidade:** este item é comprado numa unidade diferente "
-                        "da de estoque (visto nos POs), mas ainda **sem fator de conversão** "
-                        "(fator = 1). Defina a *unidade de compra* e o *fator* abaixo para que "
+                        "da de estoque (visto nos POs). Defina a *unidade de compra* e o *fator* abaixo para que "
                         "o recebimento converta corretamente."
                     )
-                ed_desc = st.text_area("Descrição / Observação", value=item_sel.get('descricao', ''), height=70, key="ed_desc")
+                ed_desc = st.text_area("Observação", value=item_sel.get('descricao', ''), height=70, key="ed_desc")
 
                 st.markdown("---")
                 
@@ -1884,7 +2040,7 @@ elif pagina == "Movimentação":
     # Ajuste Rápido e Histórico. Os corpos vivem em _render_receber_material /
     # _render_requisicao (module-level) — sem duplicar nem mover blocos indentados.
     tab_dash, tab_rec, tab_req, tab_ajuste, tab_hist = st.tabs([
-        ":material/bar_chart: Analytics", ":material/inventory_2: Receber Material",
+        ":material/bar_chart: Dashboard movimentações", ":material/inventory_2: Receber Material",
         ":material/assignment: Requisição", ":material/balance: Ajuste Rápido",
         ":material/history: Histórico Completo"])
 
@@ -1906,10 +2062,9 @@ elif pagina == "Movimentação":
             if item_aj:
                 st.info(f"**Item:** `{item_aj['part_number']} — {item_aj['nome_item']}` | **Saldo Atual:** `{item_aj['estoque_atual']}`")
                 
-                c1, c2, c3 = st.columns(3)
+                c1, c2 = st.columns(2)
                 tipo_aj = c1.radio("Tipo de Ajuste", ["Entrada (Sobra)", "Saída (Perda/Ajuste)"], horizontal=True)
                 qtd_aj = c2.number_input("Quantidade", min_value=0.01, step=1.0)
-                cc_aj = c3.selectbox("Centro de Custo (Responsável)", centros, index=0)
                 
                 obs_aj = st.text_input("Motivo do Ajuste *", placeholder="Ex: Avaria, erro de contagem anterior...")
                 resp_aj = st.text_input("Responsável pelo Ajuste *")
@@ -1926,7 +2081,7 @@ elif pagina == "Movimentação":
                         else:
                             ok, msg = registrar_movimentacao(
                                 item_id=item_aj["id"], tipo=tp, quantidade=qtd_aj,
-                                centro_custo=cc_aj, solicitante=resp_aj, emitente=resp_aj,
+                                centro_custo=None, solicitante=resp_aj, emitente=resp_aj,
                                 observacao=f"AJUSTE: {obs_aj}", data_hora=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             )
                             if ok:
@@ -2004,7 +2159,7 @@ elif pagina == "Movimentação":
                         df_exp_mov.to_excel(w, index=False, sheet_name="Movimentacoes")
                         
                     st.download_button(
-                        label="⬇️ Baixar Excel",
+                        label="⬇️ Baixar planilha excel completo de todas as movimentações",
                         data=buf.getvalue(),
                         file_name=f"movimentacoes_{date.today().strftime('%d-%m-%Y')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -2012,24 +2167,14 @@ elif pagina == "Movimentação":
                     )
 
 
-    # === TAB 3: ANALYTICS COMPLETO (VOLUME + DIVERGÊNCIAS + RUPTURA) ===
+    # === TAB 3: DASHBOARD MOVIMENTAÇÕES (VOLUME + DIVERGÊNCIAS + RUPTURA) ===
     with tab_dash:
-        st.subheader(":material/bar_chart: Analytics Operacional Completo")
+        st.subheader(":material/bar_chart: Dashboard movimentações")
 
-        # v2.2.1 — Rótulo de maturidade do histórico (transparência)
-        _mat = obter_maturidade_dados()
-        if _mat["dias"] > 0:
-            st.caption(
-                f":material/calendar_month: Indicadores de série (consumo, tendência, giro) baseados em "
-                f"**{_mat['dias']} dias** de histórico — desde "
-                f"{fmt(_mat['data_inicio']) if _mat['data_inicio'] else '—'} · "
-                f"{_mat['n_snapshots']} fotos de estoque. A confiança aumenta conforme "
-                f"os dados acumulam."
-            )
-
-        # v2.2.1 — Inteligência de Estoque: Cobertura · Tendência · Giro
+        # v4.1.0 — Tendência de consumo (comparação 30d vs. 30d anteriores)
         with st.container(border=True):
-            st.markdown("#### :material/psychology: Inteligência de Estoque (Cobertura · Tendência · Giro)")
+            st.markdown("#### :material/psychology: Tendência de consumo")
+            st.caption("Compara o consumo dos últimos 30 dias com os 30 dias anteriores, item a item.")
             try:
                 df_series = exportar_inventario_df()
             except Exception as e:
@@ -2038,14 +2183,18 @@ elif pagina == "Movimentação":
             if df_series.empty:
                 st.caption("Sem dados suficientes.")
             else:
-                st.markdown("**:material/trending_up: Tendência de consumo**")
                 if "Tendência" in df_series.columns:
                     vc = df_series["Tendência"].value_counts()
                     tca = st.columns(3)
                     tca[0].metric("🔺 Em alta", int(vc.get("Alta", 0)),
-                                  help="Consumo dos últimos 30d mais de 15% acima dos 30d anteriores.")
-                    tca[1].metric("🔻 Em queda", int(vc.get("Queda", 0)))
-                    tca[2].metric(":material/remove: Estável", int(vc.get("Estável", 0)))
+                                  help="Itens cujo consumo dos últimos 30 dias está mais de 15% ACIMA "
+                                       "dos 30 dias anteriores (demanda aumentando vs. o mês passado).")
+                    tca[1].metric("🔻 Em queda", int(vc.get("Queda", 0)),
+                                  help="Itens cujo consumo dos últimos 30 dias está mais de 15% ABAIXO "
+                                       "dos 30 dias anteriores (demanda diminuindo vs. o mês passado).")
+                    tca[2].metric(":material/remove: Estável", int(vc.get("Estável", 0)),
+                                  help="Itens cujo consumo dos últimos 30 dias variou menos de 15% "
+                                       "em relação aos 30 dias anteriores (demanda estável).")
 
         st.markdown("---")
 
@@ -2132,7 +2281,7 @@ elif pagina == "Movimentação":
                     and "Giro(anual)" in df_series.columns:
                 st.markdown("**:material/ac_unit: Top capital parado (maior valor em estoque, giro 0)**")
                 st.caption("Dinheiro parado sem saída no período — candidatos a reduzir/realocar.")
-                _cols_cap = [c for c in ["PN", "Nome", "Estoque Atual", "Valor em Estoque"]
+                _cols_cap = [c for c in ["PN", "Nome", "UN", "Estoque Atual", "Valor em Estoque"]
                              if c in df_series.columns]
                 parado_val = (df_series[(df_series["Giro(anual)"] == 0) &
                                         (df_series["Valor em Estoque"] > 0)]
@@ -2806,9 +2955,9 @@ elif pagina == "Controle de SC":
             
             scs_todas = listar_scs()
             opc_ed = {f"SC {s['numero_sc']} — {s['status']}": s for s in scs_todas} if scs_todas else {}
-            _ph_sc = "— selecione uma SC —"
-            sel_ed = st.selectbox("Selecionar SC", [_ph_sc] + list(opc_ed.keys()),
-                                  index=0, label_visibility="collapsed") if scs_todas else None
+            sel_ed = st.selectbox("Selecionar SC", list(opc_ed.keys()), index=None,
+                                  placeholder="Selecione a S.C.…",
+                                  label_visibility="collapsed") if scs_todas else None
             if not scs_todas:
                 st.info("Nenhuma SC cadastrada para atualização.")
             elif sel_ed not in opc_ed:
@@ -3031,12 +3180,20 @@ elif pagina == "Ficha 360":
                         remover_imagem_item(it["id"]); st.rerun()
             with col_cad:
                 st.subheader(f"{it['part_number']} — {it['nome_item']}")
+                # v4.1.0: "Setor que mais consome" (top do consumo real por setor) no lugar do
+                # antigo "Setor responsável" (campo estático, ~98% "Improdutivo"); Local mostra
+                # as 2 locações quando houver.
+                _top_setor = (ficha["departamentos"]["por_setor"][0]["chave"]
+                              if ficha["departamentos"]["por_setor"] else "—")
+                _locais = " · ".join(
+                    x for x in [it.get('local_armazenagem'), it.get('local_armazenagem_2')] if x
+                ) or "—"
                 st.markdown(
                     f"**Categoria/Tipo:** {it.get('tipo_material') or '—'}  \n"
                     f"**Unidade:** {it.get('unidade') or '—'} · "
                     f"**Criticidade:** {it.get('importancia') or '—'}  \n"
-                    f"**Setor responsável:** {it.get('setor_responsavel') or '—'}  \n"
-                    f"**Local:** {it.get('local_armazenagem') or '—'}"
+                    f"**Setor que mais consome:** {_top_setor}  \n"
+                    f"**Local:** {_locais}"
                     + (f" · Caixa {it.get('caixa_identificacao')}" if it.get('caixa_identificacao') else "")
                 )
                 if it.get("descricao"):
@@ -3055,11 +3212,7 @@ elif pagina == "Ficha 360":
             # ── Conversão de unidades (v2.9.0) ────────────────────────────────
             _fat_f = float(it.get("fator_conversao") or 1.0) or 1.0
             _uc_f = it.get("unidade_compra")
-            if it.get("unidade_divergente"):
-                st.warning(":material/warning: **Revisar unidade:** comprado em unidade diferente da de estoque "
-                           "(visto nos POs) e ainda **sem fator de conversão**. Cadastre em "
-                           "**Gerenciar Itens → Conversão de unidades** para o recebimento converter certo.")
-            elif abs(_fat_f - 1.0) > 1e-9 and _uc_f:
+            if abs(_fat_f - 1.0) > 1e-9 and _uc_f:
                 st.caption(f":material/sync: **Conversão:** compra em **{_uc_f}** · **1 {it.get('unidade') or 'UN'}** "
                            f"de estoque = **{_fat_f:g} {_uc_f}** (fator {_fat_f:g}).")
 
@@ -3086,64 +3239,28 @@ elif pagina == "Ficha 360":
             st.divider()
             e1, e2, e3, e4 = st.columns(4)
             e1.metric("Estoque atual", _g(it.get("estoque_atual")))
-            e2.metric("Mínimo", _g(it.get("estoque_minimo")))
-            e3.metric("Máximo", _g(it.get("estoque_maximo")))
+            e2.metric("Quantidade Mínima", _g(it.get("estoque_minimo")),
+                      help="Baseado no reajuste de compras.")
+            e3.metric("Quantidade Máxima", _g(it.get("estoque_maximo")),
+                      help="Baseado no reajuste de compras.")
             e4.metric("Saldo Item (PO)", _g(it.get("estoque_em_transito")),
                       help="Qtd já negociada em pedidos (PO/SC) aprovados que ainda falta chegar.")
-
-            ver_saldo_key = f"ver_saldo_{item_f['id']}"
-            if st.button(":material/visibility: Ver detalhes do Saldo Item (PO)",
-                         key=f"btn_{ver_saldo_key}"):
-                st.session_state[ver_saldo_key] = not st.session_state.get(ver_saldo_key, False)
-            if st.session_state.get(ver_saldo_key):
-                # v3.7.0 (A4/D4): lista TODOS os pedidos do item (não só pendente > 0),
-                # excluindo Cancelado. A exclusão de "Elimin. Resíduo/Reprovado" fica como
-                # follow-up condicionado a uma fonte de status confiável (aba FUP 2026,
-                # hoje não ingerida) — sem isso, não há como marcar esses status na base.
-                pedidos = [s for s in ficha["scs_pos"]
-                           if (s.get("status") or "").strip().lower() != "cancelado"]
-                cont1, cont2 = st.columns(2)
-                with cont1:
-                    st.markdown("**:material/receipt_long: Pedidos do item (aprovados)**")
-                    if not pedidos:
-                        st.caption("Nenhum pedido registrado para este item.")
-                    else:
-                        st.dataframe(pd.DataFrame([{
-                            "SC": s["numero_sc"], "PO": s.get("po_item") or s.get("numero_po") or "—",
-                            "Status": s.get("status"),
-                            "Solic.": s.get("quantidade_solicitada"),
-                            "Receb.": s.get("quantidade_recebida"),
-                            "Pendente": s.get("pendente"),
-                        } for s in pedidos]), hide_index=True, width="stretch")
-                with cont2:
-                    st.markdown("**:material/apartment: Saldo Residual por Fornecedor**")
-                    grupos_saldo = agrupar_saldo_residual_por_fornecedor(ficha["scs_pos"])
-                    if not grupos_saldo:
-                        st.caption("Sem saldo residual por fornecedor para este item.")
-                    else:
-                        st.dataframe(pd.DataFrame([{
-                            "Fornecedor": g["fornecedor"],
-                            "Saldo Pendente": g["saldo_pendente"],
-                            "Nº Pedidos": g["n_pedidos"],
-                            "Entrega Parcial": ("Sim" if any(l["entrega_parcial"] for l in g["linhas"])
-                                                else "Não"),
-                        } for g in grupos_saldo]), hide_index=True, width="stretch")
-                st.caption(":material/info: Lista todos os pedidos do item (exceto Cancelado). "
-                           "A exclusão de **Elimin. Resíduo / Reprovado** depende de uma fonte de "
-                           "status confiável (aba **FUP 2026** do Relatório de SCs, ainda não ingerida) "
-                           "— hoje esses status não existem na base, então nada é contado errado.")
 
             cob = it.get("dias_cobertura")
             giro = ficha["giro"]
             g1, g2, g3, g4 = st.columns(4)
-            g1.metric("Cobertura",
+            g1.metric("Dias até acabar",
                       f"{cob:.0f} d" if cob is not None and cob < PREVISAO_RUPTURA_SEM_RISCO else "—",
-                      help="Estoque atual ÷ consumo diário.")
+                      help="Quantos dias o estoque atual ainda dura no ritmo de consumo atual "
+                           "(estoque atual ÷ consumo médio diário). '—' = sem consumo registrado, "
+                           "logo não há previsão de término.")
             tend = it.get("tendencia_label")
             tend_txt = (f"{tend} {'+' if (it.get('tendencia_pct') or 0) >= 0 else ''}"
                         f"{_g(it.get('tendencia_pct'))}%") if tend else None
             g2.metric("Consumo/dia", f"{_g1(it.get('consumo_medio_diario'))} {un}/dia", delta=tend_txt,
-                      delta_color="inverse", help="Média diária de saídas (janela 30d).")
+                      delta_color="inverse",
+                      help="Média de quanto sai por dia deste item, pelas saídas reais por requisição "
+                           "na janela de 30 dias. A seta indica a tendência vs. os 30 dias anteriores.")
             g3.metric("Giro anual", _g(giro["giro_anual"]),
                       help="Quantas vezes o estoque \"vira\" no ano: "
                            "(saídas dos últimos 90 d ÷ estoque médio das fotos diárias) × (365 ÷ 90). "
@@ -3162,30 +3279,36 @@ elif pagina == "Ficha 360":
             # ── Consumo (30/60/90) + Valor ────────────────────────────────────
             cc1, cc2 = st.columns(2)
             with cc1:
-                st.markdown("##### :material/trending_down: Consumo médio/dia por janela")
-                _cons_j = [round(it.get("consumo_30d") or 0, 1),
-                           round(it.get("consumo_60d") or 0, 1),
-                           round(it.get("consumo_90d") or 0, 1)]
-                st.plotly_chart(
-                    _barv(["30 dias", "60 dias", "90 dias"], _cons_j,
-                          textos=[f"{v:g}" for v in _cons_j]),
-                    width="stretch", config={"displayModeBar": False})
+                with st.container(border=True):
+                    st.markdown("##### :material/trending_down: Consumo médio/dia por janela")
+                    st.caption("Média de saída por dia em 3 janelas (30/60/90 dias). Comparar as três "
+                               "mostra se o consumo está **acelerando** (30d > 90d) ou **desacelerando**.")
+                    _cons_j = [round(it.get("consumo_30d") or 0, 1),
+                               round(it.get("consumo_60d") or 0, 1),
+                               round(it.get("consumo_90d") or 0, 1)]
+                    st.plotly_chart(
+                        _barv(["30 dias", "60 dias", "90 dias"], _cons_j,
+                              textos=[f"{v:g}" for v in _cons_j]),
+                        width="stretch", config={"displayModeBar": False})
             with cc2:
-                st.markdown("##### :material/payments: Valor")
-                vc = ficha["valor"]["valor_consumido"]
-                st.metric("Valor em estoque",
-                          f"R$ {ficha['valor']['valor_estoque']:,.2f}")
-                # v2.7.1: valor unitário (preço de referência) logo abaixo
-                _preco_un = vc.get("preco") or 0
-                st.caption(f"Valor unitário: **{vc['moeda']} {_preco_un:,.2f}** / {un} "
-                           f"· origem {vc['origem']}")
-                st.metric(f"Valor consumido (YTD {date.today().year})",
-                          f"{vc['moeda']} {vc['valor']:,.2f}",
-                          help=f"Estimativa (último preço, origem {vc['origem']}). "
-                               f"Acumulado de 01/01/{date.today().year} até hoje.")
-                if ficha["abc"]:
-                    st.caption(f"Curva ABC (valor): classe **{ficha['abc']['classe']}** "
-                               f"· {ficha['abc']['pct_acumulado']}% acumulado.")
+                with st.container(border=True):
+                    st.markdown("##### :material/payments: Valor")
+                    st.caption("Quanto este item representa em dinheiro: **parado em estoque** hoje e "
+                               "**consumido no ano** (estimado pelo último preço de compra).")
+                    vc = ficha["valor"]["valor_consumido"]
+                    st.metric("Valor em estoque",
+                              f"R$ {ficha['valor']['valor_estoque']:,.2f}")
+                    # v2.7.1: valor unitário (preço de referência) logo abaixo
+                    _preco_un = vc.get("preco") or 0
+                    st.caption(f"Valor unitário: **{vc['moeda']} {_preco_un:,.2f}** / {un} "
+                               f"· origem {vc['origem']}")
+                    st.metric(f"Valor consumido (YTD {date.today().year})",
+                              f"{vc['moeda']} {vc['valor']:,.2f}",
+                              help=f"Estimativa (último preço, origem {vc['origem']}). "
+                                   f"Acumulado de 01/01/{date.today().year} até hoje.")
+                    if ficha["abc"]:
+                        st.caption(f"Curva ABC (valor): classe **{ficha['abc']['classe']}** "
+                                   f"· {ficha['abc']['pct_acumulado']}% acumulado.")
 
             # ── Evolução de preço ─────────────────────────────────────────────
             ep = ficha["evolucao_preco"]

@@ -1824,7 +1824,7 @@ def exportar_inventario_df():
     colunas = [
         "part_number", "nome_item", "descricao", "unidade", "importancia",
         "tipo_material", "local_armazenagem",
-        "estoque_atual", "estoque_minimo", "estoque_maximo", "estoque_seguranca",
+        "estoque_atual", "estoque_minimo", "estoque_maximo",
         "estoque_em_transito", "dias_cobertura",
         "consumo_medio_diario", "consumo_30d", "consumo_60d", "consumo_90d",
         "tendencia_label", "tendencia_pct", "movimentacao",
