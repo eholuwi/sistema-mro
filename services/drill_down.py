@@ -109,6 +109,50 @@ def rows_padrao_demanda(padrao):
     return _df_itens([i for i in listar_inventario() if (i.get("padrao_demanda") or "") == padrao])
 
 
+def rows_abc_classe(classe="A"):
+    """Itens de uma classe da Curva ABC por valor consumido. Espelha o Counter(classe)
+    de obter_abc_valor que alimenta o vm['abc']."""
+    from services.db_functions import obter_abc_valor
+    itens = [x for x in obter_abc_valor() if x.get("classe") == classe]
+    df = pd.DataFrame(itens)
+    if df.empty:
+        return df
+    ren = {"part_number": "PN", "nome_item": "Material", "qtd": "Qtd consumida",
+           "valor": "Valor (R$)", "pct_acumulado": "% acum."}
+    keep = [c for c in ren if c in df.columns]
+    return df[keep].rename(columns=ren)
+
+
+def rows_mov_mes(ym):
+    """Todas as movimentações de um mês (ym = 'YYYY-MM') — compõe as barras do
+    Histórico mensal (Entradas × Saídas)."""
+    with transaction() as conn:
+        rows = conn.execute("""
+            SELECT DATE(m.data_hora) AS Data, m.tipo AS Tipo, m.quantidade AS Qtd,
+                   inv.part_number AS PN, inv.nome_item AS Material, m.emitente AS Responsável
+            FROM movimentacoes m JOIN inventario inv ON inv.id = m.item_id
+            WHERE substr(m.data_hora,1,7) = ?
+            ORDER BY m.data_hora DESC
+        """, (ym,)).fetchall()
+    return pd.DataFrame([dict(r) for r in rows],
+                        columns=["Data", "Tipo", "Qtd", "PN", "Material", "Responsável"])
+
+
+def rows_saidas_item(pn, dias=30):
+    """Saídas reais (requisições) de um item (por PN) nos últimos `dias`."""
+    ini = (date.today() - timedelta(days=dias)).strftime("%Y-%m-%d")
+    with transaction() as conn:
+        rows = conn.execute(f"""
+            SELECT DATE(m.data_hora) AS Data, m.quantidade AS Qtd, m.setor AS Setor,
+                   m.emitente AS Responsável, m.observacao AS Obs
+            FROM movimentacoes m JOIN inventario inv ON inv.id = m.item_id
+            WHERE inv.part_number = ? AND {SAIDA_REAL_WHERE} AND m.data_hora >= ?
+            ORDER BY m.data_hora DESC
+        """, (pn, ini)).fetchall()
+    return pd.DataFrame([dict(r) for r in rows],
+                        columns=["Data", "Qtd", "Setor", "Responsável", "Obs"])
+
+
 def rows_requisicoes_dia():
     """Requisições emitidas hoje (cada linha = 1 requisição)."""
     hoje = date.today().strftime("%Y-%m-%d")

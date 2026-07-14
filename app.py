@@ -73,7 +73,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 4.5.2", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 4.5.3", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -239,7 +239,7 @@ with st.sidebar:
     # v4.1.0 — versão do sistema no rodapé da barra de navegação
     st.markdown(
         "<div style='text-align:center; margin-top:10px; color: var(--primary-orange); "
-        "font-weight:700; font-size:0.8rem; letter-spacing:0.5px;'>v4.5.2</div>",
+        "font-weight:700; font-size:0.8rem; letter-spacing:0.5px;'>v4.5.3</div>",
         unsafe_allow_html=True,
     )
 
@@ -263,7 +263,8 @@ def _render_dash_almoxarifado(vm, vm_gestao):
     consumo, padrões de demanda e requisições por setor/emitente)."""
     from services.drill_down import (rows_inventario_filtro, rows_mov_periodo,
                                      rows_requisicoes_dia, rows_cobertura_faixa,
-                                     rows_padrao_demanda)
+                                     rows_padrao_demanda, rows_abc_classe,
+                                     rows_mov_mes, rows_saidas_item)
     k = vm["kpis"]
     st.markdown("### :material/warehouse: Dashboard do Almoxarifado · Inventus Power")
     st.caption(":material/ads_click: Clique no 🔍 de qualquer card — ou use o seletor **🔍 Ver itens de:** abaixo de cada gráfico — para abrir a tabela que compõe o número.")
@@ -355,6 +356,8 @@ def _render_dash_almoxarifado(vm, vm_gestao):
                               f"{a['B']['n']} · {a['B']['pct']}%",
                               f"{a['C']['n']} · {a['C']['pct']}%"]),
                 width="stretch", config={"displayModeBar": False})
+            _drill_select("alm_ch_abc", ["A", "B", "C"],
+                          lambda l: f"Curva ABC · Classe {l}", lambda l: rows_abc_classe(l))
 
     # ── Entradas / Saídas com o período explícito (hoje/semana/mês) ──────────────
     _hoje = date.today()
@@ -413,7 +416,7 @@ def _render_dash_almoxarifado(vm, vm_gestao):
             if not df_abc.empty:
                 import plotly.graph_objects as go
                 df_abc = df_abc.sort_values("total_saida", ascending=True)
-                df_abc["lbl"] = df_abc.apply(lambda x: f"{x['part_number']} • {str(x['nome_item'])[:15]}", axis=1)
+                df_abc["lbl"] = df_abc.apply(lambda x: f"{x['part_number']} • {str(x['nome_item'])[:15]}", axis=1)  # top10-almox
                 fig = go.Figure(data=[go.Bar(
                     y=df_abc["lbl"], x=df_abc["total_saida"], orientation="h",
                     marker=dict(color=PAL["accent"], line=dict(width=1, color=PAL["accent_borda"])),
@@ -428,6 +431,9 @@ def _render_dash_almoxarifado(vm, vm_gestao):
                     xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(color=PAL["texto_suave"])),
                     yaxis=dict(showgrid=False, tickfont=dict(size=11, color=PAL["texto"])))
                 st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+                _drill_select("alm_ch_top10", list(df_abc["part_number"]),
+                              lambda l: f"Saídas recentes (30d) · {l}",
+                              lambda l: rows_saidas_item(l), display=list(df_abc["lbl"]))
             else:
                 st.info("Sem consumo registrado no período.")
     with colB:
@@ -503,6 +509,8 @@ def _render_dash_almoxarifado(vm, vm_gestao):
                                    ("Saídas", h["saidas"], "#ef4444")],
                                   mostrar_valores=True),
                 width="stretch", config={"displayModeBar": False})
+            _drill_select("alm_ch_hist", h["meses"], lambda l: f"Movimentações de {_mes_label(l)}",
+                          lambda l: rows_mov_mes(l), display=[_mes_label(m) for m in h["meses"]])
         else:
             st.caption("Sem movimentações registradas.")
 
