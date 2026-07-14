@@ -654,7 +654,7 @@ def salvar_monitor_sc(registros, linha_ids_originais, conn=None, hoje=None):
 
 def registrar_movimentacao(item_id, tipo, quantidade, centro_custo,
 solicitante, emitente, setor="", observacao="",
-sc_item_id=None, requisicao_id=None, data_hora=None):
+sc_item_id=None, requisicao_id=None, data_hora=None, motivo=None):
     try:
         with transaction() as conn:
             r = conn.execute(
@@ -677,10 +677,10 @@ sc_item_id=None, requisicao_id=None, data_hora=None):
             conn.execute("""
                 INSERT INTO movimentacoes
                     (item_id,tipo,quantidade,saldo_apos,data_hora,
-                     centro_custo,setor,solicitante,emitente,observacao,sc_item_id,requisicao_id)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                     centro_custo,setor,solicitante,emitente,observacao,sc_item_id,requisicao_id,motivo)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,(item_id,tipo,quantidade,novo_saldo,agora,
-                centro_custo,setor,solicitante,emitente,observacao,sc_item_id,requisicao_id))
+                centro_custo,setor,solicitante,emitente,observacao,sc_item_id,requisicao_id,motivo))
 
             if quantidade != 0:
                 conn.execute(
@@ -760,6 +760,24 @@ def listar_movimentacoes(item_id=None, limit=200):
             """,(limit,)).fetchall()
     return [dict(r) for r in rows]
 
+
+def categoria_movimentacao(m):
+    """Rótulo amigável de uma movimentação para o Histórico (v4.3.0).
+
+    Deriva de (motivo, tipo, vínculo). Os lançamentos do Ajuste Rápido guardam o
+    rótulo em `motivo` (Entrada Avulsa / Devolução / Perda de Material / Saída
+    Avulsa); os demais são classificados por tipo e vínculo (Requisição = saída
+    com requisição; Conferência = quantidade zero; senão Entrada/Saída/Devolução)."""
+    motivo = (m.get("motivo") or "").strip()
+    if motivo:
+        return motivo
+    if (m.get("quantidade") or 0) == 0:
+        return "Conferência"
+    tipo = m.get("tipo")
+    if tipo == "saida" and m.get("requisicao_id"):
+        return "Requisição"
+    return {"entrada": "Entrada", "saida": "Saída", "devolucao": "Devolução"}.get(tipo, tipo or "—")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # REQUISIÇÕES
 # ══════════════════════════════════════════════════════════════════════════════
@@ -830,6 +848,22 @@ def listar_itens_requisicao(req_id):
             WHERE ir.requisicao_id=?
         """,(req_id,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def mapa_pn_por_requisicao():
+    """Índice {requisicao_id: "pn1 pn2 ... nome1 nome2 ..."} (minúsculas) para busca
+    textual por material/PN no Histórico de Requisições (v4.3.0). Uma única query com
+    GROUP_CONCAT, evitando o N+1 de chamar listar_itens_requisicao por requisição."""
+    with transaction() as conn:
+        rows = conn.execute("""
+            SELECT ir.requisicao_id            AS rid,
+                   GROUP_CONCAT(i.part_number, ' ') AS pns,
+                   GROUP_CONCAT(i.nome_item, ' ')   AS nomes
+            FROM itens_requisicao ir
+            JOIN inventario i ON i.id = ir.item_id
+            GROUP BY ir.requisicao_id
+        """).fetchall()
+    return {r["rid"]: f"{r['pns'] or ''} {r['nomes'] or ''}".lower() for r in rows}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # COMPRAS (SC)
@@ -1891,16 +1925,21 @@ def exportar_inventario_df():
 
     return df
 
-def exportar_movimentacoes_df(item_id=None, tipos_selecionados=None):
+def exportar_movimentacoes_df(item_id=None, tipos_selecionados=None, categorias_selecionadas=None):
     # Busca todas as movimentações (sem o limite da tela para o relatório ser completo)
     movs = listar_movimentacoes(item_id=item_id, limit=5000)
-    
+
     if not movs:
         return pd.DataFrame()
-    
+
     # Filtro de tipo em memória (mesma lógica que você usa no app.py)
     if tipos_selecionados:
         movs = [m for m in movs if m['tipo'] in tipos_selecionados]
+
+    # v4.3.0 — filtro por categoria derivada (Requisição, Perda de Material, etc.),
+    # espelhando o filtro do Histórico na tela.
+    if categorias_selecionadas:
+        movs = [m for m in movs if categoria_movimentacao(m) in categorias_selecionadas]
         
     # B-01: se o filtro de tipo zerou o resultado, retorna DataFrame vazio
     # (evita ValueError ao reatribuir colunas a um DataFrame sem linhas).

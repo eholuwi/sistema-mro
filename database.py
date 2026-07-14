@@ -171,6 +171,7 @@ def criar_banco():
             solicitante    TEXT,
             emitente       TEXT,
             observacao     TEXT,
+            motivo         TEXT,
             sc_item_id     INTEGER,
             requisicao_id  INTEGER,
             FOREIGN KEY (item_id)       REFERENCES inventario(id) ON DELETE CASCADE,
@@ -615,7 +616,7 @@ def criar_banco():
 
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 4.2.1")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 4.3.0")
 
 
 def _migrar(conn):
@@ -628,6 +629,12 @@ def _migrar(conn):
     if "requisicao_id" not in cols_mov:
         conn.execute("ALTER TABLE movimentacoes ADD COLUMN requisicao_id INTEGER")
         logger.info("  ↳ Migração: requisicao_id em movimentacoes adicionada.")
+    # v4.3.0 — subtipo do lançamento manual (Ajuste Rápido de 4 tipos). Coluna
+    # nullable e aditiva: o CHECK de `tipo` permanece ('entrada','saida','devolucao');
+    # os 4 rótulos da UI mapeiam para esses 3 tipos e guardam o rótulo aqui.
+    if "motivo" not in cols_mov:
+        conn.execute("ALTER TABLE movimentacoes ADD COLUMN motivo TEXT")
+        logger.info("  ↳ Migração: motivo em movimentacoes adicionada.")
 
     cols_isc = {r[1] for r in conn.execute("PRAGMA table_info(itens_sc)")}
     if "numero_po" not in cols_isc:

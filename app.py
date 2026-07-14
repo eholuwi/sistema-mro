@@ -17,12 +17,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 from database import criar_banco
 from services.db_functions import (
     buscar_item_por_id, listar_inventario, salvar_item, desmarcar_inventariado,
-    registrar_movimentacao, listar_movimentacoes,
+    registrar_movimentacao, listar_movimentacoes, categoria_movimentacao,
     criar_sc, atualizar_sc, registrar_recebimento_sc, listar_scs,
     listar_itens_sc, buscar_scs_por_item, itens_com_sc_aberta, exportar_inventario_df,
     listar_valores, adicionar_valor_lista, remover_valor_lista,
     listar_setores_conhecidos, sincronizar_setores_config,
-    criar_requisicao, listar_requisicoes, listar_itens_requisicao,
+    criar_requisicao, listar_requisicoes, listar_itens_requisicao, mapa_pn_por_requisicao,
     importar_solicitacoes_protheus, listar_recebimentos_sc,
     atualizar_localizacao_e_inventariar, atualizar_item_inventario,
     obter_analitico_movimentacoes, obter_analitico_divergencias,
@@ -72,7 +72,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 4.2.1", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 4.3.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -238,7 +238,7 @@ with st.sidebar:
     # v4.1.0 — versão do sistema no rodapé da barra de navegação
     st.markdown(
         "<div style='text-align:center; margin-top:10px; color: var(--primary-orange); "
-        "font-weight:700; font-size:0.8rem; letter-spacing:0.5px;'>v4.2.1</div>",
+        "font-weight:700; font-size:0.8rem; letter-spacing:0.5px;'>v4.3.0</div>",
         unsafe_allow_html=True,
     )
 
@@ -1262,21 +1262,24 @@ def _render_requisicao():
             m2.metric(":material/inventory_2: Itens requisitados", _itens)
             m3.metric(":material/domain: Setores atendidos", int(df_all["setor"].nunique()))
 
-            # v3.4.0 — filtros (setor + busca livre)
+            # v3.4.0 — filtros (setor + busca livre)  ·  v4.3.0 — busca também por PN/material
             fc1, fc2 = st.columns(2)
             setores_op = ["Todos"] + sorted(s for s in df_all["setor"].dropna().unique())
             f_set = fc1.selectbox("Setor", setores_op, key="hist_req_setor")
-            f_txt = fc2.text_input(":material/search: Buscar (Nº, emitente ou autorizador)", key="hist_req_busca")
+            f_txt = fc2.text_input(":material/search: Buscar (Nº, emitente, autorizador ou PN/material)", key="hist_req_busca")
 
             fil = df_all.copy()
             if f_set != "Todos":
                 fil = fil[fil["setor"] == f_set]
             if f_txt.strip():
                 t = f_txt.strip().lower()
+                # v4.3.0 — índice PN/nome por requisição (1 query; só quando há busca).
+                mapa_pn = mapa_pn_por_requisicao()
                 fil = fil[fil.apply(
                     lambda r: t in str(r.get("numero_requisicao", "")).lower()
                     or t in str(r.get("emitente", "")).lower()
-                    or t in str(r.get("autorizador_nome", "")).lower(), axis=1)]
+                    or t in str(r.get("autorizador_nome", "")).lower()
+                    or t in mapa_pn.get(r.get("id"), ""), axis=1)]
 
             # v3.4.0 — mini-gráfico: requisições por setor
             if not fil.empty:
@@ -2124,54 +2127,64 @@ elif pagina == "Movimentação":
     with tab_req:
         _render_requisicao()
 
-    # === TAB: AJUSTE RÁPIDO DE ESTOQUE ===
+    # === TAB: AJUSTE RÁPIDO DE ESTOQUE (v4.3.0 — 4 tipos) ===
     with tab_ajuste:
         with st.container(border=True):
             st.subheader(":material/balance: Ajuste Manual de Saldo")
-            st.caption("Utilize apenas para correções de inventário, perdas ou sobras não justificadas por SC/Req.")
-            
+            st.caption("Lançamentos avulsos (sem SC/Requisição): entradas e saídas pontuais, devoluções e perdas.")
+
+            # Rótulo -> (tipo do ledger, sinal: +1 soma / -1 subtrai do estoque).
+            # O CHECK de movimentacoes.tipo continua ('entrada','saida','devolucao');
+            # o rótulo é guardado em `motivo` para o filtro do Histórico (v4.3.0).
+            TIPOS_AJUSTE = {
+                "Entrada Avulsa":    ("entrada",   +1),
+                "Devolução":         ("devolucao", +1),
+                "Perda de Material": ("saida",     -1),
+                "Saída Avulsa":      ("saida",     -1),
+            }
+
             _, item_aj, _ = sel_material("Selecione o Item para Ajuste", "sel_ajuste_estoque")
-            
+
             if item_aj:
                 st.info(f"**Item:** `{item_aj['part_number']} — {item_aj['nome_item']}` | **Saldo Atual:** `{item_aj['estoque_atual']}`")
-                
+
                 c1, c2 = st.columns(2)
-                tipo_aj = c1.radio("Tipo de Ajuste", ["Entrada (Sobra)", "Saída (Perda/Ajuste)"], horizontal=True)
-                qtd_aj = c2.number_input("Quantidade", min_value=0.01, step=1.0)
-                
-                obs_aj = st.text_input("Motivo do Ajuste *", placeholder="Ex: Avaria, erro de contagem anterior...")
+                rotulo_aj = c1.selectbox("Tipo de Ajuste", list(TIPOS_AJUSTE.keys()))
+                tp, _sinal = TIPOS_AJUSTE[rotulo_aj]
+                _hint = "soma ao estoque" if _sinal > 0 else "subtrai do estoque"
+                qtd_aj = c2.number_input("Quantidade", min_value=0.01, step=1.0,
+                                         help=f"'{rotulo_aj}' {_hint}.")
+
+                obs_aj = st.text_input("Motivo / Observação *",
+                                       placeholder="Ex: Avaria, sobra de contagem, devolução do setor...")
                 resp_aj = st.text_input("Responsável pelo Ajuste *")
 
                 if st.button(":material/check_circle: Confirmar Ajuste", type="primary", width="stretch"):
                     if not resp_aj or not obs_aj:
                         st.error("Preencha o responsável e o motivo para auditoria.")
+                    elif _sinal < 0 and qtd_aj > item_aj['estoque_atual']:
+                        st.error(f"Quantidade ({qtd_aj}) superior ao estoque disponível ({item_aj['estoque_atual']}).")
                     else:
-                        tp = "entrada" if "Entrada" in tipo_aj else "saida"
-                        
-                        # Validação de saldo para saída
-                        if tp == "saida" and qtd_aj > item_aj['estoque_atual']:
-                            st.error(f"Quantidade ({qtd_aj}) superior ao estoque disponível ({item_aj['estoque_atual']}).")
+                        ok, msg = registrar_movimentacao(
+                            item_id=item_aj["id"], tipo=tp, quantidade=qtd_aj,
+                            centro_custo=None, solicitante=resp_aj, emitente=resp_aj,
+                            observacao=f"AJUSTE: {obs_aj}", motivo=rotulo_aj,
+                            data_hora=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        )
+                        if ok:
+                            st.success(f":material/check_circle: '{rotulo_aj}' registrado! Novo saldo: {msg}")
+                            time.sleep(1.2)
+                            st.rerun()
                         else:
-                            ok, msg = registrar_movimentacao(
-                                item_id=item_aj["id"], tipo=tp, quantidade=qtd_aj,
-                                centro_custo=None, solicitante=resp_aj, emitente=resp_aj,
-                                observacao=f"AJUSTE: {obs_aj}", data_hora=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            )
-                            if ok:
-                                st.success(f":material/check_circle: Ajuste registrado! Novo saldo: {msg}")
-                                time.sleep(1.2)
-                                st.rerun()
-                            else:
-                                st.error(f":material/cancel: Erro: {msg}")
+                            st.error(f":material/cancel: Erro: {msg}")
 
     # === TAB 2: HISTÓRICO COMPLETO ===
     with tab_hist:
         with st.container(border=True):
             st.subheader(":material/history: Histórico de Movimentações")
             
-            c1, c2, c3 = st.columns([3, 2, 1])
+            c1, c3 = st.columns([3, 1])
             f_item = c1.selectbox("Filtrar por Item", ["Todos"] + [f"{i['part_number']} - {i['nome_item']}" for i in listar_inventario()])
-            f_tipo = c2.multiselect("Filtrar por Tipo", ["entrada", "saida", "devolucao"], default=["entrada", "saida", "devolucao"])
             limit = c3.number_input("Limite", min_value=50, max_value=1000, value=200, step=50)
 
             item_id_f = None
@@ -2183,18 +2196,23 @@ elif pagina == "Movimentação":
                         break
 
             movs = listar_movimentacoes(item_id=item_id_f, limit=int(limit))
-            
-            # Filtro de tipo em memória
-            if f_tipo:
-                movs = [m for m in movs if m['tipo'] in f_tipo]
+            for _m in movs:
+                _m["_categoria"] = categoria_movimentacao(_m)
+
+            # v4.3.0 — filtro por Categoria (derivada de tipo+motivo): Requisição,
+            # Entrada/Saída Avulsa, Devolução, Perda de Material, Conferência, etc.
+            cats_presentes = sorted({_m["_categoria"] for _m in movs})
+            f_cat = st.multiselect("Filtrar por Categoria", cats_presentes, default=cats_presentes)
+            if f_cat:
+                movs = [_m for _m in movs if _m["_categoria"] in f_cat]
 
             if movs:
                 df_mov = pd.DataFrame(movs)
                 df_mov['data_hora'] = df_mov['data_hora'].apply(fmt)
                 
-                cols_exib = ["data_hora", "part_number", "nome_item", "tipo", "quantidade", "saldo_apos", "emitente", "observacao"]
+                cols_exib = ["data_hora", "part_number", "nome_item", "_categoria", "tipo", "quantidade", "saldo_apos", "emitente", "observacao"]
                 df_exib = df_mov[cols_exib].copy()
-                df_exib.columns = ["Data/Hora", "PN", "Nome", "Tipo", "Qtd", "Saldo Pós", "Responsável", "Obs"]
+                df_exib.columns = ["Data/Hora", "PN", "Nome", "Categoria", "Tipo", "Qtd", "Saldo Pós", "Responsável", "Obs"]
 
                 # Estilização por tipo
                 def colorir_tipo(val):
@@ -2202,9 +2220,6 @@ elif pagina == "Movimentação":
                     if val == 'saida': return 'color: #e74c3c; font-weight: bold;'
                     if val == 'devolucao': return 'color: #3498db; font-weight: bold;'
                     return ''
-
-                # Opcional: Adicionar uma coluna calculada para identificar "Conferência"
-                df_exib['Tipo Display'] = df_exib.apply(lambda x: 'Conferência' if x['Qtd'] == 0 else x['Tipo'], axis=1)
 
                 st.dataframe(
                     df_exib.style.map(colorir_tipo, subset=['Tipo']), # Mantém a cor original do tipo banco
@@ -2224,7 +2239,10 @@ elif pagina == "Movimentação":
             col_btn, _ = st.columns([1, 4])
             with col_btn:
                     # Passamos os filtros atuais para a função
-                df_exp_mov = exportar_movimentacoes_df(item_id=item_id_f, tipos_selecionados=f_tipo)
+                _cats_all = bool(f_cat) and len(f_cat) == len(cats_presentes)
+                df_exp_mov = exportar_movimentacoes_df(
+                    item_id=item_id_f,
+                    categorias_selecionadas=None if _cats_all else (f_cat or None))
                     
                 if not df_exp_mov.empty:
                     buf = io.BytesIO()
