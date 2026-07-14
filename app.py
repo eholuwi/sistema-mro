@@ -73,7 +73,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 4.5.1", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 4.5.2", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -239,7 +239,7 @@ with st.sidebar:
     # v4.1.0 — versão do sistema no rodapé da barra de navegação
     st.markdown(
         "<div style='text-align:center; margin-top:10px; color: var(--primary-orange); "
-        "font-weight:700; font-size:0.8rem; letter-spacing:0.5px;'>v4.5.1</div>",
+        "font-weight:700; font-size:0.8rem; letter-spacing:0.5px;'>v4.5.2</div>",
         unsafe_allow_html=True,
     )
 
@@ -266,7 +266,7 @@ def _render_dash_almoxarifado(vm, vm_gestao):
                                      rows_padrao_demanda)
     k = vm["kpis"]
     st.markdown("### :material/warehouse: Dashboard do Almoxarifado · Inventus Power")
-    st.caption(":material/ads_click: Clique no 🔍 de qualquer card (ou numa barra dos gráficos) para ver a tabela que compõe o número.")
+    st.caption(":material/ads_click: Clique no 🔍 de qualquer card — ou use o seletor **🔍 Ver itens de:** abaixo de cada gráfico — para abrir a tabela que compõe o número.")
     r1 = st.columns(3)
     _card_drill(r1[0], "📦 Itens cadastrados", k["itens_cadastrados"], "alm_cad",
                 lambda: rows_inventario_filtro("todos"))
@@ -326,24 +326,23 @@ def _render_dash_almoxarifado(vm, vm_gestao):
             st.markdown("##### :material/donut_large: Distribuição de Itens por Status")
             d = vm["distribuicao"]
             _dlabels = ["OK", "Atenção", "Comprar", "Sem giro"]
-            _ev = st.plotly_chart(
-                _plotly_clicavel(_donut(_dlabels, [d["ok"], d["atencao"], d["comprar"], d["sem_mov"]])),
-                width="stretch", config={"displayModeBar": False},
-                on_select="rerun", key="alm_ch_dist")
+            st.plotly_chart(
+                _donut(_dlabels, [d["ok"], d["atencao"], d["comprar"], d["sem_mov"]]),
+                width="stretch", config={"displayModeBar": False})
             _dmap = {"OK": "ok", "Atenção": "atencao", "Comprar": "comprar", "Sem giro": "sem_mov"}
-            _chart_drill(_ev, "alm_ch_dist", _dlabels, lambda l: f"Distribuição · {l}",
-                         lambda l: rows_inventario_filtro(_dmap.get(l, "todos")))
+            _drill_select("alm_ch_dist", _dlabels, lambda l: f"Distribuição · {l}",
+                          lambda l: rows_inventario_filtro(_dmap.get(l, "todos")))
     with s2c:
         with st.container(border=True):
             st.markdown("##### :material/timeline: Cobertura (dias)")
             st.caption("Estoque atual ÷ consumo diário = quantos dias o estoque dura no ritmo atual.")
             cf = vm["cobertura_faixa"]
             _clabels = [f"{kk} dias" for kk in cf.keys()]
-            _ev = st.plotly_chart(_plotly_clicavel(_barv(_clabels, [int(v) for v in cf.values()])),
-                            width="stretch", config={"displayModeBar": False},
-                            on_select="rerun", key="alm_ch_cob")
-            _chart_drill(_ev, "alm_ch_cob", _clabels, lambda l: f"Cobertura · {l}",
-                         lambda l: rows_cobertura_faixa(str(l).replace(" dias", "")))
+            st.plotly_chart(_barv(_clabels, [int(v) for v in cf.values()]),
+                            width="stretch", config={"displayModeBar": False})
+            _drill_select("alm_ch_cob", list(cf.keys()),
+                          lambda l: f"Cobertura · {l} dias",
+                          lambda l: rows_cobertura_faixa(l), display=_clabels)
     with s3c:
         with st.container(border=True):
             st.markdown("##### :material/leaderboard: Curva ABC (valor)")
@@ -442,13 +441,12 @@ def _render_dash_almoxarifado(vm, vm_gestao):
             dados_dem = [(p, dem.get(p, 0)) for p in ordem if dem.get(p, 0)]
             if dados_dem:
                 _plabels = [p for p, _ in dados_dem]
-                _ev = st.plotly_chart(
-                    _plotly_clicavel(_barv(_plabels, [n for _, n in dados_dem],
-                          textos=[f"{n}" for _, n in dados_dem], height=220)),
-                    width="stretch", config={"displayModeBar": False},
-                    on_select="rerun", key="alm_ch_dem")
-                _chart_drill(_ev, "alm_ch_dem", _plabels, lambda l: f"Padrão de demanda · {l}",
-                             lambda l: rows_padrao_demanda(l))
+                st.plotly_chart(
+                    _barv(_plabels, [n for _, n in dados_dem],
+                          textos=[f"{n}" for _, n in dados_dem], height=220),
+                    width="stretch", config={"displayModeBar": False})
+                _drill_select("alm_ch_dem", _plabels, lambda l: f"Padrão de demanda · {l}",
+                              lambda l: rows_padrao_demanda(l))
             else:
                 st.caption("Ainda sem consumo real suficiente para classificar.")
 
@@ -1461,44 +1459,20 @@ def _card_drill(col, label, valor, dkey, provider, *, help=None, delta=None,
         _drill_btn(dkey, provider, label)
 
 
-def _plotly_clicavel(fig):
-    """Habilita seleção por clique simples (necessário p/ o on_select disparar num clique,
-    não só em box/lasso). Retorna a própria fig."""
-    fig.update_layout(clickmode="event+select")
-    return fig
-
-
-def _chart_drill(ev, dkey: str, labels, titulo_fn, provider_fn) -> None:
-    """Trata a seleção de um st.plotly_chart(on_select='rerun'). Resolve o rótulo pelo
-    ÍNDICE do ponto (robusto p/ barra e rosca) e abre o drill 1x por seleção (dedup)."""
-    sel = None
-    if ev is not None:
-        try:
-            sel = ev["selection"]
-        except (TypeError, KeyError):
-            sel = getattr(ev, "selection", None)
-    pts = (sel.get("points") if isinstance(sel, dict) else getattr(sel, "points", None)) or []
-    if not pts:
-        return
-    p = pts[0]
-
-    def _g(k):
-        return p.get(k) if isinstance(p, dict) else getattr(p, k, None)
-
-    idx = _g("point_index")
-    for _alt in ("point_number", "pointIndex", "pointNumber"):
-        if idx is None:
-            idx = _g(_alt)
-    rotulo = (labels[idx] if isinstance(idx, int) and 0 <= idx < len(labels)
-              else (_g("label") or _g("x")))
-    if rotulo is None:
-        return
-    sig = f"{dkey}:{rotulo}"
-    if st.session_state.get("_chart_sig") == sig:
-        return
-    st.session_state["_chart_sig"] = sig
-    _abrir_drill(titulo_fn(rotulo), provider_fn(rotulo))
-    st.rerun()
+def _drill_select(dkey, labels, titulo_fn, provider_fn, display=None):
+    """Plano B (confiável): seletor '🔍 Ver itens de:' ao lado do gráfico. Abre o drill
+    quando a escolha MUDA — não depende de clique na barra/fatia do Plotly (que o
+    Streamlit não captura de forma confiável). Sem loop de reabertura."""
+    opts = ["—"] + list(labels)
+    disp = ["—"] + list(display if display is not None else labels)
+    escolha = st.selectbox("🔍 Ver itens de:", disp, key=f"sd_{dkey}")
+    prev = f"sdp_{dkey}"
+    if escolha != st.session_state.get(prev):
+        st.session_state[prev] = escolha
+        if escolha != "—":
+            lab = opts[disp.index(escolha)]
+            _abrir_drill(titulo_fn(lab), provider_fn(lab))
+            st.rerun()
 
 
 def _dialog_drill_down(df: pd.DataFrame, titulo: str = "Detalhes") -> None:
