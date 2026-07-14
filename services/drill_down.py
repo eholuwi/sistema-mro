@@ -224,6 +224,60 @@ def rows_saidas_mes(ym):
                         columns=["Data", "Qtd", "PN", "Material", "Setor", "Responsável"])
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# v4.5.5 — Provedores do Dashboard Comprador (SCM WK29, só MRO). Reusam a mesma
+# base de SCs do ano do view-model (montar_visao_compras_mro).
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _scs_ano(ano=None):
+    """SCs do ano corrente (uma linha por SC) — mesma base do view-model do Comprador."""
+    ano = ano or date.today().year
+    with transaction() as conn:
+        rows = conn.execute("""
+            SELECT sc.numero_sc, sc.status, sc.data_abertura, sc.numero_po, sc.fornecedor,
+                   sc.comprador, sc.departamento, COUNT(i.id) AS n_itens,
+                   COALESCE(SUM(i.valor_total), 0) AS valor
+            FROM solicitacoes_compra sc LEFT JOIN itens_sc i ON i.sc_id = sc.id
+            WHERE substr(sc.data_abertura, 1, 4) = ?
+            GROUP BY sc.id ORDER BY sc.data_abertura DESC
+        """, (str(ano),)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _df_scs(scs):
+    df = pd.DataFrame(scs)
+    if df.empty:
+        return df
+    ren = {"numero_sc": "SC", "status": "Status", "data_abertura": "Abertura",
+           "numero_po": "PO", "fornecedor": "Fornecedor", "comprador": "Comprador",
+           "departamento": "Depto", "n_itens": "Itens", "valor": "Valor (R$)"}
+    keep = [c for c in ren if c in df.columns]
+    return df[keep].rename(columns=ren)
+
+
+def rows_scs_status(status):
+    """SCs de um status (compõe 'Status dos POs')."""
+    return _df_scs([s for s in _scs_ano() if (s.get("status") or "—") == status])
+
+
+def rows_scs_comprador(comprador):
+    """SCs atribuídas a um comprador (compõe 'Itens por comprador')."""
+    return _df_scs([s for s in _scs_ano() if (s.get("comprador") or "—") == comprador])
+
+
+def rows_scs_mes(ym):
+    """SCs abertas num mês (YYYY-MM) — compõe 'Itens/SCs por mês'."""
+    return _df_scs([s for s in _scs_ano() if (s.get("data_abertura") or "")[:7] == ym])
+
+
+def rows_scs_itens_faixa(faixa):
+    """SCs por faixa de nº de itens (compõe 'Itens por Pedido')."""
+    def _fx(n):
+        n = int(n or 0)
+        return None if n <= 0 else ("1 item" if n == 1 else ("2-5" if n <= 5 else ("6-10" if n <= 10 else "11+")))
+    return _df_scs([s for s in _scs_ano() if _fx(s.get("n_itens")) == faixa])
+
+
 def rows_criticos_reposicao():
     """Itens críticos do KPI Mensal = sugestões de reposição de prioridade máxima
     (tier 0). Espelha comprador['kpis']['criticos']."""

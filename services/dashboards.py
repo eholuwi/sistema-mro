@@ -361,6 +361,31 @@ def montar_visao_compras_mro(hoje=None):
         "pos": [mes_pos.get(m, 0) for m in meses],
     }
 
+    # v4.5.5 — agregações extras para espelhar o Dashboard SCM WK29 (só MRO).
+    status_pos = dict(Counter((s["status"] or "—") for s in scs))
+    _ipp = Counter()
+    for s in scs:
+        n = int(s["n_itens"] or 0)
+        if n <= 0:
+            continue
+        _ipp["1 item" if n == 1 else ("2-5" if n <= 5 else ("6-10" if n <= 10 else "11+"))] += 1
+    itens_por_pedido = {f: _ipp.get(f, 0) for f in ("1 item", "2-5", "6-10", "11+") if _ipp.get(f, 0)}
+    _aging_dep = Counter()
+    for it in itens_abertos:
+        d = _dias_entre(it.get("data_aprovacao"), hoje_iso)
+        if d is not None and d > 15:
+            _aging_dep[(it.get("departamento") or "—")] += 1
+    aging_por_departamento = [{"departamento": k, "n": v} for k, v in _aging_dep.most_common(10)]
+    _cur = weeks[-1] if weeks else None
+    _prev = weeks[-2] if len(weeks) >= 2 else None
+    comparativo_semanal = {
+        "wk_atual": _cur, "wk_anterior": _prev,
+        "aprovados_atual": aprov_wk.get(_cur, 0),
+        "aprovados_anterior": (aprov_wk.get(_prev, 0) if _prev else 0),
+        "pos_atual": po_wk.get(_cur, 0),
+        "pos_anterior": (po_wk.get(_prev, 0) if _prev else 0),
+    }
+
     ano, wk, _ = hoje.isocalendar()
     return {
         "ultima_atualizacao": ultima_atualizacao,
@@ -384,6 +409,11 @@ def montar_visao_compras_mro(hoje=None):
         "lead_time_fornecedor": lead_time_fornecedor,
         "evolucao_semanal": evolucao_semanal,
         "volume_mensal": volume_mensal,
+        # v4.5.5 — SCM WK29
+        "status_pos": status_pos,
+        "itens_por_pedido": itens_por_pedido,
+        "aging_por_departamento": aging_por_departamento,
+        "comparativo_semanal": comparativo_semanal,
     }
 
 
