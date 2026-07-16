@@ -1,8 +1,58 @@
 # Handoff de Sessão — Sistema MRO (para continuar em outra sessão)
 
-> Gerado em 10/07/2026, ao final da entrega **v3.3.0**. Cole/`@`-referencie este arquivo no início da próxima sessão.
+> Cole/`@`-referencie este arquivo no início da próxima sessão — funciona em **qualquer dispositivo**,
+> porque viaja com o `git pull` (ao contrário da memória local do Claude, que fica presa à máquina
+> onde a sessão rodou).
 
 ---
+
+## STATUS ATUAL — atualizado em 17/07/2026 (leia isto, não a seção 1-7 abaixo para status)
+
+- **Versão corrente: v4.6.0** — commitada e pushada em `feat/v3.10.0-4.0.0-ux-redesign`
+  (commit `d7a49e1`). **377 testes verdes.** Entregou: **Monitor de SC 2.0** (aba Controle de SC →
+  Monitor) — 1ª tabela cruzando os dois exports **CRUS** (SCM = `Solicitações.xlsx` × SC7 =
+  `Relatório de Compras.xlsx`) pela chave **PO** (`Pedido`↔`Numero PC` — o `Numero da SC` vem vazio
+  no SC7 cru), com filtro **só material do MRO** (solicitante no escopo + PN no inventário) e coluna+
+  filtro de **Departamento**; é **efêmero** (recomputa a cada upload, não grava no banco). Também:
+  Planilha livre ganhou **criar/remover coluna** (persistente). Módulo novo `services/monitor_cruzamento.py`.
+  Também traz, commitadas junto (estavam pendentes): **v4.5.6/v4.5.7**.
+- **Pendente:** o Luis ainda precisa **validar no app real** o join SCM×SC7 com um `Solicitações.xlsx`
+  real do mesmo período do `Relatório de Compras.xlsx` (o teste em escala real usou a aba SCM
+  histórica, não o export bruto de Solicitações). Só depois disso a v4.6.0 é considerada 100% fechada.
+- **Próximo:** **Requisição digital** (a feature "maior" do roadmap, §4 do backlog antigo) —
+  **entrevistar o usuário sobre o processo real ANTES de propor qualquer coisa.**
+- **Backlog vivo:** `docs/prompt.md` (o antigo `prompt.md` da raiz foi movido para cá).
+- **⚠️ Lição multi-dispositivo (git):** um clone antigo (notebook do trabalho) tinha
+  `remote.origin.fetch` restrito (fetch de um único branch) — `git fetch`/`git pull` nunca traziam
+  branches novos, mesmo com o remote certo. Sintoma: `git checkout <branch>` dá
+  `pathspec did not match any file(s)` mesmo após `git fetch origin`. Fix permanente (uma vez, por
+  clone/máquina):
+  ```
+  git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+  git fetch origin
+  ```
+  Se o `checkout` reclamar de mudanças locais não commitadas, **não descartar sem olhar**:
+  `git stash -u` (reversível) antes de trocar de branch.
+- **Config recomendada para retomar** (heurística do projeto: feature grande/nova com
+  plano+aprovação → Opus, sem fast, Plan mode): **Opus 4.8** (`claude-opus-4-8`) · **fast DESLIGADO**
+  · **Plan mode**.
+
+**Prompt pronto para colar na próxima sessão (qualquer dispositivo):**
+```
+Continuar o Sistema MRO (Inventus Power). Leia @docs/HANDOFF.md (seção "STATUS ATUAL" no topo) e
+@docs/prompt.md. A v4.6.0 (Monitor de SC 2.0) está commitada/pushada em
+feat/v3.10.0-4.0.0-ux-redesign — confirme com `git log --oneline -3` que está em dia. Antes de
+codar, ENTREVISTE-ME sobre o processo real de requisição de material no almoxarifado (próxima
+feature: Requisição digital) — depois siga a skill atualizar-sistema-mro (framework das 9 skills)
+e PARE no plano para aprovação.
+```
+
+---
+
+> ℹ️ **A partir daqui (seções 0-7), o conteúdo é um SNAPSHOT HISTÓRICO gerado em 10/07/2026, ao
+> final da v3.3.0.** Útil para arquitetura, convenções e "lições aprendidas" que ainda valem — mas
+> o backlog/status descrito nele está **desatualizado** (muita coisa das seções 3/4 já foi entregue
+> em versões posteriores). Para o estado real, use a seção **STATUS ATUAL** acima e `changelog/`.
 
 ## 0. ⚠️ LEIA PRIMEIRO — Ferramentas e regras obrigatórias
 
