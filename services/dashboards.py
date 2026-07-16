@@ -370,21 +370,9 @@ def montar_visao_compras_mro(hoje=None):
             continue
         _ipp["1 item" if n == 1 else ("2-5" if n <= 5 else ("6-10" if n <= 10 else "11+"))] += 1
     itens_por_pedido = {f: _ipp.get(f, 0) for f in ("1 item", "2-5", "6-10", "11+") if _ipp.get(f, 0)}
-    _aging_dep = Counter()
-    for it in itens_abertos:
-        d = _dias_entre(it.get("data_aprovacao"), hoje_iso)
-        if d is not None and d > 15:
-            _aging_dep[(it.get("departamento") or "—")] += 1
-    aging_por_departamento = [{"departamento": k, "n": v} for k, v in _aging_dep.most_common(10)]
-    _cur = weeks[-1] if weeks else None
-    _prev = weeks[-2] if len(weeks) >= 2 else None
-    comparativo_semanal = {
-        "wk_atual": _cur, "wk_anterior": _prev,
-        "aprovados_atual": aprov_wk.get(_cur, 0),
-        "aprovados_anterior": (aprov_wk.get(_prev, 0) if _prev else 0),
-        "pos_atual": po_wk.get(_cur, 0),
-        "pos_anterior": (po_wk.get(_prev, 0) if _prev else 0),
-    }
+    # v4.5.6 — removidos os agregados "aging_por_departamento" e "comparativo_semanal"
+    # (UI extinta a pedido do usuário). weeks/aprov_wk/po_wk seguem alimentando o
+    # gráfico "evolucao_semanal", que permanece.
 
     ano, wk, _ = hoje.isocalendar()
     return {
@@ -412,8 +400,6 @@ def montar_visao_compras_mro(hoje=None):
         # v4.5.5 — SCM WK29
         "status_pos": status_pos,
         "itens_por_pedido": itens_por_pedido,
-        "aging_por_departamento": aging_por_departamento,
-        "comparativo_semanal": comparativo_semanal,
     }
 
 

@@ -49,6 +49,26 @@ def _solicitantes_mro_norm(conn):
     return set(SOLICITANTES_MRO)
 
 
+def obter_cadastro_mro_para_cruzamento():
+    """v4.6.0 — cadastro MRO para o Monitor de SC 2.0 (cruzamento SCM × SC7).
+
+    Retorna ``(solicitantes_mro, pns_mro, dep_por_solic)`` numa única conexão:
+    - ``solicitantes_mro``: nomes normalizados no escopo MRO (incluir_mro=1);
+    - ``pns_mro``: conjunto de part numbers cadastrados no inventário;
+    - ``dep_por_solic``: mapa ``nome_norm → departamento`` (mesma derivação do
+      Dashboard SCM). Só LEITURA — o cruzamento em si não grava nada.
+    """
+    with transaction() as conn:
+        solicitantes = _solicitantes_mro_norm(conn)
+        pns = {r[0] for r in conn.execute("SELECT part_number FROM inventario") if r[0]}
+        dep_por_solic = {}
+        for r in conn.execute("SELECT nome, departamento FROM solicitantes_mro"):
+            dep = (r["departamento"] or "").strip()
+            if dep:
+                dep_por_solic[_normalizar_txt(r["nome"])] = dep
+    return solicitantes, pns, dep_por_solic
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # STATUS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -648,30 +668,67 @@ def salvar_monitor_sc(registros, linha_ids_originais, conn=None, hoje=None):
     return upd, ins, rem
 
 
-def carregar_monitor_livre():
-    """v4.4.0 — grade LIVRE do Monitor (planilha colável). Retorna a lista de linhas
-    (list de dicts, colunas genéricas A, B, C…) persistida como JSON; [] se vazia."""
+# v4.4.0 — grade LIVRE do Monitor (planilha colável). v4.6.0 — passa a guardar
+# também as COLUNAS customizadas (criar/remover coluna), num shape retrocompatível
+# {"colunas": [...], "linhas": [...]}; documento único (id=1) em JSON.
+PLANILHA_LIVRE_COLS_PADRAO = list("ABCDEFGHIJ")
+
+
+def _colunas_das_linhas(linhas):
+    """Deriva a lista de colunas (preservando ordem de 1ª aparição) das linhas;
+    cai no padrão A..J se as linhas não tiverem chaves."""
+    cols = []
+    for linha in (linhas or []):
+        for k in (linha.keys() if isinstance(linha, dict) else []):
+            if k not in cols:
+                cols.append(k)
+    return cols or list(PLANILHA_LIVRE_COLS_PADRAO)
+
+
+def carregar_planilha_livre():
+    """v4.6.0 — grade LIVRE do Monitor com colunas customizadas. Retorna sempre
+    ``{"colunas": [...], "linhas": [...]}``. Normaliza o legado (lista de dicts,
+    v4.4.0) para o shape novo, sem perder dados."""
     with transaction() as conn:
         r = conn.execute("SELECT dados_json FROM monitor_livre WHERE id=1").fetchone()
     if not r or not r["dados_json"]:
-        return []
+        return {"colunas": list(PLANILHA_LIVRE_COLS_PADRAO), "linhas": []}
     try:
         dados = json.loads(r["dados_json"])
-        return dados if isinstance(dados, list) else []
     except Exception:
-        return []
+        return {"colunas": list(PLANILHA_LIVRE_COLS_PADRAO), "linhas": []}
+    if isinstance(dados, dict):  # shape v4.6.0
+        linhas = dados.get("linhas") if isinstance(dados.get("linhas"), list) else []
+        colunas = dados.get("colunas") if isinstance(dados.get("colunas"), list) else None
+        return {"colunas": colunas or _colunas_das_linhas(linhas), "linhas": linhas}
+    if isinstance(dados, list):  # legado v4.4.0
+        return {"colunas": _colunas_das_linhas(dados), "linhas": dados}
+    return {"colunas": list(PLANILHA_LIVRE_COLS_PADRAO), "linhas": []}
 
 
-def salvar_monitor_livre(registros):
-    """v4.4.0 — persiste a grade LIVRE do Monitor (lista de dicts) como JSON em linha
-    única (id=1). Independente do grid técnico e do sync. Retorna nº de linhas salvas."""
-    dados = json.dumps(list(registros or []), ensure_ascii=False)
+def salvar_planilha_livre(colunas, linhas):
+    """v4.6.0 — persiste a grade LIVRE (colunas + linhas) como JSON em linha única
+    (id=1). Independente do grid técnico e do sync. Retorna nº de linhas salvas."""
+    colunas = list(colunas or []) or _colunas_das_linhas(linhas)
+    dados = json.dumps({"colunas": colunas, "linhas": list(linhas or [])}, ensure_ascii=False)
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with transaction() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO monitor_livre (id, dados_json, data_atualizacao) VALUES (1, ?, ?)",
             (dados, agora))
-    return len(registros or [])
+    return len(linhas or [])
+
+
+def carregar_monitor_livre():
+    """v4.4.0 (compat) — retorna só as LINHAS da grade livre (lista de dicts).
+    Delega ao shape novo (v4.6.0). Mantido p/ retrocompatibilidade."""
+    return carregar_planilha_livre()["linhas"]
+
+
+def salvar_monitor_livre(registros):
+    """v4.4.0 (compat) — persiste só as LINHAS (deriva as colunas das chaves).
+    Delega a `salvar_planilha_livre`. Retorna nº de linhas salvas."""
+    return salvar_planilha_livre(_colunas_das_linhas(registros), registros)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1710,6 +1767,114 @@ def buscar_scs_por_item(item_id, apenas_abertas=True):
     return [dict(r) for r in rows]
 
 
+# Campos editáveis de um pedido (linha de itens_sc) pelo kanban do Guarda-Chuva (v4.5.7).
+# `quantidade_recebida` NÃO está aqui de propósito: só muda via registrar_recebimento_sc
+# (ledger). Campos de texto vazios gravam NULL; quantidade_pedido é numérica.
+_CAMPOS_PEDIDO_GC = {
+    "numero_po": "texto",
+    "fornecedor_item": "texto",
+    "data_necessidade": "texto",
+    "data_prev_nfe": "texto",
+    "documento_nf": "texto",
+    "observacao_item": "texto",
+    "quantidade_pedido": "num",
+}
+
+
+def obter_pedido_sc(item_sc_id):
+    """v4.5.7 — Um único pedido (linha de itens_sc) com os mesmos campos derivados de
+    `buscar_scs_por_item` (pendente, quantidade_negociada, documento_nf, datas…), acrescido
+    de PN/nome/unidade do item. Usado pelo dialog do kanban para reler valores FRESCOS do
+    banco a cada render (essencial após um recebimento parcial dentro do mesmo dialog)."""
+    if not item_sc_id:
+        return None
+    with transaction() as conn:
+        r = conn.execute("""
+            SELECT sc.id, sc.numero_sc, sc.numero_po, sc.fornecedor, sc.status, sc.data_abertura,
+                   isc.id AS item_sc_id, isc.numero_po AS po_item,
+                   COALESCE(isc.fornecedor_item, sc.fornecedor) AS fornecedor_item,
+                   isc.quantidade_solicitada,
+                   COALESCE(isc.quantidade_pedido, isc.quantidade_solicitada) AS quantidade_negociada,
+                   isc.quantidade_recebida,
+                   COALESCE(isc.saldo_residual, COALESCE(isc.quantidade_pedido, isc.quantidade_solicitada)-isc.quantidade_recebida) AS pendente,
+                   isc.data_necessidade, isc.data_prev_nfe, isc.documento_nf, isc.status_item,
+                   isc.observacao_item,
+                   i.part_number, i.nome_item, i.unidade
+            FROM itens_sc isc
+            JOIN solicitacoes_compra sc ON sc.id=isc.sc_id
+            JOIN inventario i ON i.id=isc.item_id
+            WHERE isc.id=?
+        """, (item_sc_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def atualizar_pedido_guarda_chuva(item_sc_id, campos):
+    """v4.5.7 — Edita os METADADOS de um pedido (linha de itens_sc) a partir do kanban do
+    Guarda-Chuva: Nº PO, fornecedor, Data necessidade, Data prev. entrega, NF (documento_nf),
+    observação e quantidade negociada (quantidade_pedido). Recomputa saldo_residual/status_item
+    a partir do quantidade_recebida EXISTENTE e sincroniza o status da SC-pai.
+
+    NUNCA altera quantidade_recebida nem escreve em movimentacoes/inventario — o recebimento
+    (Qtd entregue) passa exclusivamente por `registrar_recebimento_sc`, mantendo o ledger
+    íntegro. Campo de texto vazio grava NULL (permite limpar a NF = 'voltar' o card de
+    NF Emitida para Aguardando Entrega). `campos` traz só as chaves realmente editadas."""
+    if not item_sc_id:
+        return False, "Pedido inválido."
+    try:
+        with transaction() as conn:
+            row = conn.execute("SELECT * FROM itens_sc WHERE id=?", (item_sc_id,)).fetchone()
+            if not row:
+                return False, "Pedido (item da SC) não encontrado."
+            sc_id = row["sc_id"]
+
+            set_cols, vals = [], []
+            for chave, tipo in _CAMPOS_PEDIDO_GC.items():
+                if chave not in campos:
+                    continue
+                bruto = campos[chave]
+                if tipo == "num":
+                    valor = _to_float(bruto)
+                else:
+                    valor = (str(bruto).strip() or None) if bruto is not None else None
+                set_cols.append(f"{chave}=?")
+                vals.append(valor)
+
+            # Valores efetivos para recomputar saldo/status/divergência (usa o valor editado
+            # de quantidade_pedido quando presente; caso contrário o já gravado).
+            negociada = (_to_float(campos["quantidade_pedido"])
+                         if "quantidade_pedido" in campos
+                         else (row["quantidade_pedido"] or row["quantidade_solicitada"] or 0))
+            solicitada = row["quantidade_solicitada"] or 0
+            recebida = row["quantidade_recebida"] or 0
+            saldo = max(negociada - recebida, 0)
+            status_item = "Recebido" if saldo <= 0 else ("Parcial" if recebida > 0 else "Aberto")
+            divergencia = 1 if abs(solicitada - negociada) > 0.0001 else 0
+
+            set_cols += ["saldo_residual=?", "status_item=?", "divergencia_compra=?"]
+            vals += [saldo, status_item, divergencia]
+
+            vals.append(item_sc_id)
+            conn.execute(f"UPDATE itens_sc SET {','.join(set_cols)} WHERE id=?", vals)
+
+            # Sincroniza o status da SC-pai (mesma regra de atualizar_sc), sem tocar 'Cancelado'.
+            sc_status = conn.execute(
+                "SELECT status FROM solicitacoes_compra WHERE id=?", (sc_id,)
+            ).fetchone()["status"]
+            pend = conn.execute("""
+                SELECT COUNT(*) AS n FROM itens_sc
+                WHERE sc_id=? AND COALESCE(saldo_residual,
+                      COALESCE(quantidade_pedido, quantidade_solicitada)-quantidade_recebida) > 0
+            """, (sc_id,)).fetchone()["n"]
+            if sc_status != "Cancelado":
+                if pend == 0:
+                    conn.execute("UPDATE solicitacoes_compra SET status='Recebido' WHERE id=?", (sc_id,))
+                elif sc_status == "Recebido":
+                    conn.execute("UPDATE solicitacoes_compra SET status='Parcial' WHERE id=?", (sc_id,))
+        return True, "Pedido atualizado."
+    except Exception as e:
+        return False, str(e)
+
+
 def itens_com_sc_aberta(conn=None):
     """Conjunto de item_id que têm ao menos uma SC ABERTA (saldo residual > 0 e SC não
     Cancelada) — mesma definição de 'aberta' de listar_scs(apenas_abertas=True). Usado pelo
@@ -2061,6 +2226,9 @@ def atualizar_item_inventario(item_id, dados_atualizados):
             allowed_fields = [
                 "nome_item", "descricao", "unidade", "tipo_material", "importancia",
                 "estoque_minimo", "estoque_maximo", "lead_time_dias", "local_armazenagem",
+                # v4.5.6 — 2ª locação agora também editável em Gerenciar Itens → Editar
+                # (antes só era gravada pela Contagem Física do Saldo em Estoque).
+                "local_armazenagem_2",
                 "caixa_identificacao", "consumo_medio_diario", "setor_responsavel",
                 # v2.2.0 — estoque de segurança agora é MANUAL (parâmetro do gestor)
                 "estoque_seguranca",

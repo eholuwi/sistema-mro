@@ -1,0 +1,30 @@
+project:
+  name: Sistema MRO
+  stack:
+    - Python
+    - Streamlit
+    - SQLite
+    - Pandas
+    - NumPy
+    - Plotly
+    - OpenPyXL
+    - pytest
+  principles:
+    - Clean Code
+    - SOLID
+    - DRY
+    - KISS
+    - PEP8
+    - Type hints
+    - Docstrings
+    - Modularization
+    - Low coupling
+    - High cohesion
+  workflow:
+    - Understand the problem
+    - Assess impact
+    - Propose solution
+    - Plan implementation
+    - Implement incrementally
+    - Validate with tests
+    - Document and update changelog

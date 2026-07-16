@@ -1,46 +1,92 @@
-## 🎯 MRO Skills Framework — LEIA PRIMEIRO
+# Sistema MRO — Project Instructions
 
-**Este é um projeto MRO real integrado ao Protheus (TOTVS) com impacto direto na operação de Supply Chain, Compras e Almoxarifado.**
+## Objetivo
 
-### Fluxo Obrigatório para TODA Solicitação
-1. ✅ Entender o problema
-2. ✅ Identificar impactos técnicos, operacionais e riscos
-3. ✅ **Cada uma das 9 Skills abaixo apresenta sua análise**
-4. ✅ Consolidar análises → Plano → Aprovação
-5. ✅ **Somente após aprovação iniciar implementação**
-6. ✅ Validar após conclusão
+Este repositório é a base operacional do Sistema MRO da Inventus Power. O projeto envolve gestão de materiais improdutivos, controle de estoque, reposição, compras, curva ABC, cobertura, lead time, dashboards, KPIs, relatórios e banco SQLite, com interface Streamlit.
 
-### Os 9 Especialistas do Projeto
-1. **Product Owner** — Priorização, roadmap, MVP, critérios de aceite
-2. **Supply Chain Specialist** — Regras de negócio, cálculos, integração Protheus
-3. **Database Engineer** — Migrações versionadas, integridade, auditoria
-4. **Backend Engineer (Python)** — Implementação de APIs e algoritmos
-5. **Data Engineer** — ETL, validação, qualidade de dados
-6. **UX/UI Designer** — Usabilidade, fluxos, labels em português
-7. **QA Engineer** — Testes, regressão, validação de cálculos
-8. **Software Architect** — Arquitetura, SOLID, modularização
-9. **DevOps Engineer** — Deploy, versioning, backup, rollback
+## Arquitetura esperada
 
-**Para detalhes completos de cada skill, consulte a memory:** `project_mro_skills_framework.md`
+- Interface: Streamlit, com páginas e componentes organizados para evolução contínua.
+- Lógica de negócio: módulos em services, controllers e repositories.
+- Dados: SQLite com schema versionado, backup e migração explícita.
+- Documentação: arquivos em docs/ e templates reutilizáveis em templates/.
+- Automação: scripts e hooks para validação antes, durante e após alterações.
 
----
+## Regras do projeto
 
-## graphify
+1. Preservar compatibilidade com o app atual e com os dados armazenados em mro.db.
+2. Nunca introduzir duplicação de lógica quando uma função ou serviço já existe.
+3. Nunca alterar regras de negócio sem contexto, impacto e testes.
+4. Nunca alterar schema sem backup, migração e validação.
+5. Priorizar evolução incremental, modular e segura.
+6. Manter labels e mensagens em português, alinhadas à operação real.
 
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+## Padrões obrigatórios
 
-Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
-- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- Clean Code
+- SOLID
+- DRY
+- KISS
+- PEP8
+- Type hints sempre que possível
+- Docstrings em funções e módulos relevantes
+- Baixo acoplamento e alta coesão
+- Modularização por responsabilidade
+- Testes para regressão e validação de cálculos
 
-## Segundo Cérebro (Obsidian)
+## Convenções
 
-Este projeto tem um vault Obsidian dedicado em `vault/`, sincronizado entre múltiplas máquinas, usado para preparar a apresentação do MRO System na reunião mensal de KPI da Inventus Power.
+- Arquivos Python em snake_case.
+- Funções e variáveis com nomes claros e descritivos.
+- Módulos de negócio não devem ficar concentrados em app.py.
+- Novas telas devem ser organizadas por contexto e reutilizar componentes.
+- Alterações operacionais devem registrar impacto, logs e changelog.
 
-Rules:
-- `vault/CLAUDE.md` tem o protocolo completo de sessão (o que ler ao iniciar, o que escrever ao finalizar).
-- Para qualquer tarefa relacionada à apresentação/KPI mensal, ler primeiro `vault/Projects/Apresentação Inventus Power - KPI Mensal.md`, a Daily Note mais recente em `vault/Daily Notes/` e o Session Log mais recente em `vault/AI/Sessions/`.
-- Ao finalizar um trabalho relevante nessa frente, gerar um novo Session Log em `vault/AI/Sessions/` e atualizar a Daily Note do dia — segue o método descrito em `vault/CLAUDE.md`.
-- Sempre fazer `git pull` antes de começar a trabalhar e `git push` após terminar, para manter o vault sincronizado entre computadores.
+## Fluxo de desenvolvimento
+
+1. Entender o problema e o contexto operacional.
+2. Mapear impacto técnico, regulatório e de dados.
+3. Propor solução com baixo risco.
+4. Planejar implementação e validação.
+5. Implementar por camada.
+6. Validar com testes e com dados reais.
+7. Documentar e atualizar changelog.
+8. Sugerir evolução futura.
+
+## Comportamento esperado do agente
+
+- Trabalhar como arquiteto sênior e desenvolvedor responsável pelo sistema.
+- Priorizar estabilidade, rastreabilidade e facilidade de manutenção.
+- Sempre explicar impacto antes de alterar comportamento crítico.
+- Solicitar aprovação explícita antes de mudanças de alto risco.
+- Usar as skills disponíveis em .claude/skills/ sempre que a tarefa envolver evolução do sistema MRO.
+- Garantir que todo fechamento de tarefa passe por validação de sintaxe, testes e documentação.
+
+## Tecnologias principais
+
+- Python
+- Streamlit
+- SQLite
+- Pandas
+- NumPy
+- Plotly
+- OpenPyXL
+- pytest
+
+## Padrões de resposta da IA
+
+- Responder com contexto, impacto, plano, implementação e validação.
+- Sempre separar entendimento do problema, solução proposta e próximos passos.
+- Em mudanças relevantes, parar no plano e pedir aprovação antes de implementar.
+- Incluir riscos e melhorias futuras ao encerrar uma tarefa.
+
+## Hooks e automação
+
+- Antes de editar: validar arquitetura, dependências e duplicação.
+- Após editar: validar sintaxe, organizar imports e revisar modularização.
+- Antes de finalizar: revisar código, buscar bugs, atualizar docs e changelog.
+
+## Observações relevantes
+
+- O graphify é um auxílio de navegação opcional; não deve ser atualizado automaticamente.
+- O vault Obsidian não deve ser modificado, salvo quando o pedido explicitamente envolver apresentação/KPI mensal.

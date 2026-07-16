@@ -37,3 +37,18 @@ def test_segunda_locacao_opcional(db, make_item):
     assert ok
     it = next(i for i in F.listar_inventario() if i["id"] == item_id)
     assert (it.get("local_armazenagem_2") or "") == ""
+
+
+def test_v456_gerenciar_itens_persiste_segunda_locacao(db, make_item):
+    # v4.5.6 — a 2ª locação passou a ser editável também em Gerenciar Itens → Editar,
+    # via atualizar_item_inventario (antes só a Contagem Física gravava o campo).
+    item_id = make_item("PN-LOC3", local="ARM-01")
+    ok, _ = F.atualizar_item_inventario(item_id, {"local_armazenagem_2": "ARM-07"})
+    assert ok
+    it = next(i for i in F.listar_inventario() if i["id"] == item_id)
+    assert it["local_armazenagem_2"] == "ARM-07"
+    # Em branco limpa o campo (mesma semântica da Contagem Física).
+    ok, _ = F.atualizar_item_inventario(item_id, {"local_armazenagem_2": ""})
+    assert ok
+    it = next(i for i in F.listar_inventario() if i["id"] == item_id)
+    assert (it.get("local_armazenagem_2") or "") == ""

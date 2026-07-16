@@ -16,6 +16,48 @@ A versão **2.7.0** (04/07/2026) adiciona a **higiene da lista de compra**: iten
 
 ---
 
+# 🧱 Setup Definitivo do Projeto
+
+Este repositório foi organizado para funcionar como uma base de desenvolvimento madura do Sistema MRO, combinando a arquitetura atual do projeto com padrões de governança, documentação e automação para evolução contínua.
+
+## Estrutura principal
+
+- app/: bootstrap da aplicação e entrada principal.
+- core/: utilidades transversais.
+- database/: schema, migrações e backup.
+- repositories/: acesso a dados.
+- models/: entidades e estruturas de domínio.
+- controllers/: orquestração entre UI e regras.
+- pages/: páginas Streamlit organizadas por contexto.
+- dashboards/: componentes de análise e visualização.
+- reports/: relatórios e exportações.
+- assets/: arquivos estáticos e imagens.
+- docs/: documentação viva e arquitetura.
+- scripts/: rotinas de manutenção.
+- tests/: testes automatizados.
+- logs/: logs e auditoria.
+- backups/: snapshots e cópias de segurança.
+- migrations/: histórico de mudanças de schema.
+- config/: configuração do projeto.
+- prompts/: templates reutilizáveis para IA.
+- skills/: knowledge base operacional para agentes.
+- hooks/: validações automáticas antes, durante e após a edição.
+- templates/: modelos de changelog, PR e documentação.
+
+## Documentação relevante
+
+- [docs/SETUP_DEFINITIVO.md](docs/SETUP_DEFINITIVO.md)
+- [docs/ARQUITETURA.md](docs/ARQUITETURA.md)
+- [docs/FLUXO_DESENVOLVIMENTO.md](docs/FLUXO_DESENVOLVIMENTO.md)
+- [docs/BANCO_DE_DADOS.md](docs/BANCO_DE_DADOS.md)
+- [docs/REGRAS_DE_NEGOCIO.md](docs/REGRAS_DE_NEGOCIO.md)
+- [docs/TESTES.md](docs/TESTES.md)
+- [docs/QUALIDADE.md](docs/QUALIDADE.md)
+- [docs/ROADMAP_12_MESES.md](docs/ROADMAP_12_MESES.md)
+- [docs/MCP.md](docs/MCP.md)
+
+---
+
 # 🚀 Principais Objetivos
 
 * Evitar paradas de linha por falta de material
