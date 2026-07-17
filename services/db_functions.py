@@ -877,37 +877,190 @@ def _gerar_numero_requisicao(conn):
 def criar_requisicao(setor, emitente, centro_custo, autorizador_tipo, autorizador_nome,
                      entrega_individual, destinatarios, sesmt, sesmt_responsavel,
                      itens, observacoes=""):
+    """v4.7.0 — Requisição Digital: cria a requisição no estado **Aberta**, sem baixar
+    estoque. A baixa passou a acontecer só na ENTREGA (ver `entregar_requisicao`), o que
+    habilita atendimento parcial e em lote (o jeito do Juan). Os itens entram com
+    `quantidade_atendida=0`. O autorizador é opcional aqui (registrado na entrega).
+
+    Assinatura preservada para compatibilidade; `quantidade_atendida` eventualmente
+    presente em `itens` é ignorada (a atendida é decidida na entrega)."""
     if not itens: return False, "Adicione ao menos um item."
+    itens_validos = [it for it in itens if float(it.get("quantidade_solicitada", 0)) > 0]
+    if not itens_validos: return False, "Adicione ao menos um item com quantidade > 0."
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         with transaction() as conn:
             num = _gerar_numero_requisicao(conn)
             cur = conn.execute("""INSERT INTO requisicoes
                 (numero_requisicao,data_hora,setor,emitente,centro_custo,autorizador_tipo,
-                 autorizador_nome,entrega_individual,destinatarios,sesmt,sesmt_responsavel,observacoes)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 autorizador_nome,entrega_individual,destinatarios,sesmt,sesmt_responsavel,
+                 observacoes,status)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'Aberta')""",
                 (num, agora, setor, emitente, centro_custo, autorizador_tipo, autorizador_nome,
                  1 if entrega_individual else 0, json.dumps(destinatarios or [], ensure_ascii=False),
                  1 if sesmt else 0, sesmt_responsavel, observacoes))
             req_id = cur.lastrowid
-            for it in itens:
+            for it in itens_validos:
                 qtd_sol = float(it.get("quantidade_solicitada", 0))
-                qtd_ate = float(it.get("quantidade_atendida", qtd_sol))
-                if qtd_sol <= 0: continue
-                conn.execute("INSERT INTO itens_requisicao (requisicao_id,item_id,quantidade_solicitada,quantidade_atendida) VALUES (?,?,?,?)",
-                             (req_id, it["item_id"], qtd_sol, qtd_ate))
-                r_est = conn.execute("SELECT estoque_atual FROM inventario WHERE id=?", (it["item_id"],)).fetchone()
-                if not r_est or r_est["estoque_atual"] < qtd_ate:
-                    raise Exception(f"Estoque insuficiente para {it.get('part_number', 'Item')}.")
-                novo_saldo = r_est["estoque_atual"] - qtd_ate
-                conn.execute("INSERT INTO movimentacoes (item_id,tipo,quantidade,saldo_apos,data_hora,centro_custo,setor,solicitante,emitente,observacao,requisicao_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                             (it["item_id"], "saida", qtd_ate, novo_saldo, agora, centro_custo, setor, emitente, emitente, f"Req {num}", req_id))
-                conn.execute("UPDATE inventario SET estoque_atual=?, data_atualizacao=? WHERE id=?", (novo_saldo, agora, it["item_id"]))
-                _recalcular_consumo(conn, it["item_id"])
-                _recalcular_ruptura_by_id(conn, it["item_id"])
+                conn.execute(
+                    "INSERT INTO itens_requisicao (requisicao_id,item_id,quantidade_solicitada,quantidade_atendida) VALUES (?,?,?,0)",
+                    (req_id, it["item_id"], qtd_sol))
         return True, num
     except Exception as e:
         return False, str(e)
+
+
+def _calcular_status_requisicao(conn, req_id):
+    """Deriva o status de uma requisição a partir dos itens: nada atendido → 'Aberta';
+    tudo atendido (atendida >= solicitada em todos) → 'Entregue'; caso intermediário →
+    'Parcial'. Nunca sobrescreve 'Cancelada' (tratado pelo chamador)."""
+    itens = conn.execute(
+        "SELECT quantidade_solicitada, quantidade_atendida FROM itens_requisicao WHERE requisicao_id=?",
+        (req_id,)).fetchall()
+    if not itens:
+        return "Aberta"
+    total_atendido = sum(float(i["quantidade_atendida"] or 0) for i in itens)
+    if total_atendido <= 0:
+        return "Aberta"
+    if all(float(i["quantidade_atendida"] or 0) >= float(i["quantidade_solicitada"] or 0) for i in itens):
+        return "Entregue"
+    return "Parcial"
+
+
+def entregar_requisicao(req_id, entregas, autorizador_tipo, autorizador_nome,
+                        sesmt=False, sesmt_responsavel=""):
+    """v4.7.0 — Registra a ENTREGA (baixa) de itens de uma requisição Aberta/Parcial.
+
+    `entregas`: lista de {"item_req_id": id, "quantidade": q}. Para cada item, dá baixa
+    real no estoque (movimentação 'saida' com requisicao_id), acumula `quantidade_atendida`
+    e recalcula consumo/ruptura. Atualiza os dados de autorização na requisição e recalcula
+    o status (Parcial/Entregue). Atômico: qualquer falha reverte tudo.
+
+    Regras: exige autorizador (material só sai autorizado); se `sesmt`, exige o responsável.
+    """
+    if not autorizador_nome or not str(autorizador_nome).strip():
+        return False, "Informe o autorizador (gestor) para liberar a entrega."
+    if sesmt and not (sesmt_responsavel and str(sesmt_responsavel).strip()):
+        return False, "Material SESMT: informe o responsável do SESMT."
+    entregas = [e for e in (entregas or []) if float(e.get("quantidade", 0)) > 0]
+    if not entregas:
+        return False, "Informe ao menos um item com quantidade a entregar."
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with transaction() as conn:
+            req = conn.execute(
+                "SELECT id, numero_requisicao, setor, emitente, centro_custo, status FROM requisicoes WHERE id=?",
+                (req_id,)).fetchone()
+            if not req:
+                raise Exception("Requisição não encontrada.")
+            if req["status"] not in ("Aberta", "Parcial"):
+                raise Exception(f"Requisição {req['status']}: não é possível entregar.")
+            for e in entregas:
+                q = float(e["quantidade"])
+                ir = conn.execute(
+                    "SELECT id, item_id, quantidade_atendida FROM itens_requisicao WHERE id=? AND requisicao_id=?",
+                    (e["item_req_id"], req_id)).fetchone()
+                if not ir:
+                    raise Exception("Item da requisição não encontrado.")
+                r_est = conn.execute("SELECT estoque_atual, part_number FROM inventario WHERE id=?", (ir["item_id"],)).fetchone()
+                if not r_est or r_est["estoque_atual"] < q:
+                    pn = r_est["part_number"] if r_est else "Item"
+                    raise Exception(f"Estoque insuficiente para {pn} (disp.: {r_est['estoque_atual'] if r_est else 0}).")
+                novo_saldo = r_est["estoque_atual"] - q
+                conn.execute(
+                    "INSERT INTO movimentacoes (item_id,tipo,quantidade,saldo_apos,data_hora,centro_custo,setor,solicitante,emitente,observacao,requisicao_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (ir["item_id"], "saida", q, novo_saldo, agora, req["centro_custo"], req["setor"],
+                     req["emitente"], req["emitente"], f"Req {req['numero_requisicao']}", req_id))
+                conn.execute("UPDATE inventario SET estoque_atual=?, data_atualizacao=? WHERE id=?",
+                             (novo_saldo, agora, ir["item_id"]))
+                conn.execute("UPDATE itens_requisicao SET quantidade_atendida = quantidade_atendida + ? WHERE id=?",
+                             (q, ir["id"]))
+                _recalcular_consumo(conn, ir["item_id"])
+                _recalcular_ruptura_by_id(conn, ir["item_id"])
+            novo_status = _calcular_status_requisicao(conn, req_id)
+            conn.execute(
+                """UPDATE requisicoes SET status=?, autorizador_tipo=?, autorizador_nome=?,
+                       sesmt=?, sesmt_responsavel=? WHERE id=?""",
+                (novo_status, autorizador_tipo, autorizador_nome,
+                 1 if sesmt else 0, sesmt_responsavel if sesmt else "", req_id))
+        return True, novo_status
+    except Exception as e:
+        return False, str(e)
+
+
+def adicionar_itens_requisicao(req_id, itens):
+    """v4.7.0 — Adiciona itens a uma requisição Aberta/Parcial (caso 'escreve no mesmo
+    papel'). Itens entram com `quantidade_atendida=0`. Não altera baixa."""
+    itens_validos = [it for it in (itens or []) if float(it.get("quantidade_solicitada", 0)) > 0]
+    if not itens_validos:
+        return False, "Adicione ao menos um item com quantidade > 0."
+    try:
+        with transaction() as conn:
+            req = conn.execute("SELECT status FROM requisicoes WHERE id=?", (req_id,)).fetchone()
+            if not req:
+                raise Exception("Requisição não encontrada.")
+            if req["status"] not in ("Aberta", "Parcial"):
+                raise Exception(f"Requisição {req['status']}: não aceita novos itens.")
+            for it in itens_validos:
+                conn.execute(
+                    "INSERT INTO itens_requisicao (requisicao_id,item_id,quantidade_solicitada,quantidade_atendida) VALUES (?,?,?,0)",
+                    (req_id, it["item_id"], float(it["quantidade_solicitada"])))
+        return True, f"{len(itens_validos)} item(ns) adicionado(s)."
+    except Exception as e:
+        return False, str(e)
+
+
+def remover_item_requisicao(item_req_id):
+    """v4.7.0 — Remove um item ainda NÃO atendido de uma requisição Aberta/Parcial."""
+    try:
+        with transaction() as conn:
+            ir = conn.execute(
+                "SELECT id, requisicao_id, quantidade_atendida FROM itens_requisicao WHERE id=?",
+                (item_req_id,)).fetchone()
+            if not ir:
+                raise Exception("Item não encontrado.")
+            if float(ir["quantidade_atendida"] or 0) > 0:
+                raise Exception("Item já entregue (parcial/total): não pode ser removido.")
+            req = conn.execute("SELECT status FROM requisicoes WHERE id=?", (ir["requisicao_id"],)).fetchone()
+            if req and req["status"] not in ("Aberta", "Parcial"):
+                raise Exception(f"Requisição {req['status']}: não pode ser editada.")
+            conn.execute("DELETE FROM itens_requisicao WHERE id=?", (item_req_id,))
+        return True, "Item removido."
+    except Exception as e:
+        return False, str(e)
+
+
+def cancelar_requisicao(req_id):
+    """v4.7.0 — Cancela uma requisição **Aberta** (nada entregue, nada a estornar)."""
+    try:
+        with transaction() as conn:
+            req = conn.execute("SELECT status FROM requisicoes WHERE id=?", (req_id,)).fetchone()
+            if not req:
+                raise Exception("Requisição não encontrada.")
+            if req["status"] != "Aberta":
+                raise Exception(f"Só requisições Abertas podem ser canceladas (esta está {req['status']}).")
+            conn.execute("UPDATE requisicoes SET status='Cancelada' WHERE id=?", (req_id,))
+        return True, "Requisição cancelada."
+    except Exception as e:
+        return False, str(e)
+
+
+def listar_requisicoes_abertas():
+    """v4.7.0 — Fila de separação: requisições Aberta/Parcial (mais antigas primeiro),
+    com contagem de itens e do que ainda falta atender."""
+    with transaction() as conn:
+        rows = conn.execute("""
+            SELECT r.*,
+                   COUNT(ir.id) AS total_itens,
+                   SUM(CASE WHEN ir.quantidade_atendida < ir.quantidade_solicitada THEN 1 ELSE 0 END) AS itens_pendentes
+            FROM requisicoes r
+            LEFT JOIN itens_requisicao ir ON ir.requisicao_id = r.id
+            WHERE r.status IN ('Aberta','Parcial')
+            GROUP BY r.id
+            ORDER BY r.data_hora ASC
+        """).fetchall()
+    return [dict(r) for r in rows]
+
 
 def listar_requisicoes(limit=100):
     with transaction() as conn:
@@ -925,7 +1078,7 @@ def listar_requisicoes(limit=100):
 def listar_itens_requisicao(req_id):
     with transaction() as conn:
         rows = conn.execute("""
-            SELECT ir.*,i.part_number,i.nome_item,i.unidade
+            SELECT ir.*,i.part_number,i.nome_item,i.unidade,i.estoque_atual
             FROM itens_requisicao ir
             JOIN inventario i ON i.id=ir.item_id
             WHERE ir.requisicao_id=?
@@ -1873,6 +2026,189 @@ def atualizar_pedido_guarda_chuva(item_sc_id, campos):
         return True, "Pedido atualizado."
     except Exception as e:
         return False, str(e)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GUARDA-CHUVA MANUAL (v4.9.0) — controle de acordos de congelamento de preço por
+# (produto + fornecedor), com entregas parciais. 100% MANUAL e desacoplado das SCs
+# importadas (itens_sc): tabela própria `guarda_chuva`, estágio EXPLÍCITO/editável,
+# saldo derivado (negociada − recebida). NÃO toca estoque/movimentacoes (é controle,
+# não ledger). Ver database.py (CREATE TABLE guarda_chuva).
+# ══════════════════════════════════════════════════════════════════════════════
+
+GUARDA_CHUVA_ESTAGIOS = ("Pedido Colocado", "Aguardando Entrega", "NF Emitida", "Recebido")
+
+# Campos editáveis de um acordo pelo kanban/dialog do Guarda-Chuva.
+_CAMPOS_GUARDA_CHUVA = {
+    "fornecedor_codigo": "texto",
+    "fornecedor_nome": "texto",
+    "qtd_negociada": "num",
+    "qtd_recebida": "num",
+    "preco_congelado": "num",
+    "qtd_ideal_mes": "num",
+    "estagio": "texto",
+    "numero_po": "texto",
+    "data_acordo": "texto",
+    "validade": "texto",
+    "observacao": "texto",
+}
+
+
+def criar_guarda_chuva(item_id, fornecedor_codigo, *, fornecedor_nome=None,
+                       qtd_negociada=0, preco_congelado=None, qtd_ideal_mes=None,
+                       numero_po=None, data_acordo=None, validade=None,
+                       observacao=None, estagio="Pedido Colocado"):
+    """Cria um acordo guarda-chuva (produto + código de fornecedor). Controle manual:
+    não toca estoque/movimentacoes. Retorna (ok, id) ou (False, msg)."""
+    if not item_id:
+        return False, "Selecione um material."
+    cod = (str(fornecedor_codigo).strip() if fornecedor_codigo is not None else "")
+    if not cod:
+        return False, "Informe o código do fornecedor."
+    if estagio not in GUARDA_CHUVA_ESTAGIOS:
+        estagio = "Pedido Colocado"
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with transaction() as conn:
+            cur = conn.execute(
+                """INSERT INTO guarda_chuva
+                   (item_id, fornecedor_codigo, fornecedor_nome, qtd_negociada, qtd_recebida,
+                    preco_congelado, qtd_ideal_mes, estagio, numero_po, data_acordo, validade,
+                    observacao, criado_em, atualizado_em)
+                   VALUES (?,?,?,?,0,?,?,?,?,?,?,?,?,?)""",
+                (int(item_id), cod, (fornecedor_nome or None), _to_float(qtd_negociada),
+                 (_to_float(preco_congelado) if preco_congelado not in (None, "") else None),
+                 (_to_float(qtd_ideal_mes) if qtd_ideal_mes not in (None, "") else None),
+                 estagio, (numero_po or None), (data_acordo or None), (validade or None),
+                 (observacao or None), agora, agora))
+            return True, cur.lastrowid
+    except Exception as e:
+        return False, str(e)
+
+
+def listar_guarda_chuva(item_id=None):
+    """Acordos guarda-chuva (todos ou de um item), com PN/nome/unidade e `saldo_residual`
+    derivado (qtd_negociada − qtd_recebida). Mais recentes primeiro."""
+    filtro = "WHERE g.item_id=?" if item_id else ""
+    params = (int(item_id),) if item_id else ()
+    with transaction() as conn:
+        rows = conn.execute(f"""
+            SELECT g.*, i.part_number, i.nome_item, i.unidade,
+                   (COALESCE(g.qtd_negociada,0) - COALESCE(g.qtd_recebida,0)) AS saldo_residual
+            FROM guarda_chuva g JOIN inventario i ON i.id = g.item_id
+            {filtro}
+            ORDER BY g.atualizado_em DESC, g.id DESC
+        """, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def obter_guarda_chuva(gc_id):
+    """Um acordo guarda-chuva (fresco do banco) para o dialog de edição."""
+    if not gc_id:
+        return None
+    with transaction() as conn:
+        r = conn.execute("""
+            SELECT g.*, i.part_number, i.nome_item, i.unidade,
+                   (COALESCE(g.qtd_negociada,0) - COALESCE(g.qtd_recebida,0)) AS saldo_residual
+            FROM guarda_chuva g JOIN inventario i ON i.id = g.item_id
+            WHERE g.id=?
+        """, (int(gc_id),)).fetchone()
+    return dict(r) if r else None
+
+
+def atualizar_guarda_chuva(gc_id, campos):
+    """Edita um acordo guarda-chuva (chaves em `_CAMPOS_GUARDA_CHUVA`). Controle manual:
+    não mexe em estoque/movimentacoes. Se qtd_recebida ≥ qtd_negociada (>0), coerção do
+    estágio para 'Recebido'. Retorna (ok, msg)."""
+    if not gc_id:
+        return False, "Acordo inválido."
+    try:
+        with transaction() as conn:
+            row = conn.execute("SELECT * FROM guarda_chuva WHERE id=?", (int(gc_id),)).fetchone()
+            if not row:
+                return False, "Acordo não encontrado."
+            set_cols, vals = [], []
+            estagio_setado = False
+            for chave, tipo in _CAMPOS_GUARDA_CHUVA.items():
+                if chave not in campos:
+                    continue
+                bruto = campos[chave]
+                if tipo == "num":
+                    valor = _to_float(bruto) if bruto not in (None, "") else None
+                else:
+                    valor = (str(bruto).strip() or None) if bruto is not None else None
+                if chave == "estagio":
+                    if valor not in GUARDA_CHUVA_ESTAGIOS:
+                        valor = row["estagio"]
+                    estagio_setado = True
+                set_cols.append(f"{chave}=?")
+                vals.append(valor)
+            if not set_cols:
+                return True, "Nada para atualizar."
+            # Coerência: recebeu tudo → 'Recebido' (só se o estágio não foi setado à mão).
+            neg = (_to_float(campos["qtd_negociada"]) if "qtd_negociada" in campos
+                   else (row["qtd_negociada"] or 0))
+            rec = (_to_float(campos["qtd_recebida"]) if "qtd_recebida" in campos
+                   else (row["qtd_recebida"] or 0))
+            if neg > 0 and rec >= neg and not estagio_setado:
+                set_cols.append("estagio=?")
+                vals.append("Recebido")
+            set_cols.append("atualizado_em=?")
+            vals.append(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            vals.append(int(gc_id))
+            conn.execute(f"UPDATE guarda_chuva SET {','.join(set_cols)} WHERE id=?", vals)
+        return True, "Acordo atualizado."
+    except Exception as e:
+        return False, str(e)
+
+
+def registrar_recebimento_guarda_chuva(gc_id, qtd):
+    """Recebimento parcial (MANUAL) de um acordo: acumula em qtd_recebida (limitado ao
+    negociado) e, se zerar o saldo, move para 'Recebido'. NÃO toca estoque/movimentacoes.
+    Retorna (ok, msg)."""
+    if not gc_id:
+        return False, "Acordo inválido."
+    q = _to_float(qtd)
+    if q <= 0:
+        return False, "Quantidade a receber deve ser maior que zero."
+    try:
+        with transaction() as conn:
+            row = conn.execute("SELECT * FROM guarda_chuva WHERE id=?", (int(gc_id),)).fetchone()
+            if not row:
+                return False, "Acordo não encontrado."
+            neg = row["qtd_negociada"] or 0
+            nova_rec = (row["qtd_recebida"] or 0) + q
+            if neg > 0:
+                nova_rec = min(nova_rec, neg)
+            estagio = "Recebido" if (neg > 0 and nova_rec >= neg) else row["estagio"]
+            conn.execute(
+                "UPDATE guarda_chuva SET qtd_recebida=?, estagio=?, atualizado_em=? WHERE id=?",
+                (nova_rec, estagio, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), int(gc_id)))
+        return True, f"Recebimento de {q:g} registrado."
+    except Exception as e:
+        return False, str(e)
+
+
+def remover_guarda_chuva(gc_id):
+    """Exclui um acordo guarda-chuva. Retorna (ok, msg)."""
+    if not gc_id:
+        return False, "Acordo inválido."
+    try:
+        with transaction() as conn:
+            conn.execute("DELETE FROM guarda_chuva WHERE id=?", (int(gc_id),))
+        return True, "Acordo removido."
+    except Exception as e:
+        return False, str(e)
+
+
+def saldo_total_por_material(item_id):
+    """'Saldo total de todos os fornecedores' do material: soma de (negociada − recebida),
+    só saldos positivos, sobre TODOS os acordos guarda-chuva do item."""
+    if not item_id:
+        return 0.0
+    total = sum(max(float(g.get("saldo_residual") or 0), 0.0)
+                for g in listar_guarda_chuva(item_id))
+    return round(total, 2)
 
 
 def itens_com_sc_aberta(conn=None):

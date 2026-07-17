@@ -19,7 +19,7 @@ testes determinísticos sem banco; as funções públicas apenas leem o banco e 
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime
 
 from database import transaction
 from services.constants import (
@@ -124,6 +124,36 @@ def _meses_from_eventos(eventos):
     return [{"mes": m, "qtd": round(q, 2)} for m, q in sorted(por_mes.items()) if q > 0]
 
 
+def _ultimos_n_meses_completos(hoje, n=3):
+    """Rótulos 'YYYY-MM' dos `n` meses-calendário COMPLETOS mais recentes (exclui o mês
+    corrente, ainda em andamento), do mais antigo ao mais recente."""
+    meses, ano, mes = [], hoje.year, hoje.month
+    for _ in range(n):
+        mes -= 1
+        if mes == 0:
+            mes, ano = 12, ano - 1
+        meses.append(f"{ano:04d}-{mes:02d}")
+    return list(reversed(meses))  # antigo -> recente
+
+
+def _ponderado_from_serie(serie, hoje, n=3, pesos=None):
+    """Consumo mensal PONDERADA dos últimos `n` meses completos (o mais recente pesa mais).
+
+    `serie` = [{mes:'YYYY-MM', qtd}] das saídas reais (meses sem saída podem estar
+    AUSENTES → contam 0). Ancorada em `hoje` e excluindo o mês corrente, então
+    "atualiza conforme os meses passam" e decai para 0 quando o item deixa de sair.
+    Pesos default = 1..n (antigo→recente), i.e. 3 meses → 3/2/1 no recente→antigo.
+    Retorna float (un/mês) arredondado, ou None se NENHUM dos meses-alvo teve saída
+    (item sem consumo recente = 'sem dados', para a UI mostrar '—')."""
+    qtd_por_mes = {x["mes"]: float(x["qtd"]) for x in (serie or [])}
+    alvo = _ultimos_n_meses_completos(hoje, n)                 # antigo -> recente
+    valores = [qtd_por_mes.get(mes, 0.0) for mes in alvo]
+    if not any(v > 0 for v in valores):
+        return None
+    pesos = pesos or list(range(1, n + 1))                     # [1..n] antigo->recente
+    return round(sum(v * p for v, p in zip(valores, pesos)) / sum(pesos), 2)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # LEITURA DO BANCO — busca as saídas reais e delega ao núcleo puro
 # ══════════════════════════════════════════════════════════════════════════════
@@ -163,6 +193,13 @@ def consumo_mensal(item_id, conn=None):
     (XYZ, gráfico da Ficha e — no futuro — sazonalidade)."""
     with transaction(conn) as c:
         return _meses_from_eventos(_eventos_item(c, item_id))
+
+
+def consumo_mensal_ponderado(item_id, conn=None, hoje=None):
+    """Consumo mensal ponderado (3 meses, peso 3/2/1 no recente→antigo) do item.
+    Ver `_ponderado_from_serie`. Retorna float (un/mês) ou None (sem consumo recente)."""
+    hoje = hoje or date.today()
+    return _ponderado_from_serie(consumo_mensal(item_id, conn), hoje)
 
 
 def classificar_demanda(item_id, conn=None):
@@ -208,6 +245,7 @@ def classificar_item(item_id, conn=None):
         "demanda": _demanda_from_eventos(eventos),
         "xyz": _xyz_from_meses([x["qtd"] for x in serie]),
         "consumo_mensal": serie,
+        "consumo_mensal_ponderado": _ponderado_from_serie(serie, date.today()),
         "sazonalidade": _sazonalidade_from_serie(serie),
     }
 

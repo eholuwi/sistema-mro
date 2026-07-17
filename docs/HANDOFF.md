@@ -8,19 +8,24 @@
 
 ## STATUS ATUAL — atualizado em 17/07/2026 (leia isto, não a seção 1-7 abaixo para status)
 
-- **Versão corrente: v4.6.0** — commitada e pushada em `feat/v3.10.0-4.0.0-ux-redesign`
-  (commit `d7a49e1`). **377 testes verdes.** Entregou: **Monitor de SC 2.0** (aba Controle de SC →
-  Monitor) — 1ª tabela cruzando os dois exports **CRUS** (SCM = `Solicitações.xlsx` × SC7 =
-  `Relatório de Compras.xlsx`) pela chave **PO** (`Pedido`↔`Numero PC` — o `Numero da SC` vem vazio
-  no SC7 cru), com filtro **só material do MRO** (solicitante no escopo + PN no inventário) e coluna+
-  filtro de **Departamento**; é **efêmero** (recomputa a cada upload, não grava no banco). Também:
-  Planilha livre ganhou **criar/remover coluna** (persistente). Módulo novo `services/monitor_cruzamento.py`.
-  Também traz, commitadas junto (estavam pendentes): **v4.5.6/v4.5.7**.
-- **Pendente:** o Luis ainda precisa **validar no app real** o join SCM×SC7 com um `Solicitações.xlsx`
-  real do mesmo período do `Relatório de Compras.xlsx` (o teste em escala real usou a aba SCM
-  histórica, não o export bruto de Solicitações). Só depois disso a v4.6.0 é considerada 100% fechada.
-- **Próximo:** **Requisição digital** (a feature "maior" do roadmap, §4 do backlog antigo) —
-  **entrevistar o usuário sobre o processo real ANTES de propor qualquer coisa.**
+- **Versão corrente: v4.7.0 — Requisição Digital (MVP).** Implementada e testada em
+  `feat/v3.10.0-4.0.0-ux-redesign`; **aguardando commit** (o commit é feito só após o OK do Luis +
+  validação no app real, regra do projeto). A **Requisição** ganhou **ciclo de vida**:
+  `Aberta → Parcial → Entregue` (+ `Cancelada`). A **criação NÃO baixa estoque** — o pedido vai para
+  uma **Fila / Separação** (nova aba em Movimentação → Requisição) e a **baixa acontece só na
+  ENTREGA**, item a item, permitindo **parcial e em lote** (o jeito do Juan). Autorização (gestor;
+  +**checkbox "Material SESMT?"** → responsável do SESMT) é registrada **na entrega**. Dá para
+  **adicionar itens** a um pedido aberto (o caso "escreve no mesmo papel") e **cancelar** (só Aberta).
+  Migração **aditiva** `requisicoes.status` (backfill legado → `Entregue`, com backup). Serviços novos
+  em `db_functions.py`: `entregar_requisicao`, `adicionar_itens_requisicao`, `remover_item_requisicao`,
+  `cancelar_requisicao`, `listar_requisicoes_abertas`. Testes: `test_requisicao.py` reescrito + novo
+  `test_v470_requisicao_digital.py`.
+- **Base (v4.6.0, já commitada `d7a49e1`):** Monitor de SC 2.0 — cruzamento SCM×SC7 crus + Planilha
+  livre "criar coluna".
+- **Pendente da v4.6.0 (não bloqueia a v4.7.0):** validar no app real o join SCM×SC7 com um
+  `Solicitações.xlsx` real do mesmo período do `Relatório de Compras.xlsx`. Só depois a v4.6.0 é 100%.
+- **Próximo (após a v4.7.0):** evoluir a Requisição Digital para **website self-service + login**
+  (hoje só o almoxarife opera); aprovação assíncrona real do gestor; tratar **material não cadastrado**.
 - **Backlog vivo:** `docs/prompt.md` (o antigo `prompt.md` da raiz foi movido para cá).
 - **⚠️ Lição multi-dispositivo (git):** um clone antigo (notebook do trabalho) tinha
   `remote.origin.fetch` restrito (fetch de um único branch) — `git fetch`/`git pull` nunca traziam
@@ -40,11 +45,12 @@
 **Prompt pronto para colar na próxima sessão (qualquer dispositivo):**
 ```
 Continuar o Sistema MRO (Inventus Power). Leia @docs/HANDOFF.md (seção "STATUS ATUAL" no topo) e
-@docs/prompt.md. A v4.6.0 (Monitor de SC 2.0) está commitada/pushada em
-feat/v3.10.0-4.0.0-ux-redesign — confirme com `git log --oneline -3` que está em dia. Antes de
-codar, ENTREVISTE-ME sobre o processo real de requisição de material no almoxarifado (próxima
-feature: Requisição digital) — depois siga a skill atualizar-sistema-mro (framework das 9 skills)
-e PARE no plano para aprovação.
+@docs/prompt.md. A v4.7.0 (Requisição Digital — MVP) está implementada e testada em
+feat/v3.10.0-4.0.0-ux-redesign, aguardando eu validar no app real e autorizar o commit. Rode
+`streamlit run app.py`, teste o fluxo Movimentação → Requisição (criar → Fila → entregar parcial/
+total) e o Histórico; se estiver OK, faça o commit da v4.7.0. Depois: evoluir para website
+self-service + login (só o almoxarife opera hoje). Siga a skill atualizar-sistema-mro e PARE no
+plano para mudanças grandes.
 ```
 
 ---

@@ -228,6 +228,7 @@ def criar_banco():
             sesmt              INTEGER DEFAULT 0,
             sesmt_responsavel  TEXT,
             observacoes        TEXT,
+            status             TEXT CHECK(status IN ('Aberta','Parcial','Entregue','Cancelada')) DEFAULT 'Aberta',
             data_criacao       TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -470,6 +471,33 @@ def criar_banco():
         )
     """)
 
+    # v4.9.0 — GUARDA-CHUVA (controle MANUAL): acordo de congelamento de preço com o
+    # fornecedor para entregas parciais. 100% manual e DESACOPLADO das SCs importadas
+    # (itens_sc): o usuário cadastra produto + código de fornecedor + qtd negociada e
+    # move o card pelos 4 estágios (estagio é EXPLÍCITO/editável, não derivado). O saldo
+    # residual = qtd_negociada − qtd_recebida é derivado na leitura. Não toca estoque
+    # nem movimentacoes (é controle, não ledger).
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS guarda_chuva (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id           INTEGER NOT NULL REFERENCES inventario(id),
+            fornecedor_codigo TEXT NOT NULL,
+            fornecedor_nome   TEXT,
+            qtd_negociada     REAL DEFAULT 0,
+            qtd_recebida      REAL DEFAULT 0,
+            preco_congelado   REAL,
+            qtd_ideal_mes     REAL,
+            estagio           TEXT DEFAULT 'Pedido Colocado',
+            numero_po         TEXT,
+            data_acordo       TEXT,
+            validade          TEXT,
+            observacao        TEXT,
+            criado_em         TEXT,
+            atualizado_em     TEXT
+        )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_guarda_chuva_item ON guarda_chuva(item_id)")
+
     cols_sc = {r[1] for r in conn.execute("PRAGMA table_info(solicitacoes_compra)")}
     novas_cols_sc = {
         "solicitante": "TEXT",
@@ -625,7 +653,7 @@ def criar_banco():
 
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 4.6.0")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 4.10.0")
 
 
 def _migrar(conn):
@@ -649,6 +677,18 @@ def _migrar(conn):
     if "numero_po" not in cols_isc:
         conn.execute("ALTER TABLE itens_sc ADD COLUMN numero_po TEXT")
         logger.info("  ↳ Migração: numero_po em itens_sc adicionada.")
+
+    # v4.7.0 — Requisição Digital: ciclo de vida (Aberta→Parcial→Entregue/Cancelada).
+    # Coluna aditiva. Requisições legadas usavam o modelo de baixa-na-criação (o estoque
+    # já saiu quando a requisição foi criada), logo são retro-marcadas como 'Entregue'.
+    # Backup antes de tocar dados legados (regra do projeto: schema só com backup).
+    cols_req = {r[1] for r in conn.execute("PRAGMA table_info(requisicoes)")}
+    if "status" not in cols_req:
+        if conn.execute("SELECT 1 FROM requisicoes LIMIT 1").fetchone():
+            _backup_db("req-status-v470")
+        conn.execute("ALTER TABLE requisicoes ADD COLUMN status TEXT DEFAULT 'Aberta'")
+        conn.execute("UPDATE requisicoes SET status='Entregue'")  # legado: baixa já feita na criação
+        logger.info("  ↳ Migração v4.7.0: status em requisicoes adicionada (legado → Entregue).")
 
     conn.commit()
 

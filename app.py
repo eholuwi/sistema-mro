@@ -20,10 +20,15 @@ from services.db_functions import (
     registrar_movimentacao, listar_movimentacoes, categoria_movimentacao,
     criar_sc, atualizar_sc, registrar_recebimento_sc, listar_scs,
     atualizar_pedido_guarda_chuva, obter_pedido_sc,
+    criar_guarda_chuva, listar_guarda_chuva, obter_guarda_chuva, atualizar_guarda_chuva,
+    registrar_recebimento_guarda_chuva, remover_guarda_chuva, saldo_total_por_material,
+    GUARDA_CHUVA_ESTAGIOS,
     listar_itens_sc, buscar_scs_por_item, itens_com_sc_aberta, exportar_inventario_df,
     listar_valores, adicionar_valor_lista, remover_valor_lista,
     listar_setores_conhecidos, sincronizar_setores_config,
     criar_requisicao, listar_requisicoes, listar_itens_requisicao, mapa_pn_por_requisicao,
+    entregar_requisicao, adicionar_itens_requisicao, remover_item_requisicao,
+    cancelar_requisicao, listar_requisicoes_abertas,
     importar_solicitacoes_protheus, listar_recebimentos_sc,
     atualizar_localizacao_e_inventariar, atualizar_item_inventario,
     obter_analitico_movimentacoes, obter_analitico_divergencias,
@@ -54,6 +59,8 @@ from services.ficha import (
 )
 from services.ajuda_conteudo import GUIAS_PERSONA, MANUAL
 from services.monitor_cruzamento import preparar_df, cruzar_scm_sc7, COLUNAS_SAIDA
+from services import scm_client
+from services.monitor_scm import cotacoes_no_escopo, montar_scs_nao_atendidas, COLUNAS_SCS_NAO_ATENDIDAS
 from services.dashboards import (
     montar_dashboard, montar_visao_compras_mro, montar_visao_almoxarifado,
     PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_EXECUTIVO,
@@ -76,7 +83,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 4.6.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 4.10.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 def tema_atual():
@@ -242,7 +249,7 @@ with st.sidebar:
     # v4.1.0 — versão do sistema no rodapé da barra de navegação
     st.markdown(
         "<div style='text-align:center; margin-top:10px; color: var(--primary-orange); "
-        "font-weight:700; font-size:0.8rem; letter-spacing:0.5px;'>v4.6.0</div>",
+        "font-weight:700; font-size:0.8rem; letter-spacing:0.5px;'>v4.10.0</div>",
         unsafe_allow_html=True,
     )
 
@@ -1198,10 +1205,13 @@ def _render_requisicao():
     própria para uma aba da Movimentação. Usa guarda if/else (NÃO st.stop()) no fluxo
     de sucesso, para não matar as abas irmãs da Movimentação."""
     st.markdown("### :material/assignment: Requisição de Material")
-    st.caption("Registre a saída de material por requisição e acompanhe o histórico completo "
-               "por setor, emitente e autorizador.")
+    st.caption("Fluxo digital: abre-se a requisição (vai para a fila) e o almoxarife entrega o "
+               "material (parcial ou total), dando baixa no estoque só na entrega — com autorização.")
 
-    aba_nova, aba_hist_req = st.tabs([":material/edit_note: Nova Requisição", ":material/history: Histórico"])
+    aba_nova, aba_fila, aba_hist_req = st.tabs([
+        ":material/edit_note: Nova Requisição",
+        ":material/list_alt: Fila / Separação",
+        ":material/history: Histórico"])
 
     autorizadores_lista = listar_valores("autorizador") or ["Gestor", "Líder", "Reserva"]
 
@@ -1211,8 +1221,9 @@ def _render_requisicao():
 
         # v3.8.0: guarda if/else (sem st.stop(), que mataria as abas irmãs da Movimentação).
         if st.session_state.req_confirmada:
-            st.success(f"### :material/check_circle: Requisição {st.session_state.req_confirmada} enviada!")
-            st.info("O estoque foi atualizado e o registro foi salvo no histórico.")
+            st.success(f"### :material/check_circle: Requisição {st.session_state.req_confirmada} criada!")
+            st.info("A requisição entrou na **Fila / Separação**. O estoque só é baixado quando o "
+                    "almoxarife registrar a entrega (com autorização).")
             if st.button("Iniciar Nova Requisição", width="stretch"):
                 st.session_state.req_confirmada = None
                 st.rerun()
@@ -1252,22 +1263,22 @@ def _render_requisicao():
                     """, unsafe_allow_html=True)
 
                 with st.form("form_add_item_req", clear_on_submit=True):
-                    ci1, ci2 = st.columns(2)
-                    qtd_sol = ci1.number_input("Qtd Solicitada *", min_value=1.0, step=1.0, value=1.0)
-                    qtd_ate = ci2.number_input("Qtd Atendida *", min_value=0.0, step=1.0, value=1.0)
+                    qtd_sol = st.number_input(
+                        "Qtd Solicitada *", min_value=1.0, step=1.0, value=1.0,
+                        help="Quanto o setor está pedindo. A quantidade efetivamente ENTREGUE é definida "
+                             "na aba Fila, na hora da entrega (pode ser parcial). Pode-se solicitar mais "
+                             "do que o saldo atual — a fila mostra o que dá para atender.")
                     add_item = st.form_submit_button(":material/add: ADICIONAR À LISTA", width="stretch")
 
                 if add_item:
                     if not item_req_add:
                         st.warning(":material/warning: Selecione um material antes de adicionar.")
-                    elif qtd_ate > item_req_add.get("estoque_atual", 0):
-                        st.error(f":material/cancel: Saldo insuficiente! Estoque: {item_req_add.get('estoque_atual', 0)}")
                     else:
                         st.session_state.itens_req.append({
                             "item_id": item_req_add["id"], "part_number": item_req_add["part_number"],
                             "nome_item": item_req_add["nome_item"], "unidade": item_req_add.get("unidade","UN"),
                             "estoque_disponivel": item_req_add.get("estoque_atual",0),
-                            "quantidade_solicitada": qtd_sol, "quantidade_atendida": qtd_ate,
+                            "quantidade_solicitada": qtd_sol,
                         })
                         st.rerun()
 
@@ -1277,7 +1288,8 @@ def _render_requisicao():
                 for idx, it in enumerate(st.session_state.itens_req):
                     with st.expander(f"{it['part_number']} — {it['nome_item']}", expanded=True):
                         c_info, c_del = st.columns([5, 1])
-                        c_info.write(f"**Atendido:** {it['quantidade_atendida']} / **Solicitado:** {it['quantidade_solicitada']} {it['unidade']}")
+                        c_info.write(f"**Solicitado:** {it['quantidade_solicitada']:g} {it['unidade']} "
+                                     f"· _saldo hoje:_ {it.get('estoque_disponivel', 0):g}")
 
                         if c_del.button("Remover", key=f"rm_req_{idx}", type="primary"):
                             st.session_state.itens_req.pop(idx)
@@ -1287,63 +1299,150 @@ def _render_requisicao():
 
             st.markdown("---")
 
-            # --- BLOCO 3: REGRAS ESPECIAIS ---
-            destinatarios_txt = ""
-            sesmt_resp = ""
+            # --- BLOCO 3: OBSERVAÇÕES E ENVIO ---
+            # v4.7.0: autorização e SESMT saíram da criação — passaram para a ENTREGA
+            # (aba Fila / Separação), que é o momento em que o material realmente sai.
+            # Aqui só se ABRE o pedido; nada é baixado do estoque ainda.
             with st.container():
-                st.markdown("##### 3. Regras de Entrega e SESMT")
-                col_ei, col_sesmt = st.columns(2)
-                with col_ei:
-                    entrega_ind = st.checkbox(":material/inventory_2: Entrega Individual (EPI/Uniforme)")
-                    if entrega_ind:
-                        destinatarios_txt = st.text_area("Lista de Destinatários *",
-                            placeholder="MATRÍCULA — NOME (um por linha)", height=100)
-                with col_sesmt:
-                    is_sesmt = st.checkbox(":material/engineering: Requer Aprovação SESMT")
-                    if is_sesmt:
-                        sesmt_resp = st.text_input("Responsável SESMT *")
-
-            # --- BLOCO 4: AUTORIZAÇÃO E FINALIZAÇÃO ---
-            with st.container():
-                st.markdown("##### 4. Autorização Final")
-                ca1, ca2 = st.columns(2)
-                aut_tipo = ca1.selectbox("Tipo de Autorizador *", autorizadores_lista)
-                aut_nome = ca2.text_input("Assinatura / Nome do Autorizador *")
-                obs_req  = st.text_area("Observações Gerais da Requisição", height=70)
+                st.markdown("##### 3. Observações e Envio")
+                obs_req = st.text_area(
+                    "Observações Gerais da Requisição", height=70,
+                    placeholder="Opcional. Ex.: urgência, referência de OS, local de entrega...")
 
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button(":material/check_circle: FINALIZAR E ATUALIZAR ESTOQUE", type="primary", width="stretch"):
+            if st.button(":material/send: CRIAR REQUISIÇÃO (enviar para a fila)", type="primary", width="stretch"):
                 erros = []
-                if not req_setor or not req_emit or not aut_nome: erros.append("Campos obrigatórios com (*) não preenchidos.")
-                if not st.session_state.itens_req: erros.append("A lista de materiais está vazia.")
-                if entrega_ind and not destinatarios_txt: erros.append("Para entrega individual, informe os destinatários.")
+                if not req_setor or not req_emit:
+                    erros.append("Preencha Setor e Emitente (campos com *).")
+                if not st.session_state.itens_req:
+                    erros.append("A lista de materiais está vazia.")
 
                 if erros:
                     for e in erros: st.error(e)
                 else:
-                    with st.spinner("Processando requisição e baixando estoque..."):
-                        destinatarios = []
-                        if entrega_ind and destinatarios_txt:
-                            for linha in destinatarios_txt.strip().split("\n"):
-                                if "—" in linha or "-" in linha:
-                                    sep = "—" if "—" in linha else "-"
-                                    p = linha.split(sep, 1)
-                                    destinatarios.append({"matricula": p[0].strip(), "nome": p[1].strip() if len(p)>1 else ""})
-
+                    with st.spinner("Criando requisição..."):
                         ok, resultado = criar_requisicao(
                             setor=req_setor, emitente=req_emit, centro_custo=req_cc,
-                            autorizador_tipo=aut_tipo, autorizador_nome=aut_nome,
-                            entrega_individual=entrega_ind, destinatarios=destinatarios,
-                            sesmt=is_sesmt, sesmt_responsavel=sesmt_resp if is_sesmt else "",
+                            autorizador_tipo="", autorizador_nome="",
+                            entrega_individual=False, destinatarios=[],
+                            sesmt=False, sesmt_responsavel="",
                             itens=st.session_state.itens_req, observacoes=obs_req
                         )
-
                         if ok:
                             st.session_state.itens_req = []
                             st.session_state.req_confirmada = resultado
                             st.rerun()
                         else:
-                            st.error(f"Erro no processamento: {resultado}")
+                            st.error(f"Erro ao criar requisição: {resultado}")
+
+    # --- ABA: FILA / SEPARAÇÃO (v4.7.0) ---
+    with aba_fila:
+        st.markdown("### :material/list_alt: Fila de Separação")
+        st.caption("Requisições aguardando entrega. Registre a saída (parcial ou total) — só aqui o "
+                   "estoque é baixado. Material só sai com autorização (gestor; +SESMT se for EPI/SSO).")
+
+        abertas = listar_requisicoes_abertas()
+        if not abertas:
+            st.success(":material/inventory: Nenhuma requisição pendente na fila. Tudo em dia!")
+        else:
+            mp1, mp2 = st.columns(2)
+            mp1.metric(":material/pending_actions: Requisições na fila", len(abertas))
+            mp2.metric(":material/hourglass_top: Mais antiga",
+                       str(min(a["data_hora"] for a in abertas))[:10])
+
+            def _fmt_fila(a):
+                _falt = int(a.get("itens_pendentes") or 0)
+                return (f"{a['numero_requisicao']} · {a['setor']} · {a['emitente']} "
+                        f"· {a['status']} · {_falt} pendente(s)")
+
+            opc_fila = {_fmt_fila(a): a for a in abertas}
+            sel_f = st.selectbox("Escolha a requisição para separar/entregar:",
+                                 [""] + list(opc_fila.keys()), key="fila_sel")
+
+            req = opc_fila.get(sel_f) if sel_f else None
+            if req:
+                req_id = req["id"]
+                st.markdown(f"#### :material/assignment: {req['numero_requisicao']} "
+                            f"— {req['setor']} · {req['emitente']}")
+                st.caption(f"Aberta em {str(req['data_hora'])[:16]} · "
+                           f"C.Custo: {req.get('centro_custo') or '—'} · Status: **{req['status']}**")
+                if req.get("observacoes"):
+                    st.info(f":material/sticky_note_2: {req['observacoes']}")
+
+                itens_f = listar_itens_requisicao(req_id)
+
+                st.markdown("##### 1. Itens — quanto entregar agora")
+                entregas = []
+                for it in itens_f:
+                    falta = float(it["quantidade_solicitada"]) - float(it["quantidade_atendida"])
+                    disp = float(it.get("estoque_atual") or 0)
+                    ci1, ci2, ci3 = st.columns([3, 2, 2])
+                    ci1.markdown(f"**{it['part_number']}** — {it['nome_item']}")
+                    ci1.caption(f"Solicitado {float(it['quantidade_solicitada']):g} · "
+                                f"atendido {float(it['quantidade_atendida']):g} · "
+                                f"falta {max(falta, 0):g} {it['unidade']}")
+                    ci2.markdown(f":material/inventory_2: Disp.: **{disp:g}** {it['unidade']}")
+                    if falta <= 0:
+                        ci3.success("Completo")
+                        continue
+                    _max = float(min(falta, disp))
+                    q = ci3.number_input(
+                        "Entregar", min_value=0.0,
+                        max_value=float(disp) if disp > 0 else 0.0,
+                        value=_max if _max > 0 else 0.0, step=1.0,
+                        key=f"ent_{req_id}_{it['id']}",
+                        help="Sem saldo em estoque para este item." if disp <= 0 else None)
+                    if q > 0:
+                        entregas.append({"item_req_id": it["id"], "quantidade": float(q)})
+
+                st.markdown("##### 2. Autorização da saída")
+                ca1, ca2 = st.columns(2)
+                f_aut_tipo = ca1.selectbox("Tipo de Autorizador *", autorizadores_lista, key=f"aut_t_{req_id}")
+                f_aut_nome = ca2.text_input("Nome do Autorizador (gestor) *", key=f"aut_n_{req_id}")
+                f_sesmt = st.checkbox("Material SESMT? (EPI/SSO — exige responsável do SESMT)",
+                                      key=f"sesmt_{req_id}")
+                f_sesmt_resp = ""
+                if f_sesmt:
+                    f_sesmt_resp = st.text_input("Responsável SESMT *", key=f"sesmt_r_{req_id}")
+
+                if st.button(":material/local_shipping: REGISTRAR ENTREGA", type="primary",
+                             width="stretch", key=f"btn_ent_{req_id}"):
+                    if not entregas:
+                        st.warning("Informe ao menos um item com quantidade a entregar.")
+                    else:
+                        ok, res = entregar_requisicao(
+                            req_id, entregas, f_aut_tipo, f_aut_nome, f_sesmt, f_sesmt_resp)
+                        if ok:
+                            st.success(f":material/check_circle: Entrega registrada. Status: **{res}**.")
+                            st.rerun()
+                        else:
+                            st.error(f":material/cancel: {res}")
+
+                st.markdown("---")
+                with st.expander(":material/add_circle: Adicionar item (o caso 'põe no mesmo pedido')"):
+                    _, item_add_f, _ = sel_material("Material para incluir nesta requisição", f"add_fila_{req_id}")
+                    qadd = st.number_input("Qtd Solicitada", min_value=1.0, step=1.0, value=1.0, key=f"qadd_{req_id}")
+                    if st.button(":material/add: Incluir item", key=f"btn_add_{req_id}"):
+                        if not item_add_f:
+                            st.warning("Selecione um material.")
+                        else:
+                            ok, res = adicionar_itens_requisicao(
+                                req_id, [{"item_id": item_add_f["id"], "quantidade_solicitada": qadd}])
+                            if ok:
+                                st.success(res)
+                                st.rerun()
+                            else:
+                                st.error(res)
+
+                if req["status"] == "Aberta":
+                    if st.button(":material/cancel: Cancelar requisição (nada foi entregue)",
+                                 key=f"btn_cancel_{req_id}"):
+                        ok, res = cancelar_requisicao(req_id)
+                        if ok:
+                            st.warning(res)
+                            st.rerun()
+                        else:
+                            st.error(res)
 
     # --- ABA: HISTÓRICO ---
     with aba_hist_req:
@@ -1400,10 +1499,11 @@ def _render_requisicao():
                 r_det = opcoes_req[sel_req]
                 with st.container(border=True):
                     st.markdown(f"**Resumo REQ-{r_det['numero_requisicao']}** · "
-                                f"{str(r_det.get('data_hora',''))[:16]}")
+                                f"{str(r_det.get('data_hora',''))[:16]} · "
+                                f"Status: **{r_det.get('status') or '—'}**")
                     c_a, c_b, c_c, c_d = st.columns(4)
                     c_a.write(f":material/person: **Emitente:** {r_det['emitente']}")
-                    c_b.write(f":material/edit: **Autorizador:** {r_det['autorizador_nome']}")
+                    c_b.write(f":material/edit: **Autorizador:** {r_det.get('autorizador_nome') or '—'}")
                     c_c.write(f":material/apartment: **C.Custo:** {r_det['centro_custo']}")
                     c_d.write(f":material/domain: **Setor:** {r_det.get('setor') or '—'}")
 
@@ -1418,9 +1518,10 @@ def _render_requisicao():
 
             st.markdown("---")
             st.markdown("##### :material/table_rows: Todas as requisições")
-            df_reqs = fil[["numero_requisicao", "data_hora", "setor", "emitente",
+            df_reqs = fil[["numero_requisicao", "data_hora", "status", "setor", "emitente",
                            "autorizador_nome", "total_itens"]].copy()
-            df_reqs.columns = ["Nº Req", "Data/Hora", "Setor", "Emitente", "Autorizador", "Qtd Itens"]
+            df_reqs.columns = ["Nº Req", "Data/Hora", "Status", "Setor", "Emitente",
+                               "Autorizador", "Qtd Itens"]
             st.dataframe(df_reqs, width="stretch", hide_index=True)
 
 
@@ -1869,7 +1970,7 @@ def _render_ficha_visao_geral(ficha):
 
     cob = it.get("dias_cobertura")
     giro = ficha["giro"]
-    g1, g2, g3, g4 = st.columns(4)
+    g1, g2, g3, g4, g5 = st.columns(5)
     g1.metric("Dias até acabar",
               f"{cob:.0f} d" if cob is not None and cob < PREVISAO_RUPTURA_SEM_RISCO else "—",
               help="Quantos dias o estoque atual ainda dura no ritmo de consumo atual "
@@ -1882,7 +1983,15 @@ def _render_ficha_visao_geral(ficha):
               delta_color="inverse",
               help="Média de quanto sai por dia deste item, pelas saídas reais por requisição "
                    "na janela de 30 dias. A seta indica a tendência vs. os 30 dias anteriores.")
-    g3.metric("Giro anual", _g(giro["giro_anual"]),
+    _cons_mes = (ficha.get("classificacao") or {}).get("consumo_mensal_ponderado")
+    g3.metric("Consumo/Mensal",
+              f"{_g1(_cons_mes)} {un}/mês" if _cons_mes is not None else "—", delta=tend_txt,
+              delta_color="inverse",
+              help="Consumo médio por mês: média PONDERADA dos últimos 3 meses completos, com o "
+                   "mês mais recente pesando mais (3/2/1). Usa as saídas reais por mês (dias úteis "
+                   "já embutidos); meses sem saída contam 0 e a média decai se o item parar. A "
+                   "seta é a mesma tendência do Consumo/dia.")
+    g4.metric("Giro anual", _g(giro["giro_anual"]),
               help="Quantas vezes o estoque \"vira\" no ano: "
                    "(saídas dos últimos 90 d ÷ estoque médio das fotos diárias) × (365 ÷ 90). "
                    "Base: estoque_snapshots (fotos diárias do saldo) + saídas de movimentações. "
@@ -1891,7 +2000,7 @@ def _render_ficha_visao_geral(ficha):
                    f"{giro['tempo_medio_dias'] if giro['tempo_medio_dias'] else '—'} d · "
                    f"baseado em {giro['n_snapshots']} fotos.")
     lt_calc = it.get("lead_time_calculado")
-    g4.metric("Lead time (Compras)", f"{int(it.get('lead_time_dias') or 0)} d",
+    g5.metric("Lead time (Compras)", f"{int(it.get('lead_time_dias') or 0)} d",
               help=(f"Calculado (sugestão): {int(lt_calc)} d "
                     f"({it.get('lead_time_calculado_amostras') or 0} amostras, "
                     f"{it.get('lead_time_calculado_origem') or '—'})" if lt_calc
@@ -2049,7 +2158,13 @@ def _render_ficha_visao_geral(ficha):
 
 
 def _render_ficha_guarda_chuva(ficha):
-    """v4.4.0 — Guarda-Chuva: pedidos (SC/PO) do material por fornecedor, com kanban de
+    """[DEPRECADO em v4.9.0 — NÃO MAIS LIGADO À UI] A sub-aba Guarda-Chuva saiu da Ficha
+    360 e virou um controle MANUAL próprio em "Controle de SC → ☂️ Guarda-Chuva"
+    (`_render_guarda_chuva_controle`, tabela `guarda_chuva`). Esta versão baseada em SCs
+    reais (`ficha['scs_pos']`) fica aqui só como referência e pode ser removida num
+    follow-up (os serviços que ela usa seguem cobertos por test_v457).
+
+    v4.4.0 — Guarda-Chuva: pedidos (SC/PO) do material por fornecedor, com kanban de
     4 estágios (Pedido Colocado → Aguardando Entrega → NF Emitida → Recebido) e o saldo
     residual pendente agregado por fornecedor, sobre ficha['scs_pos'].
 
@@ -2223,6 +2338,411 @@ def _dialog_pedido_guarda_chuva():
                 st.error(f":material/cancel: {msg}")
     else:
         st.success(":material/check_circle: Pedido totalmente recebido.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ☂️ GUARDA-CHUVA MANUAL (v4.9.0) — controle próprio em Controle de SC
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_guarda_chuva_controle():
+    """v4.9.0 — Guarda-Chuva MANUAL: acordos de congelamento de preço por (produto +
+    fornecedor) com entregas parciais. Controle 100% manual e desacoplado das SCs
+    importadas (tabela `guarda_chuva`). Fluxo: adicionar produto (busca por PN/descrição)
+    → adicionar código de fornecedor → kanban dos 4 estágios (editável) → 'Saldo total de
+    todos os fornecedores' por material."""
+    st.markdown("### :material/umbrella: Guarda-Chuva — saldo por fornecedor (controle manual)")
+    st.caption("Acordo com o fornecedor para **congelar o preço** de um produto e fazer um pedido "
+               "com **entregas parciais** (ideal: X por mês, para não faturar tudo de uma vez). "
+               "É um **controle manual**: cadastre o produto e o(s) fornecedor(es) e mova os cards "
+               "pelos estágios. Serve para saber **quanto ainda temos de saldo** daquele material "
+               "com **quais fornecedores**.")
+
+    # ── Adicionar produto + código de fornecedor ──────────────────────────────
+    with st.expander(":material/add: Adicionar um produto ao Guarda-Chuva", expanded=False):
+        _busca = st.text_input("Pesquisar produto (part number ou descrição)", key="gc_busca_add")
+        _itens = filtrar_itens_por_busca(listar_inventario(), _busca) if _busca else []
+        if _busca and not _itens:
+            st.warning("Nenhum material encontrado para a busca.")
+        _opcoes = {f"{i['part_number']} — {i['nome_item']}": i["id"] for i in _itens[:50]}
+        _sel = st.selectbox("Material", ["—"] + list(_opcoes.keys()), key="gc_sel_add",
+                            disabled=not _opcoes)
+        with st.form("form_gc_add", clear_on_submit=True):
+            st.markdown("**Adicionar código de fornecedor**")
+            f1, f2 = st.columns(2)
+            _cod = f1.text_input("Código do fornecedor *", key="gc_add_cod")
+            _nome = f2.text_input("Nome do fornecedor (opcional)", key="gc_add_nome")
+            f3, f4, f5 = st.columns(3)
+            _qneg = f3.number_input("Qtd negociada", min_value=0.0, step=1.0, key="gc_add_qneg")
+            _preco = f4.number_input("Preço congelado (R$)", min_value=0.0, step=0.01, key="gc_add_preco")
+            _ideal = f5.number_input("Ideal por mês", min_value=0.0, step=1.0, key="gc_add_ideal")
+            _add = st.form_submit_button(":material/add: Adicionar ao Guarda-Chuva", type="primary",
+                                         width="stretch")
+        if _add:
+            _item_id = _opcoes.get(_sel)
+            if not _item_id:
+                st.error("Selecione um material (busque por PN ou descrição).")
+            elif not (_cod or "").strip():
+                st.error("Informe o código do fornecedor.")
+            else:
+                ok, res = criar_guarda_chuva(
+                    _item_id, _cod, fornecedor_nome=(_nome or None),
+                    qtd_negociada=_qneg, preco_congelado=(_preco or None),
+                    qtd_ideal_mes=(_ideal or None))
+                if ok:
+                    st.success(":material/check_circle: Acordo adicionado ao Guarda-Chuva.")
+                    st.rerun()
+                else:
+                    st.error(f":material/cancel: {res}")
+
+    # ── Foco por material + saldo total de todos os fornecedores ──────────────
+    _todos = listar_guarda_chuva()
+    if not _todos:
+        st.info("Nenhum acordo guarda-chuva cadastrado ainda. Use **Adicionar um produto** acima.")
+        return
+
+    _mats = {}
+    for g in _todos:
+        _mats.setdefault(g["item_id"], f"{g['part_number']} — {g['nome_item']}")
+    _rotulos = {v: k for k, v in _mats.items()}
+    _foco = st.selectbox("Material em foco", ["Todos"] + sorted(_rotulos.keys()), key="gc_foco")
+    _foco_id = _rotulos.get(_foco)
+    _linhas = _todos if _foco == "Todos" else [g for g in _todos if g["item_id"] == _foco_id]
+    _un = (_linhas[0].get("unidade") or "") if _linhas else ""
+
+    if _foco_id is not None:
+        st.metric("Saldo total de todos os fornecedores",
+                  f"{saldo_total_por_material(_foco_id):g} {_un}")
+    else:
+        _tot = sum(max(float(g.get("saldo_residual") or 0), 0.0) for g in _todos)
+        st.metric("Saldo total de todos os fornecedores (todos os materiais)", f"{_tot:g}")
+
+    # ── Kanban dos 4 estágios (editável) ──────────────────────────────────────
+    st.markdown("##### :material/view_kanban: Kanban de acordos (manual)")
+    _cols = st.columns(len(GUARDA_CHUVA_ESTAGIOS))
+    for _col, _nome in zip(_cols, GUARDA_CHUVA_ESTAGIOS):
+        with _col:
+            _grupo = [g for g in _linhas if (g.get("estagio") or "Pedido Colocado") == _nome]
+            st.markdown(f"**{_nome}** · {len(_grupo)}")
+            for g in _grupo:
+                with st.container(border=True):
+                    _u = g.get("unidade") or ""
+                    st.caption(f"`{g.get('part_number') or '—'}`")
+                    st.markdown(f"**Forn. {g.get('fornecedor_codigo') or '—'}**"
+                                + (f" · {g.get('fornecedor_nome')}" if g.get("fornecedor_nome") else ""))
+                    st.caption(f"Neg. {(g.get('qtd_negociada') or 0):g} · "
+                               f"Receb. {(g.get('qtd_recebida') or 0):g} · "
+                               f"Saldo {(g.get('saldo_residual') or 0):g} {_u}")
+                    if g.get("preco_congelado"):
+                        st.caption(f":material/sell: R$ {float(g['preco_congelado']):.2f} congelado")
+                    if st.button(":material/edit: Editar", key=f"gc_m_edit_{g['id']}", width="stretch"):
+                        st.session_state["_gc_manual_edit"] = int(g["id"])
+                        st.rerun()
+
+    # ── Tabela: saldo por fornecedor ─────────────────────────────────────────
+    st.markdown("##### :material/inventory: Saldo por fornecedor")
+    _agg = {}
+    for g in _linhas:
+        _k = (g.get("fornecedor_codigo") or "—", g.get("fornecedor_nome") or "")
+        _d = _agg.setdefault(_k, {"n": 0, "saldo": 0.0})
+        _d["n"] += 1
+        _d["saldo"] += max(float(g.get("saldo_residual") or 0), 0.0)
+    if _agg:
+        _df_gc = pd.DataFrame([{
+            "Fornecedor (código)": k[0], "Nome": k[1],
+            "Acordos": v["n"], f"Saldo pendente ({_un})": round(v["saldo"], 2),
+        } for k, v in _agg.items()])
+        st.dataframe(_df_gc, width="stretch", hide_index=True)
+
+
+def _clear_gc_manual_edit():
+    st.session_state.pop("_gc_manual_edit", None)
+
+
+@st.dialog("Acordo — Guarda-Chuva", width="large", on_dismiss=_clear_gc_manual_edit)
+def _dialog_guarda_chuva():
+    """v4.9.0 — Edita um acordo guarda-chuva (manual) e registra recebimento parcial. Relê
+    do banco a cada render (`obter_guarda_chuva`). Controle manual: não toca estoque."""
+    gc_id = st.session_state.get("_gc_manual_edit")
+    g = obter_guarda_chuva(gc_id) if gc_id else None
+    if not g:
+        st.info("Acordo não encontrado (pode ter sido removido).")
+        return
+    un = g.get("unidade") or ""
+    saldo = float(g.get("saldo_residual") or 0)
+    st.markdown(f"`{g.get('part_number') or '—'}` — **{g.get('nome_item') or '—'}**")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Negociada", f"{(g.get('qtd_negociada') or 0):g} {un}")
+    m2.metric("Recebida", f"{(g.get('qtd_recebida') or 0):g} {un}")
+    m3.metric("Saldo", f"{saldo:g} {un}")
+
+    with st.form("form_gc_manual"):
+        st.markdown("##### :material/edit: Dados do acordo")
+        c1, c2 = st.columns(2)
+        cod = c1.text_input("Código do fornecedor", value=g.get("fornecedor_codigo") or "")
+        nome = c2.text_input("Nome do fornecedor", value=g.get("fornecedor_nome") or "")
+        qneg = c1.number_input("Qtd negociada", min_value=0.0, step=1.0,
+                               value=float(g.get("qtd_negociada") or 0))
+        preco = c2.number_input("Preço congelado (R$)", min_value=0.0, step=0.01,
+                                value=float(g.get("preco_congelado") or 0))
+        ideal = c1.number_input("Ideal por mês", min_value=0.0, step=1.0,
+                                value=float(g.get("qtd_ideal_mes") or 0))
+        _est_idx = (list(GUARDA_CHUVA_ESTAGIOS).index(g["estagio"])
+                    if g.get("estagio") in GUARDA_CHUVA_ESTAGIOS else 0)
+        estagio = c2.selectbox("Estágio", GUARDA_CHUVA_ESTAGIOS, index=_est_idx)
+        po = c1.text_input("Nº PO (opcional)", value=g.get("numero_po") or "")
+        obs = st.text_area("Observação", value=g.get("observacao") or "")
+        salvar = st.form_submit_button(":material/save: Salvar dados", type="primary", width="stretch")
+    if salvar:
+        ok, msg = atualizar_guarda_chuva(gc_id, {
+            "fornecedor_codigo": cod, "fornecedor_nome": nome, "qtd_negociada": qneg,
+            "preco_congelado": preco, "qtd_ideal_mes": ideal, "estagio": estagio,
+            "numero_po": po, "observacao": obs,
+        })
+        if ok:
+            st.success(f":material/check_circle: {msg}")
+            st.rerun()
+        else:
+            st.error(f":material/cancel: {msg}")
+
+    # ── Recebimento parcial (manual) ──────────────────────────────────────────
+    if saldo > 0:
+        with st.form("form_gc_manual_receber"):
+            st.markdown("##### :material/download: Registrar recebimento (parcial)")
+            st.caption("Controle manual — abate o saldo do acordo. NÃO mexe no estoque nem no "
+                       "histórico de movimentações.")
+            qtd = st.number_input(f"Qtd a receber ({un})", min_value=0.0, max_value=saldo,
+                                  value=saldo, step=1.0)
+            receber = st.form_submit_button(":material/download: Confirmar recebimento",
+                                            type="primary", width="stretch")
+        if receber:
+            ok, msg = registrar_recebimento_guarda_chuva(gc_id, float(qtd))
+            if ok:
+                st.success(f":material/check_circle: {msg}")
+                st.rerun()
+            else:
+                st.error(f":material/cancel: {msg}")
+
+    st.divider()
+    if st.button(":material/delete: Remover este acordo", key="gc_manual_remover"):
+        ok, msg = remover_guarda_chuva(gc_id)
+        if ok:
+            _clear_gc_manual_edit()
+            st.rerun()
+        else:
+            st.error(f":material/cancel: {msg}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 📡 MONITOR DE SC (v4.11.0) — seções reordenadas: (1) Controle Manual de Críticos,
+# (2) SCs/Itens não atendidos (via API SCM), (3) fallback de cruzamento por upload.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_controle_manual_criticos():
+    """v4.11.0 — 'Controle Manual de Críticos' (ex-'Planilha livre'), no TOPO do Monitor:
+    grade colável do Excel com colunas configuráveis. Persiste em `monitor_livre`."""
+    st.markdown("### :material/edit_note: Controle Manual de Críticos")
+    st.caption("Cole um intervalo do Excel direto na grade — seu controle manual de itens "
+               "críticos. As colunas começam como A, B, C…, mas você pode **criar** e "
+               "**remover** colunas próprias (persistem junto com as linhas). **Crie as "
+               "colunas antes de colar** os dados. A **1ª linha** vira o cabeçalho da "
+               "pré-visualização abaixo.")
+
+    def _mon_nz(v):
+        return None if (v is None or (isinstance(v, float) and pd.isna(v))) else v
+
+    _pl = carregar_planilha_livre()
+    if "pl_livre_cols" not in st.session_state:
+        st.session_state.pl_livre_cols = _pl["colunas"] or list("ABCDEFGHIJ")
+    _LIVRE_COLS = st.session_state.pl_livre_cols
+
+    _pc1, _pc2 = st.columns([3, 1])
+    with _pc1:
+        _nova_col = st.text_input("Nome da nova coluna", key="pl_nova_col",
+                                  label_visibility="collapsed", placeholder="Nome da nova coluna")
+    with _pc2:
+        if st.button("➕ Criar coluna", key="pl_criar_col", width="stretch"):
+            _nome = (_nova_col or "").strip()
+            if not _nome:
+                st.warning("Digite um nome para a coluna.")
+            elif _nome in _LIVRE_COLS:
+                st.warning("Já existe uma coluna com esse nome.")
+            else:
+                st.session_state.pl_livre_cols = list(_LIVRE_COLS) + [_nome]
+                st.rerun()
+    _rem = st.multiselect("Remover coluna(s)", _LIVRE_COLS, key="pl_rem_cols")
+    if st.button("🗑️ Remover coluna(s) selecionada(s)", key="pl_remover_col", disabled=not _rem):
+        _restantes = [c for c in _LIVRE_COLS if c not in _rem]
+        st.session_state.pl_livre_cols = _restantes or list("ABCDEFGHIJ")
+        st.rerun()
+
+    _linhas_pl = _pl["linhas"]
+    if _linhas_pl:
+        _df_livre = pd.DataFrame(_linhas_pl)
+        for _c in _LIVRE_COLS:
+            if _c not in _df_livre.columns:
+                _df_livre[_c] = None
+        _df_livre = _df_livre.reindex(columns=_LIVRE_COLS)
+    else:
+        _df_livre = pd.DataFrame({_c: pd.Series(dtype="object") for _c in _LIVRE_COLS})
+
+    _livre_edit = st.data_editor(
+        _df_livre, num_rows="dynamic", hide_index=True, width="stretch",
+        height=360, key="monitor_livre_editor__" + "|".join(_LIVRE_COLS))
+
+    if st.button("💾 Salvar Controle Manual de Críticos", key="monitor_livre_salvar"):
+        _regs = [
+            {_c: _mon_nz(r.get(_c)) for _c in _LIVRE_COLS}
+            for _, r in _livre_edit.iterrows()
+            if any(_mon_nz(r.get(_c)) is not None for _c in _LIVRE_COLS)
+        ]
+        _n = salvar_planilha_livre(_LIVRE_COLS, _regs)
+        st.success(f":material/check_circle: Controle salvo ({_n} linha(s), {len(_LIVRE_COLS)} coluna(s)).")
+        time.sleep(1.0); st.rerun()
+
+    if len(_livre_edit) > 1:
+        _prev = _livre_edit.reset_index(drop=True)
+        _header = [str(x) if _mon_nz(x) is not None else "" for x in _prev.iloc[0].tolist()]
+        _cols_final, _seen = [], {}
+        for _i, _h in enumerate(_header):
+            _name = _h or f"Col{_i+1}"
+            if _name in _seen:
+                _seen[_name] += 1
+                _name = f"{_name}_{_seen[_name]}"
+            else:
+                _seen[_name] = 0
+            _cols_final.append(_name)
+        _corpo = _prev.iloc[1:].copy()
+        _corpo.columns = _cols_final
+        st.caption("Pré-visualização (1ª linha como cabeçalho):")
+        st.dataframe(_corpo, width="stretch", hide_index=True)
+
+
+def _render_scs_nao_atendidas():
+    """v4.11.0 — 'SCs/Itens não atendidos' via API do SCM: SCs do almoxarifado em fase de
+    cotação (sem pedido) cruzadas com o estoque MRO. Read-only, carregado sob demanda."""
+    st.markdown("### :material/assignment_late: SCs/Itens não atendidos")
+    st.caption("SCs do **almoxarifado** em **fase de cotação** (ainda sem pedido gerado), "
+               "direto do **SCM**, cruzadas com o estoque MRO. **Status**, **Esgotado em** e "
+               "**Faltando (d)** vêm do inventário (igual à aba 'Saldo em Estoque').")
+
+    _l1, _l2 = st.columns([3, 1])
+    with _l2:
+        _load = st.button(":material/cloud_sync: Carregar/Atualizar do SCM", key="scs_na_load",
+                          width="stretch")
+    if _load:
+        for _fn in (scm_client.cotacoes_em_andamento, scm_client.sc_timeline):
+            try:
+                _fn.clear()
+            except Exception:
+                pass
+        if not scm_client.esta_disponivel():
+            st.session_state["_scs_na_rows"] = "OFFLINE"
+        else:
+            with st.spinner("Consultando SCs em cotação no SCM…"):
+                _solic_mro, _pns, _dep = obter_cadastro_mro_para_cruzamento()
+                _lic = scm_client.cotacoes_em_andamento()
+                _escopo = cotacoes_no_escopo(_lic, _solic_mro)
+                _itens = {}
+                for _c in _escopo:
+                    _tl = scm_client.sc_timeline(_c["sc_id"]) or {}
+                    _itens[_c["sc_id"]] = _tl.get("items") or []
+                _inv = {str(i["part_number"]).strip().upper(): {
+                    "status_material": i.get("status_material"),
+                    "unidade": i.get("unidade"),
+                    "nome_item": i.get("nome_item"),
+                    "previsao_ruptura_dias": i.get("previsao_ruptura_dias"),
+                } for i in listar_inventario()}
+                st.session_state["_scs_na_rows"] = montar_scs_nao_atendidas(_escopo, _itens, _inv)
+
+    _rows = st.session_state.get("_scs_na_rows")
+    if _rows is None:
+        st.info(":material/cloud: Clique em **Carregar/Atualizar do SCM** para buscar as SCs "
+                "em cotação. (Requer rede até o SCM; senão use o fallback de upload abaixo.)")
+        return
+    if _rows == "OFFLINE":
+        st.warning(":material/cloud_off: Não foi possível conectar ao SCM "
+                   "(`mansrvapp03:5715`). Use o **fallback de upload** abaixo.")
+        return
+    if not _rows:
+        st.success(":material/check_circle: Nenhuma SC/Item do almoxarifado em cotação pendente.")
+        return
+    _df_na = pd.DataFrame(_rows, columns=COLUNAS_SCS_NAO_ATENDIDAS)
+    st.caption(f"**{len(_df_na)}** item(ns) em cotação, do escopo do almoxarifado (mais urgente primeiro).")
+    st.dataframe(_df_na, width="stretch", hide_index=True, height=460, column_config={
+        "QTY Solicitada": st.column_config.NumberColumn(format="%.0f"),
+        "Saldo PO": st.column_config.NumberColumn(format="%.0f"),
+        "Faltando (d)": st.column_config.NumberColumn(format="%.1f"),
+    })
+    _buf = io.BytesIO()
+    with pd.ExcelWriter(_buf, engine="openpyxl") as _w:
+        _df_na.to_excel(_w, index=False, sheet_name="SCs nao atendidos")
+    st.download_button(":material/download: Baixar (Excel)", data=_buf.getvalue(),
+                       file_name="scs_nao_atendidos.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                       key="scs_na_dl")
+
+
+def _render_cruzamento_upload_fallback():
+    """v4.11.0 — Fallback (sem rede ao SCM): cruzamento SCM × SC7 por UPLOAD manual (v4.6.0),
+    dentro de um expander. Efêmero: nada é gravado no banco."""
+    with st.expander(":material/cloud_off: Sem rede ao SCM? Cruzamento por upload (SCM × SC7)"):
+        st.caption("Alternativa manual à tabela acima: envie os **dois exports crus** — "
+                   "**SCM** (`Solicitações.xlsx`) e **SC7** (`Relatório de Compras.xlsx`) — e o "
+                   "sistema casa por **PO** + Produto. Traz só material do MRO. Efêmero.")
+        _cz1, _cz2 = st.columns(2)
+        with _cz1:
+            _up_scm = st.file_uploader("SCM — Solicitações.xlsx (cru)", type=["xlsx", "xls"], key="cruz_scm")
+        with _cz2:
+            _up_sc7 = st.file_uploader("SC7 — Relatório de Compras.xlsx (cru)", type=["xlsx", "xls"], key="cruz_sc7")
+        if not (_up_scm and _up_sc7):
+            st.info(":material/upload: Envie os **dois** arquivos crus (SCM e SC7) para gerar o cruzamento.")
+            return
+        _df_scm, _meta_scm = preparar_df(_up_scm, "SCM")
+        _df_sc7, _meta_sc7 = preparar_df(_up_sc7, "SC7")
+        if _df_scm is None:
+            st.error(f":material/error: {_meta_scm['erro']}")
+            return
+        if _df_sc7 is None:
+            st.error(f":material/error: {_meta_sc7['erro']}")
+            return
+        _solic_mro, _pns_mro, _dep_solic = obter_cadastro_mro_para_cruzamento()
+        _res = cruzar_scm_sc7(_df_scm, _df_sc7, solicitantes_mro=_solic_mro,
+                              pns_mro=_pns_mro, dep_por_solic=_dep_solic)
+        if _res.get("erro"):
+            st.error(f":material/error: {_res['erro']}")
+            return
+        _s = _res["stats"]
+        _k1, _k2, _k3, _k4, _k5 = st.columns(5)
+        _k1.metric("Casadas", _s["casadas"])
+        _k2.metric("Sem pedido", _s["sem_pedido"])
+        _k3.metric("PO sem SC7", _s["po_sem_sc7"])
+        _k4.metric("Órfãos (PO s/ SC)", _s["orfaos"])
+        _k5.metric("Saldo pendente", f"{_s['saldo_pendente_total']:,.0f}")
+        st.caption(f"Fora do escopo MRO (ignoradas): **{_s['fora_escopo']}** linha(s) do SCM. "
+                   f"Lidas: SCM {_s['n_scm']} × SC7 {_s['n_sc7']} linhas.")
+        _df_cruz = pd.DataFrame(_res["linhas"], columns=_res["colunas"])
+        _dep_sel = st.selectbox("Filtrar por Departamento", ["Todos"] + _res["departamentos"], key="cruz_dep")
+        if _dep_sel != "Todos":
+            _df_cruz = _df_cruz[_df_cruz["Departamento"] == _dep_sel]
+        if _df_cruz.empty:
+            st.info("Nenhuma linha do MRO no cruzamento para o filtro atual.")
+        else:
+            st.dataframe(_df_cruz, width="stretch", hide_index=True, height=460, column_config={
+                "Qty (SC)": st.column_config.NumberColumn(format="%.0f"),
+                "Qtd Entregue": st.column_config.NumberColumn(format="%.0f"),
+                "Saldo": st.column_config.NumberColumn(format="%.0f"),
+            })
+            _buf_cz = io.BytesIO()
+            with pd.ExcelWriter(_buf_cz, engine="openpyxl") as _w_cz:
+                _df_cruz.to_excel(_w_cz, index=False, sheet_name="Cruzamento")
+            st.download_button(":material/download: Baixar cruzamento (Excel)", data=_buf_cz.getvalue(),
+                               file_name="monitor_sc_2_cruzamento.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               key="cruz_download")
+        if _res["orfaos"]:
+            with st.expander(f":material/warning: Órfãos — {len(_res['orfaos'])} PO(s) do SC7 sem SC no MRO"):
+                st.caption("Compras (PO) de material MRO **sem SC correspondente** na planilha SCM.")
+                st.dataframe(pd.DataFrame(_res["orfaos"]), width="stretch", hide_index=True)
 
 
 if pagina == "Dashboard":
@@ -3131,243 +3651,33 @@ elif pagina == "Controle de SC":
     st.title(":material/receipt_long: Controle de SC")
     
     # Estrutura de abas mantida conforme solicitado
-    # v3.8.0 — "Receber Material" saiu daqui (agora vive na Movimentação). 7 abas.
-    aba_mon, aba_assist, aba_forn, aba_nova_sc, aba_ed, aba_h, aba_import = st.tabs([
-    ":material/sensors: Monitor", ":material/psychology: Assistente de Reposição", ":material/apartment: Fornecedores & Cotação", ":material/add: Nova SC",
+    # v3.8.0 — "Receber Material" saiu daqui (agora vive na Movimentação).
+    # v4.9.0 — "☂️ Guarda-Chuva" (controle manual) entrou logo após o Monitor. 8 abas.
+    aba_mon, aba_gc, aba_assist, aba_forn, aba_nova_sc, aba_ed, aba_h, aba_import = st.tabs([
+    ":material/sensors: Monitor", ":material/umbrella: Guarda-Chuva", ":material/psychology: Assistente de Reposição", ":material/apartment: Fornecedores & Cotação", ":material/add: Nova SC",
     ":material/sync: Detalhes SC", ":material/history: Histórico", ":material/download: Importar Relatório de SCs"
     ])
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # ☂️ GUARDA-CHUVA (controle manual — v4.9.0)
+    # ══════════════════════════════════════════════════════════════════════════════
+    with aba_gc:
+        _render_guarda_chuva_controle()
+        if st.session_state.get("_gc_manual_edit"):
+            _dialog_guarda_chuva()
     # ══════════════════════════════════════════════════════════════════════════════
     # 📡 MONITOR DE COMPRAS 
     # ══════════════════════════════════════════════════════════════════════════════
     with aba_mon:
-        # ══════════════════════════════════════════════════════════════════════
-        # v4.6.0 — Monitor de SC 2.0: 1ª tabela = cruzamento SCM × SC7 (crus)
-        # ══════════════════════════════════════════════════════════════════════
-        st.markdown("### :material/compare_arrows: Monitor de SC 2.0 — Cruzamento SCM × SC7 (crus)")
-        st.caption("Automatiza o cruzamento que o comprador faz à mão: envie os **dois exports crus** "
-                   "— **SCM** (`Solicitações.xlsx`, a demanda) e **SC7** (`Relatório de Compras.xlsx`, "
-                   "a compra) — e o sistema casa por **PO** (Pedido ↔ Numero PC) + Produto, mostrando "
-                   "quanto já entregou e **quanto ainda falta (Saldo)**. Traz **só material do MRO** "
-                   "(solicitante MRO + PN cadastrado). Efêmero: nada é gravado no banco.")
-
-        _cz1, _cz2 = st.columns(2)
-        with _cz1:
-            _up_scm = st.file_uploader("SCM — Solicitações.xlsx (cru)", type=["xlsx", "xls"], key="cruz_scm")
-        with _cz2:
-            _up_sc7 = st.file_uploader("SC7 — Relatório de Compras.xlsx (cru)", type=["xlsx", "xls"], key="cruz_sc7")
-
-        if _up_scm and _up_sc7:
-            _df_scm, _meta_scm = preparar_df(_up_scm, "SCM")
-            _df_sc7, _meta_sc7 = preparar_df(_up_sc7, "SC7")
-            if _df_scm is None:
-                st.error(f":material/error: {_meta_scm['erro']}")
-            elif _df_sc7 is None:
-                st.error(f":material/error: {_meta_sc7['erro']}")
-            else:
-                _solic_mro, _pns_mro, _dep_solic = obter_cadastro_mro_para_cruzamento()
-                _res = cruzar_scm_sc7(_df_scm, _df_sc7, solicitantes_mro=_solic_mro,
-                                      pns_mro=_pns_mro, dep_por_solic=_dep_solic)
-                if _res.get("erro"):
-                    st.error(f":material/error: {_res['erro']}")
-                else:
-                    _s = _res["stats"]
-                    _k1, _k2, _k3, _k4, _k5 = st.columns(5)
-                    _k1.metric("Casadas", _s["casadas"])
-                    _k2.metric("Sem pedido", _s["sem_pedido"])
-                    _k3.metric("PO sem SC7", _s["po_sem_sc7"])
-                    _k4.metric("Órfãos (PO s/ SC)", _s["orfaos"])
-                    _k5.metric("Saldo pendente", f"{_s['saldo_pendente_total']:,.0f}")
-                    st.caption(f"Fora do escopo MRO (ignoradas): **{_s['fora_escopo']}** linha(s) do SCM. "
-                               f"Lidas: SCM {_s['n_scm']} × SC7 {_s['n_sc7']} linhas.")
-
-                    _df_cruz = pd.DataFrame(_res["linhas"], columns=_res["colunas"])
-
-                    _dep_sel = st.selectbox("Filtrar por Departamento", ["Todos"] + _res["departamentos"], key="cruz_dep")
-                    if _dep_sel != "Todos":
-                        _df_cruz = _df_cruz[_df_cruz["Departamento"] == _dep_sel]
-
-                    if _df_cruz.empty:
-                        st.info("Nenhuma linha do MRO no cruzamento para o filtro atual.")
-                    else:
-                        st.dataframe(
-                            _df_cruz, width="stretch", hide_index=True, height=460,
-                            column_config={
-                                "Qty (SC)": st.column_config.NumberColumn(format="%.0f"),
-                                "Qtd Entregue": st.column_config.NumberColumn(format="%.0f"),
-                                "Saldo": st.column_config.NumberColumn(format="%.0f"),
-                            })
-                        _buf_cz = io.BytesIO()
-                        with pd.ExcelWriter(_buf_cz, engine="openpyxl") as _w_cz:
-                            _df_cruz.to_excel(_w_cz, index=False, sheet_name="Cruzamento")
-                        st.download_button(
-                            ":material/download: Baixar cruzamento (Excel)", data=_buf_cz.getvalue(),
-                            file_name="monitor_sc_2_cruzamento.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key="cruz_download")
-
-                    if _res["orfaos"]:
-                        with st.expander(f":material/warning: Órfãos — {len(_res['orfaos'])} PO(s) do SC7 sem SC no MRO"):
-                            st.caption("Compras (PO) de material MRO **sem SC correspondente** na planilha SCM. "
-                                       "Verifique se falta a SC ou se são compras diretas.")
-                            st.dataframe(pd.DataFrame(_res["orfaos"]), width="stretch", hide_index=True)
-        else:
-            st.info(":material/upload: Envie os **dois** arquivos crus (SCM e SC7) para gerar o cruzamento.")
-
+        # v4.11.0 — Monitor reordenado: (1) Controle Manual de Críticos (topo), (2) SCs/Itens
+        # não atendidos via API do SCM, (3) fallback de cruzamento por upload (sem rede). A
+        # grade técnica de 15 linhas (sync diário) saiu da UI — o vivo do SCM a substitui;
+        # `sincronizar_monitor_sc`/`listar_monitor_sc` seguem no db_functions só p/ regressão.
+        _render_controle_manual_criticos()
         st.divider()
-        st.markdown("### :material/sensors: Monitor de SC")
-        st.caption("Grade viva das SCs abertas — substitui a planilha FUP que ia por e-mail. "
-                   "O **sistema** preenche as colunas técnicas todo dia (incl. o **STATUS PO**, "
-                   "derivado do status da SC/PO) e mostra as **15 linhas mais urgentes**; o "
-                   "**almoxarifado** edita as manuais (Fornecedor, Comentário, Responsável), "
-                   "adiciona/apaga linhas e marca **Revisado**. Salve no botão abaixo.")
-
-        _mtop1, _mtop2 = st.columns([3, 1])
-        with _mtop2:
-            if st.button(":material/sync: Sincronizar agora", width="stretch", key="monitor_sync_btn",
-                         help="Recalcula as colunas técnicas a partir das SCs abertas (força o sync do dia)."):
-                sincronizar_monitor_sc(force=True)
-                st.rerun()
-
-        _mon_linhas = listar_monitor_sc()
-        _MON_COLS = ["SC", "Produto", "Descrição", "STATUS", "Un", "Qty Solicitada", "Saldo PO",
-                     "Esgotado em", "Faltando (d)", "PO", "STATUS PO", "Fornecedor",
-                     "Comentário", "Responsável", "Revisado", "linha_id"]
-        if _mon_linhas:
-            _df_mon = pd.DataFrame([{
-                "SC": l["numero_sc"], "Produto": l["part_number"], "Descrição": l["nome_item"],
-                "STATUS": l["status_calc"], "Un": l["unidade"], "Qty Solicitada": l["tam_po"],
-                "Saldo PO": l["saldo_po"], "Esgotado em": l["esgotado_em"],
-                "Faltando (d)": l["faltando_dias"], "PO": l["po"], "STATUS PO": l["status_po"],
-                "Fornecedor": l["fornecedor"], "Comentário": l["comentario"],
-                "Responsável": l["responsavel"], "Revisado": bool(l["revisado"]),
-                "linha_id": l["linha_id"],
-            } for l in _mon_linhas])
-        else:
-            _df_mon = pd.DataFrame({c: pd.Series(dtype="object") for c in _MON_COLS})
-            st.info("Nenhuma linha no Monitor ainda. Ao abrir com SCs em aberto, o sistema preenche "
-                    "as linhas técnicas; você também pode adicionar linhas manuais abaixo.")
-
-        _mon_edit = st.data_editor(
-            _df_mon, num_rows="dynamic", hide_index=True, width="stretch", height=560,
-            key="monitor_editor",
-            column_config={
-                "Revisado": st.column_config.CheckboxColumn(
-                    "Revisado", help="Marque quando confirmar que o material é necessário — "
-                                     "o comprador confia nesse sinal. Reseta todo dia."),
-                "Qty Solicitada": st.column_config.NumberColumn(
-                    format="%.0f", help="Quantidade solicitada na SC (qtd da linha)."),
-                "Saldo PO": st.column_config.NumberColumn(format="%.0f"),
-                "Faltando (d)": st.column_config.NumberColumn(format="%.1f"),
-                "STATUS PO": st.column_config.TextColumn(
-                    "STATUS PO", disabled=True,
-                    help="Status da SC/PO — preenchido automaticamente pelo sistema (aba SCM do "
-                         "Relatório de SCs). Não é editável."),
-                "linha_id": None,
-            },
-        )
-
-        def _mon_nz(v):
-            return None if (v is None or (isinstance(v, float) and pd.isna(v))) else v
-
-        if st.button("💾 Salvar alterações do Monitor", type="primary", key="monitor_salvar"):
-            _registros = [{
-                "numero_sc": _mon_nz(r.get("SC")), "part_number": _mon_nz(r.get("Produto")),
-                "nome_item": _mon_nz(r.get("Descrição")), "status_calc": _mon_nz(r.get("STATUS")),
-                "unidade": _mon_nz(r.get("Un")), "tam_po": _mon_nz(r.get("Qty Solicitada")),
-                "saldo_po": _mon_nz(r.get("Saldo PO")), "esgotado_em": _mon_nz(r.get("Esgotado em")),
-                "faltando_dias": _mon_nz(r.get("Faltando (d)")), "po": _mon_nz(r.get("PO")),
-                "status_po": _mon_nz(r.get("STATUS PO")), "fornecedor": _mon_nz(r.get("Fornecedor")),
-                "comentario": _mon_nz(r.get("Comentário")), "responsavel": _mon_nz(r.get("Responsável")),
-                "revisado": bool(r.get("Revisado")), "linha_id": _mon_nz(r.get("linha_id")),
-            } for _, r in _mon_edit.iterrows()]
-            _u, _i, _d = salvar_monitor_sc(_registros, [l["linha_id"] for l in _mon_linhas])
-            st.success(f":material/check_circle: Monitor salvo — {_u} atualizada(s), {_i} nova(s), {_d} removida(s).")
-            time.sleep(1.2); st.rerun()
-
-        st.caption(":material/info: **Revisado pelo Almox:** o almox revisa a linha; marcado = o comprador "
-                   "confia que aquele material é necessário. O sinal **reseta automaticamente todo dia**. "
-                   "As colunas técnicas (SC, Produto, STATUS, Saldo PO, Faltando…) são recalculadas no "
-                   "sync diário; as manuais e as linhas que você adicionar persistem.")
-
-        # v4.4.0 — Planilha LIVRE (colar do Excel): colunas genéricas A..J; a 1ª linha
-        # colada é usada como cabeçalho na pré-visualização. Independente do grid técnico
-        # e do sync — nada aqui recalcula ou apaga as colunas automáticas.
+        _render_scs_nao_atendidas()
         st.divider()
-        with st.expander(":material/table_view: Planilha livre (colar do Excel) — colunas configuráveis"):
-            st.caption("Cole um intervalo do Excel direto na grade. As colunas começam como A, B, C…, "
-                       "mas você pode **criar** e **remover** colunas próprias (persistem junto com as "
-                       "linhas). **Crie as colunas antes de colar** os dados. A **1ª linha** vira o "
-                       "cabeçalho da pré-visualização abaixo. É separada da automação: não altera as "
-                       "colunas técnicas nem o sync.")
-
-            _pl = carregar_planilha_livre()
-            if "pl_livre_cols" not in st.session_state:
-                st.session_state.pl_livre_cols = _pl["colunas"] or list("ABCDEFGHIJ")
-            _LIVRE_COLS = st.session_state.pl_livre_cols
-
-            # ── Criar / remover coluna (v4.6.0) ──
-            _pc1, _pc2 = st.columns([3, 1])
-            with _pc1:
-                _nova_col = st.text_input("Nome da nova coluna", key="pl_nova_col",
-                                          label_visibility="collapsed", placeholder="Nome da nova coluna")
-            with _pc2:
-                if st.button("➕ Criar coluna", key="pl_criar_col", width="stretch"):
-                    _nome = (_nova_col or "").strip()
-                    if not _nome:
-                        st.warning("Digite um nome para a coluna.")
-                    elif _nome in _LIVRE_COLS:
-                        st.warning("Já existe uma coluna com esse nome.")
-                    else:
-                        st.session_state.pl_livre_cols = list(_LIVRE_COLS) + [_nome]
-                        st.rerun()
-            _rem = st.multiselect("Remover coluna(s)", _LIVRE_COLS, key="pl_rem_cols")
-            if st.button("🗑️ Remover coluna(s) selecionada(s)", key="pl_remover_col", disabled=not _rem):
-                _restantes = [c for c in _LIVRE_COLS if c not in _rem]
-                st.session_state.pl_livre_cols = _restantes or list("ABCDEFGHIJ")
-                st.rerun()
-
-            _linhas_pl = _pl["linhas"]
-            if _linhas_pl:
-                _df_livre = pd.DataFrame(_linhas_pl)
-                for _c in _LIVRE_COLS:
-                    if _c not in _df_livre.columns:
-                        _df_livre[_c] = None
-                _df_livre = _df_livre.reindex(columns=_LIVRE_COLS)
-            else:
-                _df_livre = pd.DataFrame({_c: pd.Series(dtype="object") for _c in _LIVRE_COLS})
-
-            # A key inclui a assinatura das colunas → reseta a grade limpo ao criar/remover coluna.
-            _livre_edit = st.data_editor(
-                _df_livre, num_rows="dynamic", hide_index=True, width="stretch",
-                height=360, key="monitor_livre_editor__" + "|".join(_LIVRE_COLS))
-
-            if st.button("💾 Salvar planilha livre", key="monitor_livre_salvar"):
-                _regs = [
-                    {_c: _mon_nz(r.get(_c)) for _c in _LIVRE_COLS}
-                    for _, r in _livre_edit.iterrows()
-                    if any(_mon_nz(r.get(_c)) is not None for _c in _LIVRE_COLS)
-                ]
-                _n = salvar_planilha_livre(_LIVRE_COLS, _regs)
-                st.success(f":material/check_circle: Planilha livre salva ({_n} linha(s), {len(_LIVRE_COLS)} coluna(s)).")
-                time.sleep(1.0); st.rerun()
-
-            # Pré-visualização com a 1ª linha como cabeçalho.
-            if len(_livre_edit) > 1:
-                _prev = _livre_edit.reset_index(drop=True)
-                _header = [str(x) if _mon_nz(x) is not None else "" for x in _prev.iloc[0].tolist()]
-                _cols_final, _seen = [], {}
-                for _i, _h in enumerate(_header):
-                    _name = _h or f"Col{_i+1}"
-                    if _name in _seen:
-                        _seen[_name] += 1
-                        _name = f"{_name}_{_seen[_name]}"
-                    else:
-                        _seen[_name] = 0
-                    _cols_final.append(_name)
-                _corpo = _prev.iloc[1:].copy()
-                _corpo.columns = _cols_final
-                st.caption("Pré-visualização (1ª linha como cabeçalho):")
-                st.dataframe(_corpo, width="stretch", hide_index=True)
+        _render_cruzamento_upload_fallback()
 
      # ══════════════════════════════════════════════════════════════════════════════
     #   📥 IMPORTAR PROTHEUS
@@ -4021,15 +4331,10 @@ elif pagina == "Ficha 360":
         if not ficha:
             st.error("Material não encontrado.")
         else:
-            _tab_geral, _tab_guarda = st.tabs(["📋 Visão Geral", "☂️ Guarda-Chuva (pedidos)"])
-            with _tab_geral:
-                _render_ficha_visao_geral(ficha)
-            with _tab_guarda:
-                _render_ficha_guarda_chuva(ficha)
-            # v4.5.7 — dialog de edição/recebimento de pedido; abre quando um card marca o
-            # estado (padrão do _drill_modal). Lê o item_sc_id de session_state.
-            if st.session_state.get("_gc_pedido_edit"):
-                _dialog_pedido_guarda_chuva()
+            # v4.9.0 — a sub-aba Guarda-Chuva saiu da Ficha 360 e virou um controle
+            # próprio e manual em "Controle de SC → ☂️ Guarda-Chuva" (tabela guarda_chuva).
+            # A Ficha 360 volta a ser só a Visão Geral (read-only).
+            _render_ficha_visao_geral(ficha)
 # ══════════════════════════════════════════════════════════════════════════════
 # FEEDBACK / SUGESTÕES (Item 3 / v2.1.0)
 # ══════════════════════════════════════════════════════════════════════════════
