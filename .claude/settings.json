@@ -1,18 +1,9 @@
-﻿{
-    "mro_framework_reference":  "Consulte CLAUDE.md no repositório para detalhes completos",
-    "critical_checkpoints":  {
-                                 "qa":  "QA SEMPRE testa: regressão, cálculos com dados reais",
-                                 "database":  "Database Engineer SEMPRE revisa: migrações, schema, rollback",
-                                 "supply_chain":  "Supply Chain Specialist SEMPRE valida: cálculos, regras, Protheus"
-                             },
-    "description":  "Sistema MRO - Configurações do Claude Code para aplicar MRO Skills Framework",
-    "instructions":  {
-                         "session_start":  [
-                                               "🎯 ATENÇÃO: Este é um projeto MRO real com impacto direto na operação industrial",
-                                               "Ler CLAUDE.md para entender o framework de 9 skills OBRIGATÓRIO",
-                                               "Fluxo obrigatório: entender → impactos → análise skills → consolidar → aprovar → implementar",
-                                               "Nenhuma alteração sem aprovação explícita de todas as skills relevantes"
-                                           ]
-                     },
-    "mro_framework_enabled":  true
+{
+    "description": "Sistema MRO — Configurações do Claude Code",
+    "instructions": {
+        "session_start": [
+            "Leia CLAUDE.md: mapa de módulos, política de economia de contexto e regras invioláveis.",
+            "Pedido de evolução (feature/bug/cálculo/tela/KPI) → invoque a Skill atualizar-sistema-mro."
+        ]
+    }
 }

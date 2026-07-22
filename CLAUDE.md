@@ -1,92 +1,56 @@
 # Sistema MRO — Project Instructions
 
-## Objetivo
+Base operacional do Sistema MRO da Inventus Power (materiais improdutivos, estoque, reposição,
+compras, curva ABC, cobertura, lead time, dashboards, KPIs, integração Protheus/SCM). Streamlit +
+SQLite. Você sabe ler código — este arquivo só diz **onde está cada coisa** e como não desperdiçar
+contexto.
 
-Este repositório é a base operacional do Sistema MRO da Inventus Power. O projeto envolve gestão de materiais improdutivos, controle de estoque, reposição, compras, curva ABC, cobertura, lead time, dashboards, KPIs, relatórios e banco SQLite, com interface Streamlit.
+## Onde está cada coisa
 
-## Arquitetura esperada
+| Domínio | Arquivo |
+|---|---|
+| UI / telas / abas | `app.py` |
+| Lógica + acesso a dados | `services/db_functions.py` |
+| Banco / schema / migração | `database.py`, `migrations/` |
+| Planejamento (min/máx, cobertura, lead time) | `services/planejamento.py` |
+| Curva ABC / classificação de demanda | `services/classificacao.py` |
+| Dashboards / KPIs / drill-down | `services/dashboards.py`, `services/drill_down.py` |
+| Ficha 360 | `services/ficha.py` |
+| SCM / Monitor de SC | `services/monitor_scm.py`, `services/monitor_cruzamento.py`, `services/scm_client.py` |
+| Constantes / tema / estilos | `services/constants.py`, `services/tema.py`, `services/styles.py` |
+| Testes (regressão por versão) | `tests/test_vXXX_*.py` |
+| Continuidade / backlog | `docs/HANDOFF.md` (seção "STATUS ATUAL" no topo), `docs/prompt.md` |
+| Changelog | `changelog/*.md` |
 
-- Interface: Streamlit, com páginas e componentes organizados para evolução contínua.
-- Lógica de negócio: módulos em services, controllers e repositories.
-- Dados: SQLite com schema versionado, backup e migração explícita.
-- Documentação: arquivos em docs/ e templates reutilizáveis em templates/.
-- Automação: scripts e hooks para validação antes, durante e após alterações.
+`controllers/`, `repositories/`, `models/`, `core/` estão **vazios** (só `__init__.py`) — não há
+lógica ali.
 
-## Regras do projeto
+## Política de economia de contexto
 
-1. Preservar compatibilidade com o app atual e com os dados armazenados em mro.db.
-2. Nunca introduzir duplicação de lógica quando uma função ou serviço já existe.
-3. Nunca alterar regras de negócio sem contexto, impacto e testes.
+- Ler apenas os módulos relacionados ao pedido; nunca varrer o projeto inteiro sem necessidade.
+- Usar `graphify query`/`explain` para localizar impacto **antes** de abrir `app.py` ou
+  `db_functions.py` (são grandes).
+- Reutilizar funções existentes — nunca duplicar lógica que já existe.
+- Preferir extensão incremental a criar arquivo novo; todo arquivo novo precisa de justificativa.
+- Não reescrever código estável; não criar abstrações antecipadas (YAGNI).
+- Manter o menor número possível de Skills e Subagentes.
+
+## Regras invioláveis
+
+1. Preservar compatibilidade com `mro.db` e com o app atual.
+2. Nunca duplicar lógica quando uma função já existe.
+3. Nunca alterar regra de negócio/cálculo sem contexto, impacto e testes.
 4. Nunca alterar schema sem backup, migração e validação.
-5. Priorizar evolução incremental, modular e segura.
-6. Manter labels e mensagens em português, alinhadas à operação real.
+5. Labels e mensagens sempre em português, alinhadas à operação real.
+6. Commit só após validação no app real **e** OK explícito do usuário.
 
-## Padrões obrigatórios
+## Fluxo
 
-- Clean Code
-- SOLID
-- DRY
-- KISS
-- PEP8
-- Type hints sempre que possível
-- Docstrings em funções e módulos relevantes
-- Baixo acoplamento e alta coesão
-- Modularização por responsabilidade
-- Testes para regressão e validação de cálculos
+Qualquer pedido de evolução ("quero atualizar o Sistema MRO", nova tela, bug, cálculo, KPI,
+dashboard) → invoque a Skill `atualizar-sistema-mro` (`.claude/skills/`). Ela organiza requisitos,
+mapeia impacto, planeja versão/backlog e só implementa após aprovação.
 
-## Convenções
+## Graphify e Vault
 
-- Arquivos Python em snake_case.
-- Funções e variáveis com nomes claros e descritivos.
-- Módulos de negócio não devem ficar concentrados em app.py.
-- Novas telas devem ser organizadas por contexto e reutilizar componentes.
-- Alterações operacionais devem registrar impacto, logs e changelog.
-
-## Fluxo de desenvolvimento
-
-1. Entender o problema e o contexto operacional.
-2. Mapear impacto técnico, regulatório e de dados.
-3. Propor solução com baixo risco.
-4. Planejar implementação e validação.
-5. Implementar por camada.
-6. Validar com testes e com dados reais.
-7. Documentar e atualizar changelog.
-8. Sugerir evolução futura.
-
-## Comportamento esperado do agente
-
-- Trabalhar como arquiteto sênior e desenvolvedor responsável pelo sistema.
-- Priorizar estabilidade, rastreabilidade e facilidade de manutenção.
-- Sempre explicar impacto antes de alterar comportamento crítico.
-- Solicitar aprovação explícita antes de mudanças de alto risco.
-- Usar as skills disponíveis em .claude/skills/ sempre que a tarefa envolver evolução do sistema MRO.
-- Garantir que todo fechamento de tarefa passe por validação de sintaxe, testes e documentação.
-
-## Tecnologias principais
-
-- Python
-- Streamlit
-- SQLite
-- Pandas
-- NumPy
-- Plotly
-- OpenPyXL
-- pytest
-
-## Padrões de resposta da IA
-
-- Responder com contexto, impacto, plano, implementação e validação.
-- Sempre separar entendimento do problema, solução proposta e próximos passos.
-- Em mudanças relevantes, parar no plano e pedir aprovação antes de implementar.
-- Incluir riscos e melhorias futuras ao encerrar uma tarefa.
-
-## Hooks e automação
-
-- Antes de editar: validar arquitetura, dependências e duplicação.
-- Após editar: validar sintaxe, organizar imports e revisar modularização.
-- Antes de finalizar: revisar código, buscar bugs, atualizar docs e changelog.
-
-## Observações relevantes
-
-- O graphify é um auxílio de navegação opcional; não deve ser atualizado automaticamente.
-- O vault Obsidian não deve ser modificado, salvo quando o pedido explicitamente envolver apresentação/KPI mensal.
+- Graphify é navegação; código é a fonte da verdade. Não atualizar automaticamente.
+- Vault Obsidian não deve ser modificado, salvo pedido explícito envolvendo apresentação/KPI mensal.

@@ -39,10 +39,9 @@ Este repositório foi organizado para funcionar como uma base de desenvolvimento
 - backups/: snapshots e cópias de segurança.
 - migrations/: histórico de mudanças de schema.
 - config/: configuração do projeto.
-- prompts/: templates reutilizáveis para IA.
-- skills/: knowledge base operacional para agentes.
-- hooks/: validações automáticas antes, durante e após a edição.
 - templates/: modelos de changelog, PR e documentação.
+- .claude/skills/atualizar-sistema-mro/: Skill do Claude Code (Product Owner técnico do fluxo de mudanças).
+- .claude/agents/validador-mro.md: subagente de validação (testes + regressão) do Claude Code.
 
 ## Documentação relevante
 
