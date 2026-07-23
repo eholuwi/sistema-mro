@@ -549,6 +549,10 @@ def criar_banco():
         "sc_id_scm": "INTEGER",
         "centro_custo": "TEXT",
         "data_sync_api": "TEXT",
+        # v5.2.0 (F3) — código da cotação (CTxxxxx) vindo do ByUser; ponte para o detalhe
+        # "ao vivo" da cotação (GetByCodigo) na página SCM Integrado. Já era extraído por
+        # normalizar_sc_api; agora é persistido.
+        "cotacao_codigo": "TEXT",
     }
     for col, tipo in novas_cols_sc.items():
         if col not in cols_sc:
@@ -698,7 +702,7 @@ def criar_banco():
 
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 5.1.0")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 5.2.0")
 
 
 def _migrar(conn):

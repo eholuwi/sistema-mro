@@ -259,11 +259,12 @@ def _upsert_sc_api(conn, cab, itens, resumo, divergencias):
                 solicitante=COALESCE(?, solicitante),
                 descricao_solicitacao=COALESCE(?, descricao_solicitacao),
                 observacoes=COALESCE(?, observacoes),
+                cotacao_codigo=COALESCE(?, cotacao_codigo),
                 prioridade_critica=?, origem_importacao=?, data_importacao=?, data_sync_api=?
             WHERE id=?
         """, (cab["sc_id_scm"], status_final, cab["status_code"], cab["data_abertura"],
               cab["data_aprovacao"], cab["centro_custo"], cab["solicitante"] or None,
-              cab["descricao_sc"], cab["justificativa"] or None,
+              cab["descricao_sc"], cab["justificativa"] or None, cab["cotacao_codigo"],
               1 if cab["prioridade_critica"] else 0, "api_scm", agora, agora, sc_id))
         resumo["scs_atualizadas"] += 1
     else:
@@ -273,12 +274,12 @@ def _upsert_sc_api(conn, cab, itens, resumo, divergencias):
             INSERT INTO solicitacoes_compra
                 (numero_sc, sc_id_scm, data_abertura, data_aprovacao, centro_custo, status,
                  observacoes, solicitante, descricao_solicitacao, status_protheus,
-                 prioridade_critica, origem_importacao, data_importacao, data_sync_api)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 cotacao_codigo, prioridade_critica, origem_importacao, data_importacao, data_sync_api)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (cab["numero_sc"], cab["sc_id_scm"], data_abertura, cab["data_aprovacao"],
               cab["centro_custo"], api_status, cab["justificativa"] or None,
               cab["solicitante"] or None, cab["descricao_sc"], cab["status_code"],
-              1 if cab["prioridade_critica"] else 0, "api_scm", agora, agora))
+              cab["cotacao_codigo"], 1 if cab["prioridade_critica"] else 0, "api_scm", agora, agora))
         sc_id = cur.lastrowid
         resumo["scs_criadas"] += 1
     for it in itens:

@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from ui.paginas import ajuda, configuracoes
+from ui.paginas import ajuda, configuracoes, scm_integrado
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,7 @@ ROTAS: dict[str, Rota] = {
     "Gerenciar Itens":  Rota("plus-circle"),             # inline (F4)
     "Movimentação":     Rota("arrow-repeat"),            # inline (F4b)
     "Controle de SC":   Rota("receipt"),                 # inline (F4)
+    "SCM Integrado":    Rota("cloud-check", scm_integrado.render),   # F3 — consulta unificada
     "Ajuda":            Rota("question-circle", ajuda.render),
     "Configurações":    Rota("gear", configuracoes.render),
 }

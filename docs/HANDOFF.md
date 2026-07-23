@@ -8,6 +8,26 @@
 
 ## STATUS ATUAL — atualizado em 23/07/2026 (leia isto, não a seção 1-7 abaixo para status)
 
+- **Evolução v5.x — F3 (v5.2.0) IMPLEMENTADA — aguardando OK no app real + commit.** Na branch
+  `feat/v5.0.0` (sobre a F2 `c85390d`, ainda não commitada). **Página SCM Integrado** (menu, abaixo de
+  Controle de SC): consulta unificada das SCs do banco (Excel E/OU API), 3 abas — **Solicitações de
+  Compra** / **Itens das SCs** / **Detalhes da SC**. O botão **"Atualizar agora"** (sync API→banco)
+  saiu da aba Monitor (onde era provisório na F2) e virou o **cabeçalho** desta página; a aba Monitor
+  agora só tem um aviso apontando para cá. Novos: `ui/paginas/scm_integrado.py`, **pacote
+  `ui/componentes/`** (`filtros.py::barra_filtros` com pesquisa acento-insensível + `st.pills` +
+  avançados; `tabela.py::tabela_paginada` com seleção de linha→Detalhes; `status.py::badge_origem`/
+  `ponto_status_api`), `services/scm_consulta.py` (puro: `listar_scs_consulta`/`listar_itens_consulta`/
+  `detalhes_sc_banco`/`detalhes_sc_api`). `scm_client.py` **+3 endpoints** (`sc_timeline_v2`,
+  `cotacao_por_codigo`, `aprovadores_pedido`) para o "ao vivo da API" da aba Detalhes (busca **sob
+  demanda**, botão — `render()` é livre de rede). Migração **aditiva** (backup): `solicitacoes_compra`
+  += `cotacao_codigo` (TEXT), agora persistido por `_upsert_sc_api` (já vinha de `normalizar_sc_api`).
+  Testes: **novo `tests/test_v520_scm_integrado.py`** (consulta pura + `detalhes_sc_api` off/online/
+  bloco-falho com cliente FALSO + funções puras de filtros/tabela + 3 endpoints; `test_v500_router`
+  cobre o smoke da página nova sobre banco vazio). Ver `changelog/5.2.0.md`. ⚠️ **Códigos de status da
+  API e a filial `"01"`** (usada em Pedido/aprovadores) seguem as premissas da F2 — validar no app real.
+  **Recomenda-se validar no app real** (API ligada na rede Inventus, cópia do `mro.db`): 3 abas com API
+  on/off, clique linha→Detalhes, "Buscar dados ao vivo", "Atualizar agora" ainda grava, Monitor sem a
+  UI antiga, Movimentação/Ficha 360 intactas.
 - **Evolução v5.x — F2 (v5.1.0) COMMITADA.** Commit `c85390d` na branch `feat/v5.0.0` (ainda **não
   pushada** — rodar `git push` quando conveniente). Sincronização SCM persistente **API → `mro.db`**:
   botão **"Atualizar agora"** (aba Monitor) puxa as SCs dos solicitantes MRO (cabeçalho via `ByUser` +
@@ -45,10 +65,11 @@
   chamam `invalidar_leituras()`; a sidebar segue leitura direta p/ não arriscar métrica velha);
   `ui/componentes/` (graficos/selecao/drill_down) **adiados p/ F4** (usados só pelos `_render_*`
   inline — mover antes seria churn sem ganho). Validação manual no app real recomendada antes de seguir p/ a F2.
-- **🎯 PRÓXIMO — plano aprovado:** `docs/PLANO_V5_EVOLUCAO.md`. Depois do commit da F2: **F3 (v5.2.0)**
-  página **SCM Integrado** (3 abas: Solicitações/Itens/Detalhes) + componentes filtro/tabela
-  reutilizáveis (move a sync UI provisória da aba Monitor para lá), **F4a/F4b** migração das demais
-  páginas (Ficha 360 e Movimentação por último) + cache pleno, **F5 (v5.5.0)** distribuição via servidor.
+- **🎯 PRÓXIMO — plano aprovado:** `docs/PLANO_V5_EVOLUCAO.md`. Depois do commit da F3: **F4a (v5.3.0)**
+  migrar **Saldo em Estoque, Gerenciar Itens, Dashboard, Controle de SC** para `ui/paginas/` adotando
+  `barra_filtros`/`tabela_paginada` (já prontos na F3) + cache nos assemblers; **F4b (v5.4.0)** migrar
+  **Ficha 360** e **Movimentação** (críticas, por último, 1 commit por página) + passada global de UX;
+  **F5 (v5.5.0)** distribuição no PC-servidor (Python embeddable + navegador).
 - **Versão anterior: v4.7.0 — Requisição Digital (MVP).** Implementada e testada em
   `feat/v3.10.0-4.0.0-ux-redesign`; **aguardando commit** (o commit é feito só após o OK do Luis +
   validação no app real, regra do projeto). A **Requisição** ganhou **ciclo de vida**:
@@ -87,16 +108,15 @@
 ```
 Continuar o Sistema MRO (Inventus Power). Leia @docs/HANDOFF.md (seção "STATUS ATUAL" no topo) e
 @docs/PLANO_V5_EVOLUCAO.md — plano da grande evolução v5.x já aprovado (SCM Integrado com sync
-API→banco, refatoração faseada do app.py, distribuição via servidor). F1 (v5.0.0, fundação da UI
-modular) e F2 (v5.1.0, sincronização SCM persistente API→mro.db) já estão COMMITADAS (ba01f61,
-c85390d) na branch feat/v5.0.0 — ainda NÃO pushadas (rode `git push` quando conveniente); 444
-testes verdes + smoke E2E OK. Recomenda-se validar a F2 no app real (sync com API ligada numa
-cópia do mro.db) antes de seguir, se ainda não foi feito. Trabalhe na branch feat/v5.0.0 (git pull
-antes). Próximo: F3 (v5.2.0) — página SCM Integrado (3 abas: Solicitações/Itens/Detalhes) +
-componentes filtro/tabela reutilizáveis (ui/componentes/filtros.py, tabela.py, status.py) +
-services/scm_consulta.py; move a sync UI provisória da aba Monitor para lá. Siga a skill
-atualizar-sistema-mro, valide cada fase (pytest + smoke + app real) e PARE para aprovação antes de
-cada commit.
+API→banco, refatoração faseada do app.py, distribuição via servidor). F1 (v5.0.0) e F2 (v5.1.0) já
+COMMITADAS (ba01f61, c85390d) na branch feat/v5.0.0. F3 (v5.2.0, página SCM Integrado + componentes
+ui/componentes/ + services/scm_consulta.py) está IMPLEMENTADA e com testes verdes, mas AINDA NÃO
+COMMITADA — aguardando validação no app real + OK do Luis (regra do projeto). Nenhuma das 3 fases
+foi pushada (rode `git push` quando conveniente). Trabalhe na branch feat/v5.0.0 (git pull antes).
+Se a F3 já foi aprovada/commitada, o próximo é F4a (v5.3.0): migrar Saldo em Estoque, Gerenciar
+Itens, Dashboard e Controle de SC para ui/paginas/ adotando barra_filtros/tabela_paginada + cache
+nos assemblers. Siga a skill atualizar-sistema-mro, valide cada fase (pytest + smoke + app real) e
+PARE para aprovação antes de cada commit.
 ```
 
 ---

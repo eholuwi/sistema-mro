@@ -155,6 +155,31 @@ def pedido(filial, numero):
     return _get(f"/Pedidos/ByNumero/{filial}/{numero}")
 
 
+# ── v5.2.0 (F3) — endpoints do "ao vivo da API" da página SCM Integrado ────────
+
+@_cache(ttl=900)
+def sc_timeline_v2(sc_id):
+    """`GET /SolicitacaoCompras/Timelinev2/{id}` — linha do tempo em EVENTOS (`title`,
+    `created`, `information`, `typeProcess`). Envelope `Result<TimelineEvento[]>`.
+    Complementa `sc_timeline` (que traz os itens): aqui é o histórico do fluxo da SC."""
+    return _get(f"/SolicitacaoCompras/Timelinev2/{sc_id}")
+
+
+@_cache(ttl=900)
+def cotacao_por_codigo(codigo):
+    """`GET /Cotacao/GetByCodigo/{codigo}` — detalhe da cotação (`CTxxxxx`): status,
+    comprador, fornecedores/produtos/valores. Envelope `Result<T>`."""
+    return _get(f"/Cotacao/GetByCodigo/{codigo}")
+
+
+@_cache(ttl=900)
+def aprovadores_pedido(filial, numero):
+    """`GET /Pedidos/getAprovadores/{filial}/{numero}` — aprovadores do pedido (Protheus
+    SCR — `CR_NIVEL`, `CR_USER`, `AK_NOME`, `CR_STATUS`, `CR_DATALIB`). `CR_STATUS`: '01'
+    pendente, '02' liberado (doc SCM §7.12)."""
+    return _get(f"/Pedidos/getAprovadores/{filial}/{numero}")
+
+
 def esta_disponivel(timeout=10):
     """Teste de conectividade LEVE (endpoint pequeno `/Usuario/Compradores`). True se a
     API respondeu; False em qualquer erro de rede/HTTP. NÃO cacheia (é health-check)."""

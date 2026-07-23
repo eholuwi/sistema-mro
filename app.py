@@ -58,7 +58,6 @@ from services.ficha import (
 )
 from services.monitor_cruzamento import preparar_df, cruzar_scm_sc7, COLUNAS_SAIDA
 from services import scm_client
-from services import scm_sync
 from services.monitor_scm import cotacoes_no_escopo, montar_scs_nao_atendidas, COLUNAS_SCS_NAO_ATENDIDAS
 from services.dashboards import (
     montar_dashboard, montar_visao_compras_mro, montar_visao_almoxarifado,
@@ -68,7 +67,6 @@ from ui.tema import paleta_atual
 from ui.formatos import fmt, fmt_date_input
 from ui.sidebar import render_sidebar
 from ui.router import ROTAS_MIGRADAS, render_pagina
-from ui.cache import invalidar_leituras
 
 setup_logging()
 criar_banco()
@@ -87,7 +85,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 5.1.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 5.2.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 # Paleta única do tema escolhido (via ui.tema.paleta_atual) — consumida pelo CSS
@@ -2337,64 +2335,6 @@ def _render_controle_manual_criticos():
         st.dataframe(_corpo, width="stretch", hide_index=True)
 
 
-def _render_sync_scm_api():
-    """v5.1.0 (F2) — Sincronização SCM persistente (API → mro.db). UI provisória na aba
-    Monitor; migra para a página 'SCM Integrado' na F3. Puxa as SCs dos solicitantes MRO
-    (ByUser + Timeline) e grava no banco; o Relatório de SCs (Excel) segue como alternativa."""
-    st.markdown("### :material/cloud_sync: Sincronização SCM (API → banco)")
-    st.caption("Puxa as SCs dos **solicitantes MRO** direto da API do SCM e **grava no banco** "
-               "(status, datas, itens, preços, itens fora do inventário). O **Relatório de SCs "
-               "(Excel)** continua valendo como alternativa/complemento — a API nunca é "
-               "dependência exclusiva. Gerencie o escopo em **Configurações › Solicitantes MRO (SCM)**.")
-
-    _u = scm_sync.ultima_sync()
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        if _u:
-            _res = (_u.get("detalhe") or {}).get("resumo", {})
-            _st = (_u.get("detalhe") or {}).get("status", "")
-            st.markdown(
-                f"**Última sincronização:** {_u['data_hora']}  ·  "
-                f"{_res.get('scs', 0)} SC(s), {_res.get('itens', 0)} item(ns), "
-                f"{_res.get('externos', 0)} externo(s)" + (f"  ·  _{_st}_" if _st else ""))
-        else:
-            st.markdown("**Última sincronização:** _nunca_ — clique em **Atualizar agora**.")
-    with c2:
-        _go = st.button(":material/sync: Atualizar agora", key="scm_sync_go",
-                        width="stretch", type="primary")
-
-    if _go:
-        with st.status("Sincronizando SCM…", expanded=True) as _s:
-            _prog = st.progress(0.0, text="Iniciando…")
-
-            def _cb(nome, i, n):
-                frac = (i / n) if n else 1.0
-                _prog.progress(min(frac, 1.0),
-                               text=(f"Sincronizando {nome}… ({i + 1}/{n})" if nome else "Concluindo…"))
-
-            resumo = scm_sync.sincronizar(progress_cb=_cb)
-            if not resumo.get("ok"):
-                _s.update(label="API do SCM indisponível", state="error")
-            else:
-                invalidar_leituras()
-                _s.update(label="Sincronização concluída", state="complete")
-
-        if not resumo.get("ok"):
-            st.warning(resumo.get("erro", "Não foi possível sincronizar. Use o Relatório de SCs (Excel)."))
-        else:
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric(":material/description: SCs", resumo["scs"])
-            m2.metric(":material/inventory_2: Itens", resumo["itens"])
-            m3.metric(":material/help_center: Externos", resumo["externos"])
-            m4.metric(":material/difference: Divergências", resumo["divergencias"])
-            st.caption(f"Solicitantes: {resumo['solicitantes']}  ·  SCs criadas: {resumo['scs_criadas']}  ·  "
-                       f"atualizadas: {resumo['scs_atualizadas']}"
-                       + (f"  ·  {len(resumo['erros'])} aviso(s)" if resumo.get("erros") else ""))
-            if resumo.get("erros"):
-                with st.expander(f"Ver {len(resumo['erros'])} aviso(s) da sincronização"):
-                    st.json(resumo["erros"])
-
-
 def _render_scs_nao_atendidas():
     """v4.11.0 — 'SCs/Itens não atendidos' via API do SCM: SCs do almoxarifado em fase de
     cotação (sem pedido) cruzadas com o estoque MRO. Read-only, carregado sob demanda."""
@@ -3454,9 +3394,12 @@ elif pagina == "Controle de SC":
         # não atendidos via API do SCM, (3) fallback de cruzamento por upload (sem rede). A
         # grade técnica de 15 linhas (sync diário) saiu da UI — o vivo do SCM a substitui;
         # `sincronizar_monitor_sc`/`listar_monitor_sc` seguem no db_functions só p/ regressão.
+        # v5.2.0 (F3) — a sincronização SCM (API → banco) e a consulta das SCs migraram para
+        # a página **SCM Integrado** (menu, abaixo de Controle de SC).
         _render_controle_manual_criticos()
         st.divider()
-        _render_sync_scm_api()
+        st.info(":material/cloud_sync: A **sincronização SCM (API → banco)** e a consulta "
+                "unificada das SCs agora vivem na página **SCM Integrado** (menu lateral).")
         st.divider()
         _render_scs_nao_atendidas()
         st.divider()
