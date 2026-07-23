@@ -8,6 +8,27 @@
 
 ## STATUS ATUAL — atualizado em 23/07/2026 (leia isto, não a seção 1-7 abaixo para status)
 
+- **Evolução v5.x — F2 (v5.1.0) COMMITADA.** Commit `c85390d` na branch `feat/v5.0.0` (ainda **não
+  pushada** — rodar `git push` quando conveniente). Sincronização SCM persistente **API → `mro.db`**:
+  botão **"Atualizar agora"** (aba Monitor) puxa as SCs dos solicitantes MRO (cabeçalho via `ByUser` +
+  itens via `Timeline`) e grava no banco (status/datas/centro de custo/itens/preços); **Excel vira
+  fallback**, a API nunca é dependência exclusiva. Novos: `services/scm_sync.py` (parsers puros +
+  orquestrador `sincronizar`, dedup COALESCE vs Excel, **nunca rebaixa status** via rank, log
+  `api_scm`), endpoints `sc_por_usuario`/`usuarios` em `scm_client.py`. Migração **aditiva** (backup):
+  `solicitacoes_compra` += `sc_id_scm`/`centro_custo`/`data_sync_api`; `itens_sc` += `origem`;
+  `solicitantes_mro` += `codigo`; **nova `itens_sc_externos`** (itens com PN fora do inventário — antes
+  descartados; agora capturados no Excel E na API). **Configurações › Solicitantes MRO (SCM)**: gerir o
+  escopo (incluir/remover, código Protheus, "Resolver códigos via API"). Testes: **444 verdes**
+  (baseline 431 + `tests/test_v510_scm_sync.py` + 2 no `test_scm_client.py`; `test_pn_inexistente`
+  virou captura em externos) + smoke `test_v500_router.py`; smoke E2E manual (Controle de SC +
+  Configurações) OK. Ver `changelog/5.1.0.md`. **Recomenda-se ainda validar no app real** (com a API
+  acessível na rede Inventus): sync contra **cópia** do `mro.db` (SCs/itens populam), re-import do
+  Excel do dia seguinte (não duplica/regride), sync com API off (falha graciosa), Movimentação/Ficha
+  360 intactas — nenhum bloqueador identificado até aqui, mas ainda não testado fora de fixtures/mocks.
+  ⚠️ **Códigos de status da API (`01/03/05/09`) são inferidos** (§7.13 da doc SCM) — o código cru fica
+  em `status_protheus`; ajustar `_STATUS_SC_API` em `scm_sync.py` se o dado real divergir. Códigos dos
+  solicitantes atuais (Luis/Jasiva/Sidinei/Juan) são resolvidos por nome via `/Usuario` no 1º sync (ou
+  à mão em Configurações).
 - **Evolução v5.x — F1 (v5.0.0) COMMITADA e no remoto.** Commit `ba01f61` na branch
   `feat/v5.0.0` (de `feat/v3.10.0-4.0.0-ux-redesign`; já com `git push -u origin feat/v5.0.0`). F1 = fundação da
   refatoração: novo pacote **`ui/`** — `router.py` (fonte única do menu: `ROTAS`,
@@ -24,10 +45,10 @@
   chamam `invalidar_leituras()`; a sidebar segue leitura direta p/ não arriscar métrica velha);
   `ui/componentes/` (graficos/selecao/drill_down) **adiados p/ F4** (usados só pelos `_render_*`
   inline — mover antes seria churn sem ganho). Validação manual no app real recomendada antes de seguir p/ a F2.
-- **🎯 PRÓXIMO — plano aprovado:** `docs/PLANO_V5_EVOLUCAO.md`. Depois do commit da F1: **F2
-  (v5.1.0)** sincronização SCM persistente API→`mro.db` (Excel vira fallback), **F3 (v5.2.0)**
-  página **SCM Integrado** (3 abas), **F4a/F4b** migração das demais páginas (Ficha 360 e
-  Movimentação por último) + cache pleno, **F5 (v5.5.0)** distribuição via servidor.
+- **🎯 PRÓXIMO — plano aprovado:** `docs/PLANO_V5_EVOLUCAO.md`. Depois do commit da F2: **F3 (v5.2.0)**
+  página **SCM Integrado** (3 abas: Solicitações/Itens/Detalhes) + componentes filtro/tabela
+  reutilizáveis (move a sync UI provisória da aba Monitor para lá), **F4a/F4b** migração das demais
+  páginas (Ficha 360 e Movimentação por último) + cache pleno, **F5 (v5.5.0)** distribuição via servidor.
 - **Versão anterior: v4.7.0 — Requisição Digital (MVP).** Implementada e testada em
   `feat/v3.10.0-4.0.0-ux-redesign`; **aguardando commit** (o commit é feito só após o OK do Luis +
   validação no app real, regra do projeto). A **Requisição** ganhou **ciclo de vida**:
@@ -66,12 +87,16 @@
 ```
 Continuar o Sistema MRO (Inventus Power). Leia @docs/HANDOFF.md (seção "STATUS ATUAL" no topo) e
 @docs/PLANO_V5_EVOLUCAO.md — plano da grande evolução v5.x já aprovado (SCM Integrado com sync
-API→banco, refatoração faseada do app.py, distribuição via servidor). A F1 (v5.0.0 — fundação da
-UI modular: pacote ui/, router, sidebar, Ajuda/Configurações) já está COMMITADA (ba01f61) e no
-remoto (origin/feat/v5.0.0); 431 testes verdes + smoke E2E das 8 páginas OK. Trabalhe na branch
-feat/v5.0.0 (git pull antes). Próximo: F2 (v5.1.0) — sincronização SCM persistente API→mro.db
-(Excel vira fallback). Siga a skill atualizar-sistema-mro, valide cada fase (pytest + smoke + app
-real) e PARE para aprovação antes de cada commit.
+API→banco, refatoração faseada do app.py, distribuição via servidor). F1 (v5.0.0, fundação da UI
+modular) e F2 (v5.1.0, sincronização SCM persistente API→mro.db) já estão COMMITADAS (ba01f61,
+c85390d) na branch feat/v5.0.0 — ainda NÃO pushadas (rode `git push` quando conveniente); 444
+testes verdes + smoke E2E OK. Recomenda-se validar a F2 no app real (sync com API ligada numa
+cópia do mro.db) antes de seguir, se ainda não foi feito. Trabalhe na branch feat/v5.0.0 (git pull
+antes). Próximo: F3 (v5.2.0) — página SCM Integrado (3 abas: Solicitações/Itens/Detalhes) +
+componentes filtro/tabela reutilizáveis (ui/componentes/filtros.py, tabela.py, status.py) +
+services/scm_consulta.py; move a sync UI provisória da aba Monitor para lá. Siga a skill
+atualizar-sistema-mro, valide cada fase (pytest + smoke + app real) e PARE para aprovação antes de
+cada commit.
 ```
 
 ---
