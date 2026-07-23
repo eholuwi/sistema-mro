@@ -8,8 +8,10 @@
 
 ## STATUS ATUAL — atualizado em 23/07/2026 (leia isto, não a seção 1-7 abaixo para status)
 
-- **Evolução v5.x — F3 (v5.2.0) IMPLEMENTADA — aguardando OK no app real + commit.** Na branch
-  `feat/v5.0.0` (sobre a F2 `c85390d`, ainda não commitada). **Página SCM Integrado** (menu, abaixo de
+- **Evolução v5.x — F3 (v5.2.0) COMMITADA e no remoto.** Commit `3721a57` na branch `feat/v5.0.0`
+  (já pushado — F1/F2/F3 todas no `origin/feat/v5.0.0`). **Validação no app real ainda pendente** (o
+  Luis autorizou o commit/push com base na suíte + smoke render semeado; ainda não abriu o Streamlit
+  rodando). **Página SCM Integrado** (menu, abaixo de
   Controle de SC): consulta unificada das SCs do banco (Excel E/OU API), 3 abas — **Solicitações de
   Compra** / **Itens das SCs** / **Detalhes da SC**. O botão **"Atualizar agora"** (sync API→banco)
   saiu da aba Monitor (onde era provisório na F2) e virou o **cabeçalho** desta página; a aba Monitor
@@ -28,9 +30,10 @@
   **Recomenda-se validar no app real** (API ligada na rede Inventus, cópia do `mro.db`): 3 abas com API
   on/off, clique linha→Detalhes, "Buscar dados ao vivo", "Atualizar agora" ainda grava, Monitor sem a
   UI antiga, Movimentação/Ficha 360 intactas.
-- **Evolução v5.x — F2 (v5.1.0) COMMITADA.** Commit `c85390d` na branch `feat/v5.0.0` (ainda **não
-  pushada** — rodar `git push` quando conveniente). Sincronização SCM persistente **API → `mro.db`**:
-  botão **"Atualizar agora"** (aba Monitor) puxa as SCs dos solicitantes MRO (cabeçalho via `ByUser` +
+- **Evolução v5.x — F2 (v5.1.0) COMMITADA e no remoto.** Commit `c85390d` na branch `feat/v5.0.0`
+  (pushado junto com a F3). Sincronização SCM persistente **API → `mro.db`**:
+  botão **"Atualizar agora"** (era na aba Monitor; na F3 migrou p/ o cabeçalho da página SCM
+  Integrado) puxa as SCs dos solicitantes MRO (cabeçalho via `ByUser` +
   itens via `Timeline`) e grava no banco (status/datas/centro de custo/itens/preços); **Excel vira
   fallback**, a API nunca é dependência exclusiva. Novos: `services/scm_sync.py` (parsers puros +
   orquestrador `sincronizar`, dedup COALESCE vs Excel, **nunca rebaixa status** via rank, log
@@ -108,15 +111,18 @@
 ```
 Continuar o Sistema MRO (Inventus Power). Leia @docs/HANDOFF.md (seção "STATUS ATUAL" no topo) e
 @docs/PLANO_V5_EVOLUCAO.md — plano da grande evolução v5.x já aprovado (SCM Integrado com sync
-API→banco, refatoração faseada do app.py, distribuição via servidor). F1 (v5.0.0) e F2 (v5.1.0) já
-COMMITADAS (ba01f61, c85390d) na branch feat/v5.0.0. F3 (v5.2.0, página SCM Integrado + componentes
-ui/componentes/ + services/scm_consulta.py) está IMPLEMENTADA e com testes verdes, mas AINDA NÃO
-COMMITADA — aguardando validação no app real + OK do Luis (regra do projeto). Nenhuma das 3 fases
-foi pushada (rode `git push` quando conveniente). Trabalhe na branch feat/v5.0.0 (git pull antes).
-Se a F3 já foi aprovada/commitada, o próximo é F4a (v5.3.0): migrar Saldo em Estoque, Gerenciar
-Itens, Dashboard e Controle de SC para ui/paginas/ adotando barra_filtros/tabela_paginada + cache
-nos assemblers. Siga a skill atualizar-sistema-mro, valide cada fase (pytest + smoke + app real) e
-PARE para aprovação antes de cada commit.
+API→banco, refatoração faseada do app.py, distribuição via servidor). F1 (v5.0.0), F2 (v5.1.0) e F3
+(v5.2.0 — página SCM Integrado + pacote ui/componentes/ + services/scm_consulta.py) estão COMMITADAS
+e PUSHADAS (ba01f61, c85390d, 3721a57) na branch feat/v5.0.0; 461 testes verdes + smoke render OK.
+Trabalhe na branch feat/v5.0.0 (git pull antes). ⚠️ A F3 foi commitada/pushada com base na suíte +
+smoke render semeado, mas o Luis AINDA NÃO validou no app real — se ele ainda não abriu o Streamlit,
+comece confirmando a página SCM Integrado no app (3 abas com API on/off, clique linha→Detalhes,
+"Buscar dados ao vivo", "Atualizar agora" grava, Monitor sem a UI antiga, Movimentação/Ficha 360
+intactas). Suspeitas herdadas da F2 a checar com dado real: códigos de status da API e a filial "01"
+do "ao vivo". Próximo passo do plano: F4a (v5.3.0) — migrar Saldo em Estoque, Gerenciar Itens,
+Dashboard e Controle de SC para ui/paginas/ adotando barra_filtros/tabela_paginada (já prontos na
+F3) + cache nos assemblers. Siga a skill atualizar-sistema-mro, valide cada fase (pytest + smoke +
+app real) e PARE para aprovação antes de cada commit.
 ```
 
 ---
