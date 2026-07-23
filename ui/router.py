@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from ui.paginas import ajuda, configuracoes, saldo_estoque, scm_integrado
+from ui.paginas import ajuda, configuracoes, gerenciar_itens, saldo_estoque, scm_integrado
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,7 @@ ROTAS: dict[str, Rota] = {
     "Dashboard":        Rota("bar-chart-fill"),          # inline no app.py (migra na F4)
     "Saldo em Estoque": Rota("box-seam", saldo_estoque.render),      # F4a
     "Ficha 360":        Rota("card-image"),              # inline (F4b)
-    "Gerenciar Itens":  Rota("plus-circle"),             # inline (F4)
+    "Gerenciar Itens":  Rota("plus-circle", gerenciar_itens.render),  # F4a
     "Movimentação":     Rota("arrow-repeat"),            # inline (F4b)
     "Controle de SC":   Rota("receipt"),                 # inline (F4)
     "SCM Integrado":    Rota("cloud-check", scm_integrado.render),   # F3 — consulta unificada
