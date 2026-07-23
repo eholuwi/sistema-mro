@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from ui.paginas import ajuda, configuracoes, scm_integrado
+from ui.paginas import ajuda, configuracoes, saldo_estoque, scm_integrado
 
 
 @dataclass(frozen=True)
@@ -25,7 +25,7 @@ class Rota:
 # Ordem = ordem do menu lateral. NÃO reordenar sem intenção (muda a navegação).
 ROTAS: dict[str, Rota] = {
     "Dashboard":        Rota("bar-chart-fill"),          # inline no app.py (migra na F4)
-    "Saldo em Estoque": Rota("box-seam"),                # inline (F4)
+    "Saldo em Estoque": Rota("box-seam", saldo_estoque.render),      # F4a
     "Ficha 360":        Rota("card-image"),              # inline (F4b)
     "Gerenciar Itens":  Rota("plus-circle"),             # inline (F4)
     "Movimentação":     Rota("arrow-repeat"),            # inline (F4b)

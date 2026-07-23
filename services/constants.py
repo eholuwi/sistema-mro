@@ -267,3 +267,25 @@ XYZ_LIMIAR_Y = 1.0
 # maturidade ("baseado em N meses"). Sazonalidade exige o ciclo anual completo.
 XYZ_MIN_MESES_CONFIAVEL = 6         # abaixo → "baixa confiança"
 SAZONALIDADE_MIN_MESES = 12         # perfil sazonal só a partir de 1 ciclo anual
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v5.3.0 (F4a) — Vocabulário de cadastro / filtros (centralizado da UI)
+# ══════════════════════════════════════════════════════════════════════════════
+# Listas de opções que estavam inline no topo do app.py. Valores IDÊNTICOS — apenas
+# centralizados para as páginas migradas (Saldo em Estoque, Gerenciar Itens, Controle
+# de SC) e os blocos ainda inline consumirem de um único lugar. LIVRES na operação
+# (o cadastro aceita tipo/setor livres); aqui são só sugestões/atalhos de UI.
+
+IMPORTANCIAS = ["Parada de Linha", "Importante", "Admin"]
+
+TIPOS = ["Spare Parts", "Consumivel", "Expediente", "Uniforme", "Improdutivo",
+         "Químico", "ESD", "Vestimenta ESD", "Corte", "Ponta", "Limpeza Stencil",
+         "Impressão", "Embalagem"]
+
+SETORES = ["Improdutivo", "Engenharia de SMT", "LED DRIVER", "MANUTENÇÃO",
+           "PRODUÇÃO", "QUALIDADE", "ALMOXARIFADO", "ADMINISTRATIVO", "SESMT"]
+
+UNIDADES = ["UN", "CX", "GL", "RL", "PCT", "LT", "RM"]
+
+STATUS_SC = ["Aguardando Aprovação", "Em Cotação", "Pedido Emitido",
+             "Aguardando Entrega", "Parcial", "Recebido", "Cancelado"]
