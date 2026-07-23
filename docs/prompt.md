@@ -30,7 +30,10 @@ já o modelo que estava descrevendo, vc pode por o titulo de "SCs/Itens não ate
 
 
 3 se pudessmos integrar conforme estavamos estudando a api, acho que melhoraria isso tudo de SC
+✅ Entrevista feita, plano completo aprovado em 22/07/2026 → ver `docs/PLANO_V5_EVOLUCAO.md`
+(sincronização API→banco, página SCM Integrado, refatoração faseada, distribuição). Execução ainda
+não iniciada.
 
 4. precisamos estudar mais sobre as requisicoes digitais
-
-preciso que me entreviste bastante sobre tudo isso pra criarmos um plano completo
+Fora do escopo da evolução v5.x (decisão do Luis na entrevista) — retomar depois, como trilha
+separada (ver estudo em `docs/REQUISICOES_DIGITAIS_ESTUDO.md`).

@@ -6,9 +6,21 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 17/07/2026 (leia isto, não a seção 1-7 abaixo para status)
+## STATUS ATUAL — atualizado em 22/07/2026 (leia isto, não a seção 1-7 abaixo para status)
 
-- **Versão corrente: v4.7.0 — Requisição Digital (MVP).** Implementada e testada em
+- **Versão corrente do código: v4.10.0** (já commitada — Requisição Digital v4.7.0, Consumo/Mensal
+  v4.8.0, Guarda-Chuva manual v4.9.0, Monitor de SC via API SCM v4.10.0). Ver `changelog/`.
+- **🎯 PRÓXIMO TRABALHO — plano aprovado, pronto para executar:** `docs/PLANO_V5_EVOLUCAO.md`.
+  Grande evolução v5.x: (1) sincronização SCM persistente API→banco (hoje a API só alimenta uma
+  tabela efêmera; tudo que fica no `mro.db` vem do Excel diário — o plano inverte isso, com Excel
+  virando fallback), (2) nova página **SCM Integrado** (3 abas: Solicitações/Itens/Detalhes),
+  (3) refatoração faseada do `app.py` (~4.700 linhas monolíticas, sem cache) para `ui/` modular,
+  (4) distribuição via servidor no PC sempre ligado + acesso dos compradores (Miguel/Davi) por
+  navegador. Entrevista completa já feita com o Luis — decisões e diagnóstico técnico completo
+  estão no plano. **Nenhum código de produto foi alterado ainda.** Próximo passo: F0 (branch
+  `feat/v5.0.0`) + F1 (pacote `ui/`, router, extração de Ajuda/Configurações) — ver seção
+  "Próximo passo imediato" no fim do plano.
+- **Versão anterior: v4.7.0 — Requisição Digital (MVP).** Implementada e testada em
   `feat/v3.10.0-4.0.0-ux-redesign`; **aguardando commit** (o commit é feito só após o OK do Luis +
   validação no app real, regra do projeto). A **Requisição** ganhou **ciclo de vida**:
   `Aberta → Parcial → Entregue` (+ `Cancelada`). A **criação NÃO baixa estoque** — o pedido vai para
@@ -45,12 +57,11 @@
 **Prompt pronto para colar na próxima sessão (qualquer dispositivo):**
 ```
 Continuar o Sistema MRO (Inventus Power). Leia @docs/HANDOFF.md (seção "STATUS ATUAL" no topo) e
-@docs/prompt.md. A v4.7.0 (Requisição Digital — MVP) está implementada e testada em
-feat/v3.10.0-4.0.0-ux-redesign, aguardando eu validar no app real e autorizar o commit. Rode
-`streamlit run app.py`, teste o fluxo Movimentação → Requisição (criar → Fila → entregar parcial/
-total) e o Histórico; se estiver OK, faça o commit da v4.7.0. Depois: evoluir para website
-self-service + login (só o almoxarife opera hoje). Siga a skill atualizar-sistema-mro e PARE no
-plano para mudanças grandes.
+@docs/PLANO_V5_EVOLUCAO.md — plano da grande evolução v5.x já aprovado (SCM Integrado com sync
+API→banco, refatoração faseada do app.py, distribuição via servidor). Comece pela F0 (branch
+feat/v5.0.0 a partir de feat/v3.10.0-4.0.0-ux-redesign) e F1 (pacote ui/, router, extração de
+Ajuda/Configurações). Siga a skill atualizar-sistema-mro, valide cada fase (pytest + smoke + app
+real) e PARE para aprovação antes de cada commit.
 ```
 
 ---
