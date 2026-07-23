@@ -8,8 +8,8 @@
 
 ## STATUS ATUAL — atualizado em 23/07/2026 (leia isto, não a seção 1-7 abaixo para status)
 
-- **Evolução v5.x — F1 (v5.0.0) IMPLEMENTADA, aguardando OK no app real + commit.** Branch
-  `feat/v5.0.0` (criada a partir de `feat/v3.10.0-4.0.0-ux-redesign`). F1 = fundação da
+- **Evolução v5.x — F1 (v5.0.0) COMMITADA e no remoto.** Commit `ba01f61` na branch
+  `feat/v5.0.0` (de `feat/v3.10.0-4.0.0-ux-redesign`; já com `git push -u origin feat/v5.0.0`). F1 = fundação da
   refatoração: novo pacote **`ui/`** — `router.py` (fonte única do menu: `ROTAS`,
   `ROTAS_MIGRADAS`, `render_pagina`), `sidebar.py`, `tema.py`, `formatos.py`, `cache.py` — e as
   páginas **Ajuda** e **Configurações** migradas para `ui/paginas/` com `render()`. O `app.py`
@@ -23,8 +23,7 @@
   cache criado como infraestrutura com **ativação progressiva** (só as escritas de Configurações
   chamam `invalidar_leituras()`; a sidebar segue leitura direta p/ não arriscar métrica velha);
   `ui/componentes/` (graficos/selecao/drill_down) **adiados p/ F4** (usados só pelos `_render_*`
-  inline — mover antes seria churn sem ganho). **Ainda NÃO commitado** (regra: commit só após OK
-  no app real).
+  inline — mover antes seria churn sem ganho). Validação manual no app real recomendada antes de seguir p/ a F2.
 - **🎯 PRÓXIMO — plano aprovado:** `docs/PLANO_V5_EVOLUCAO.md`. Depois do commit da F1: **F2
   (v5.1.0)** sincronização SCM persistente API→`mro.db` (Excel vira fallback), **F3 (v5.2.0)**
   página **SCM Integrado** (3 abas), **F4a/F4b** migração das demais páginas (Ficha 360 e
@@ -67,11 +66,12 @@
 ```
 Continuar o Sistema MRO (Inventus Power). Leia @docs/HANDOFF.md (seção "STATUS ATUAL" no topo) e
 @docs/PLANO_V5_EVOLUCAO.md — plano da grande evolução v5.x já aprovado (SCM Integrado com sync
-API→banco, refatoração faseada do app.py, distribuição via servidor). F1 (v5.0.0) já implementada
-na branch feat/v5.0.0 e validada (431 testes + smoke E2E das 8 páginas). Se ainda não commitada,
-revise o diff e commite a F1 após meu OK; depois siga para a F2 (sincronização SCM persistente
-API→banco). Siga a skill atualizar-sistema-mro, valide cada fase (pytest + smoke + app real) e
-PARE para aprovação antes de cada commit.
+API→banco, refatoração faseada do app.py, distribuição via servidor). A F1 (v5.0.0 — fundação da
+UI modular: pacote ui/, router, sidebar, Ajuda/Configurações) já está COMMITADA (ba01f61) e no
+remoto (origin/feat/v5.0.0); 431 testes verdes + smoke E2E das 8 páginas OK. Trabalhe na branch
+feat/v5.0.0 (git pull antes). Próximo: F2 (v5.1.0) — sincronização SCM persistente API→mro.db
+(Excel vira fallback). Siga a skill atualizar-sistema-mro, valide cada fase (pytest + smoke + app
+real) e PARE para aprovação antes de cada commit.
 ```
 
 ---
