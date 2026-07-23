@@ -5,7 +5,6 @@ import json, io, math, os, sys, time, urllib.parse
 from streamlit_option_menu import option_menu
 from datetime import date, datetime, timedelta
 from services.styles import inject_custom_css
-from services.tema import paleta
 from services.logging_config import setup_logging
 from services.constants import (
     PREVISAO_RUPTURA_SEM_RISCO, ORDENACAO_RUPTURA_INFINITO,
@@ -57,7 +56,6 @@ from services.ficha import (
     montar_ficha_360, salvar_imagem_item, remover_imagem_item,
     agrupar_saldo_residual_por_fornecedor,
 )
-from services.ajuda_conteudo import GUIAS_PERSONA, MANUAL
 from services.monitor_cruzamento import preparar_df, cruzar_scm_sc7, COLUNAS_SAIDA
 from services import scm_client
 from services.monitor_scm import cotacoes_no_escopo, montar_scs_nao_atendidas, COLUNAS_SCS_NAO_ATENDIDAS
@@ -65,6 +63,10 @@ from services.dashboards import (
     montar_dashboard, montar_visao_compras_mro, montar_visao_almoxarifado,
     PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_EXECUTIVO,
 )
+from ui.tema import paleta_atual
+from ui.formatos import fmt, fmt_date_input
+from ui.sidebar import render_sidebar
+from ui.router import ROTAS_MIGRADAS, render_pagina
 
 setup_logging()
 criar_banco()
@@ -83,23 +85,12 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 4.10.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 5.0.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
-def tema_atual():
-    """Tema escolhido pelo usuário ('light'/'dark'), lido da URL (?tema=) para persistir
-    ao recarregar. Padrão CLARO (v4.0.0). O Streamlit 1.57 não troca o tema por código, então
-    o app o controla: um botão na sidebar grava `?tema=` e o CSS/paleta reaplica tudo."""
-    try:
-        v = st.query_params.get("tema", "light")
-    except Exception:
-        v = "light"
-    return "dark" if v == "dark" else "light"
-
-
-# Paleta única do tema escolhido — consumida pelo CSS global, pelo option_menu e pelos
-# gráficos, para tudo acompanhar claro/escuro (v2.11.0).
-PAL = paleta(tema_atual())
+# Paleta única do tema escolhido (via ui.tema.paleta_atual) — consumida pelo CSS
+# global, pelo option_menu e pelos gráficos, p/ tudo acompanhar claro/escuro (v2.11.0).
+PAL = paleta_atual()
 inject_custom_css(PAL)
 
 IMPORTANCIAS = ["Parada de Linha","Importante","Admin"]
@@ -112,23 +103,6 @@ SETORES      = ["Improdutivo","Engenharia de SMT","LED DRIVER","MANUTENÇÃO","P
 UNIDADES     = ["UN","CX","GL","RL","PCT","LT","RM"]
 STATUS_SC    = ["Aguardando Aprovação","Em Cotação","Pedido Emitido",
                 "Aguardando Entrega","Parcial","Recebido","Cancelado"]
-TIPOS_FEEDBACK = ["Sugestão de melhoria","Nova funcionalidade","Melhoria de design",
-                  "Melhoria de UI","Melhoria de UX","Relato de bug","Relato de glitch",
-                  "Problema operacional","Outra observação"]
-STATUS_FEEDBACK = ["Novo","Em análise","Planejado","Em andamento","Concluído","Recusado"]
-
-def fmt(s):
-    if not s: return "—"
-    try: return datetime.strptime(s,"%Y-%m-%d %H:%M:%S").strftime("%d/%m/%Y %H:%M")
-    except (ValueError, TypeError):
-        try: return datetime.strptime(s,"%Y-%m-%d").strftime("%d/%m/%Y")
-        except (ValueError, TypeError): return s
-
-def fmt_date_input(s):
-    if not s: return date.today()
-    try: return datetime.strptime(s,"%Y-%m-%d").date()
-    except (ValueError, TypeError): return date.today()
-
 def itens_select():
     return {f"{i['part_number']} — {i['nome_item']}": i for i in listar_inventario()}
 
@@ -150,108 +124,7 @@ def opcoes_com_atual(base, atual):
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
-with st.sidebar:
-    # 1. Cabeçalho com Logo/Título (v4.1.0 — logo Inventus; versão movida para o rodapé da nav)
-    st.image("inventus_logo.png", width="stretch")
-    st.markdown("""
-    <div class="sidebar-title">
-        <span style="font-size: 1.4rem;">MRO Inventus</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # 2. Navegação (Option Menu)
-
-    # v3.8.0 — "Requisição" saiu do menu (virou aba da Movimentação); "Movimentações" → "Movimentação".
-    opcoes_limpas = ["Dashboard", "Saldo em Estoque", "Ficha 360", "Gerenciar Itens", "Movimentação", "Controle de SC", "Ajuda", "Configurações"]
-
-    escolha_limpa = option_menu(
-        menu_title=None,
-        options=opcoes_limpas,
-        icons=["bar-chart-fill", "box-seam", "card-image", "plus-circle", "arrow-repeat", "receipt", "question-circle", "gear"],
-        menu_icon="cast",
-        default_index=0,
-        styles=PAL["option_menu_styles"],
-    )
-
-    # 'pagina' = nome limpo escolhido no menu (o próprio option_menu já mostra o ícone).
-    pagina = escolha_limpa
-
-    # 2b. Tema (claro/escuro) — controlado pelo app e lembrado na URL (?tema=).
-    # O Streamlit 1.57 não troca o tema por código; aqui gravamos a escolha e o topo do
-    # script reaplica a paleta. Padrão claro. (Tabelas seguem o tema base do config.)
-    _op_tema = {"Claro": "light", "Escuro": "dark"}
-    _lbl_atual = "Escuro" if PAL["tipo"] == "dark" else "Claro"
-    _escolha_tema = st.radio("Tema", list(_op_tema.keys()),
-                             index=list(_op_tema.keys()).index(_lbl_atual),
-                             horizontal=True, key="sb_tema")
-    if _op_tema[_escolha_tema] != PAL["tipo"]:
-        st.query_params["tema"] = _op_tema[_escolha_tema]
-        st.rerun()
-
-    st.markdown("---")
-
-    # 3. Métricas em Grid (Visual da Imagem)
-    itens_all = listar_inventario()
-    total = len(itens_all)
-    # Ajuste conforme sua lógica de status atual (OK, ATENÇÃO, COMPRAR)
-    comprar = sum(1 for i in itens_all if "COMPRAR" in i.get("status_material", ""))
-    atencao = sum(1 for i in itens_all if "ATENÇÃO" in i.get("status_material", ""))
-    scs_abertas = len(listar_scs(apenas_abertas=True))
-    inv_count = sum(1 for i in itens_all if i.get("data_inventario"))
-
-    st.markdown(f"""
-    <div class="sidebar-metrics-grid">
-        <div class="metric-card">
-            <div class="metric-label">Total</div>
-            <div class="metric-value">{total}</div>
-        </div>
-        <div class="metric-card">
-            <div class="metric-label">Alerta <span class="dot dot-yellow"></span></div>
-            <div class="metric-value">{atencao}</div>
-        </div>
-        <div class="metric-card">
-            <div class="metric-label">Críticos <span class="dot dot-red"></span></div>
-            <div class="metric-value">{comprar}</div>
-        </div>
-        <div class="metric-card">
-            <div class="metric-label">SCs</div>
-            <div class="metric-value">{scs_abertas}</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # 4. Barra de Progresso de Inventário
-    progresso = inv_count / total if total > 0 else 0
-    st.markdown(f"""
-    <div class="progress-container">
-        <div class="progress-label">Inventariados: {inv_count}/{total}</div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Usa o st.progress nativo, mas o CSS acima tenta estilizar o container se possível
-    # Ou podemos usar uma barra HTML customizada se o st.progress ficar claro demais
-    st.progress(progresso)
-
-    # 5. Perfil do Usuário (Rodapé)
-    # Você pode trocar a URL da imagem por uma local ou base64 se preferir
-    avatar_url = "https://ui-avatars.com/api/?name=Luis+Oliveira&background=F36F21&color=fff" 
-    
-    st.markdown(f"""
-    <div class="user-profile">
-        <img src="{avatar_url}" class="user-avatar" alt="User">
-        <div class="user-info">
-            <h4>Luis Oliveira</h4>
-            <p>Inventus Power</p>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # v4.1.0 — versão do sistema no rodapé da barra de navegação
-    st.markdown(
-        "<div style='text-align:center; margin-top:10px; color: var(--primary-orange); "
-        "font-weight:700; font-size:0.8rem; letter-spacing:0.5px;'>v4.10.0</div>",
-        unsafe_allow_html=True,
-    )
+pagina = render_sidebar()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DASHBOARD — v3.0.0 (por público: 👤 Comprador · 📊 Gestão · 🏛️ Diretoria)
@@ -750,161 +623,6 @@ def _render_dash_comprador(vm):
                       help="SCs abertas há mais de 15 dias — o gargalo entre abrir e comprar.")
             if ag.get("sem_data"):
                 st.caption(f"{ag['sem_data']} SC(s) sem data de abertura registrada.")
-
-
-def _render_dash_gestao(vm):  # noqa: v4.1.0 — DEPRECADO / sem uso
-    """:material/bar_chart: Gestão — saúde da operação: serviço, cobertura, valor, giro, status e demanda.
-
-    v4.1.0 — DEPRECADO: a aba "Gestão" foi extinta e todo este conteúdo migrou para
-    `_render_dash_almoxarifado`. Esta função NÃO é mais chamada em lugar nenhum (mantida só
-    até uma limpeza futura). Se precisar ajustar distribuição/padrões/requisições, edite o
-    Almoxarifado — não aqui."""
-    k = vm["kpis"]
-    c1, c2, c3, c4 = st.columns(4)
-    ns = k["nivel_servico"]
-    c1.metric(":material/ads_click: Nível de Serviço", f"{ns}%" if ns is not None else "—",
-              help="% dos itens COM consumo real que estão fora de ruptura (estoque > 0). "
-                   "Proxy de disponibilidade — NÃO é OTIF de fornecedor (esse depende de dado ainda ausente).")
-    cm = k["cobertura_media"]
-    c2.metric(":material/calendar_month: Cobertura média", f"{cm} d" if cm is not None else "—",
-              help="Média de dias de cobertura (estoque atual ÷ consumo) dos itens com consumo; "
-                   "exclui itens sem consumo.")
-    c3.metric(":material/payments: Valor imobilizado", _dash_fmt_brl(k["valor_imobilizado"]),
-              help="Σ(estoque × preço de valoração), em BRL. Detalhe logo abaixo.")
-    gm = k["giro_medio"]
-    c4.metric(":material/sync: Giro médio (ano)", f"{gm}x" if gm is not None else "—",
-              help="Média do giro anual dos itens com saída na janela de 90 dias.")
-
-    vd = vm["valor_detalhe"]
-    st.caption(
-        f":material/payments: Valor: {vd['itens_valorados']} itens valorados · "
-        f"{vd['itens_sem_preco']} com estoque sem preço (subestima o total) · "
-        f"{vd['itens_nao_brl']} em moeda ≠ BRL ({_dash_fmt_brl(vd['total_nao_brl'])}, somados à parte)."
-    )
-    st.markdown("---")
-
-    d = vm["distribuicao"]; total = vm["total"]
-    def _pct(n): return f"{round(n / total * 100)}%" if total else "0%"
-    s1, s2, s3, s4, s5, s6 = st.columns(6)
-    s1.metric(":material/check_circle: OK", d["ok"], _pct(d["ok"]))
-    s2.metric("🟡 Atenção", d["atencao"], _pct(d["atencao"]), delta_color="off")
-    s3.metric(":material/warning: Críticos", d["comprar"], _pct(d["comprar"]), delta_color="inverse")
-    s4.metric("⚪ Sem Mov.", d["sem_mov"], _pct(d["sem_mov"]), delta_color="off",
-              help="Nunca tiveram saída por requisição — ficam fora da lista de compra.")
-    s5.metric("🔴 Zerados", d["zerados"], _pct(d["zerados"]), delta_color="inverse")
-    s6.metric(":material/search: Inventariado", f"{d['inventariado']}/{total}", _pct(d["inventariado"]))
-
-    st.markdown("---")
-
-    # Saúde física do estoque — conta TODOS os itens (inclusive Sem Movimentação),
-    # pelo nível físico vs. mínimo. Complementa a linha acima (que tira o Sem Mov. da compra).
-    sf = vm["saude_fisica"]
-    st.markdown("#### :material/monitor_heart: Saúde física do estoque")
-    st.caption("Nível físico de **todos** os itens vs. estoque mínimo — inclui também os "
-               "**Sem Movimentação** (por isso o total difere da linha acima, que os separa da compra).")
-    h1, h2, h3, h4 = st.columns(4)
-    h1.metric("🟢 Ok", sf["ok"], _pct(sf["ok"]),
-              help="Acima do nível confortável (mínimo × 1,2).")
-    h2.metric("🟡 Atenção", sf["atencao"], _pct(sf["atencao"]), delta_color="off",
-              help="Perto de ficar abaixo do mínimo (entre o mínimo e mínimo × 1,2).")
-    h3.metric("🔴 Crítico", sf["critico"], _pct(sf["critico"]), delta_color="inverse",
-              help="Abaixo ou no mínimo, mas ainda com saldo (> 0).")
-    h4.metric("⚫ Zerado", sf["zerado"], _pct(sf["zerado"]), delta_color="inverse",
-              help="Estoque atual = 0.")
-
-    st.markdown("---")
-    colA, colB = st.columns(2)
-
-    with colA:
-        with st.container(border=True):
-            st.markdown("#### :material/trending_down: Top 10 Consumidores (mês anterior)")
-            dados = obter_dados_dashboard()
-            st.caption(f"Referência: consumo real de {dados['kpis'].get('periodo_abc', '—')}.")
-            df_abc = pd.DataFrame(dados["abc"])
-            if not df_abc.empty:
-                import plotly.graph_objects as go
-                df_abc = df_abc.sort_values("total_saida", ascending=True)
-                df_abc["lbl"] = df_abc.apply(lambda x: f"{x['part_number']} • {str(x['nome_item'])[:15]}", axis=1)
-                fig = go.Figure(data=[go.Bar(
-                    y=df_abc["lbl"], x=df_abc["total_saida"], orientation="h",
-                    marker=dict(color=PAL["accent"], line=dict(width=1, color=PAL["accent_borda"])),
-                    text=df_abc["total_saida"].apply(lambda x: f"{int(x)}"), textposition="outside",
-                    textfont=dict(size=11, color=PAL["texto_suave"]),
-                )])
-                fig.update_layout(
-                    template=PAL["plotly_template"], height=320,
-                    margin=dict(l=0, r=20, t=10, b=0), paper_bgcolor=PAL["paper_bg"],
-                    plot_bgcolor=PAL["plot_bg"], showlegend=False,
-                    font=dict(family="Inter", color=PAL["texto"]),
-                    xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(color=PAL["texto_suave"])),
-                    yaxis=dict(showgrid=False, tickfont=dict(size=11, color=PAL["texto"])))
-                st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
-            else:
-                st.info("Sem consumo registrado no período.")
-
-    with colB:
-        with st.container(border=True):
-            st.markdown("#### :material/science: Padrões de demanda")
-            st.caption("Cada item é lido por duas coisas: **com que regularidade** ele sai e "
-                       "**o quanto o tamanho de cada saída varia**. Juntas, essas medidas "
-                       "indicam o quão previsível é repor cada material.")
-            ordem = ["Suave", "Intermitente", "Errático", "Irregular", "Poucos dados"]
-            dem = vm["demanda"]
-            dados_dem = [{"Padrão": p, "Itens": dem.get(p, 0)} for p in ordem if dem.get(p, 0)]
-            if dados_dem:
-                st.bar_chart(pd.DataFrame(dados_dem).set_index("Padrão"), color="#F7941E", height=200)
-            else:
-                st.caption("Ainda sem consumo real suficiente para classificar.")
-
-            # Legenda: o que cada padrão significa (frases já validadas em PADROES_DEMANDA),
-            # com a contagem de itens ao lado — para o gestor ler sem precisar do jargão.
-            _expl = {v["label"]: (v["emoji"], v["explicacao"]) for v in PADROES_DEMANDA.values()}
-            st.markdown("**O que cada padrão significa:**")
-            for p in ["Suave", "Intermitente", "Errático", "Irregular"]:
-                emoji, exp = _expl[p]
-                n = dem.get(p, 0)
-                st.markdown(
-                    f"{emoji} **{p}** — {exp} "
-                    f"<span style='opacity:.65'>· {n} {'item' if n == 1 else 'itens'}</span>",
-                    unsafe_allow_html=True)
-
-            xyz = vm["xyz"]
-            if xyz:
-                st.caption("**XYZ** mede o quanto o consumo varia de mês a mês "
-                           "(X estável · Y variável · Z errático — baixa confiança com poucos meses): "
-                           f"X {xyz.get('X', 0)} · Y {xyz.get('Y', 0)} · Z {xyz.get('Z', 0)}.")
-
-            with st.expander("Como é calculado"):
-                st.caption("Método de Syntetos-Boylan (SBC): combina o **intervalo médio entre "
-                           "saídas** (regularidade no tempo) com a **variação das quantidades** "
-                           "(regularidade no tamanho), a partir das saídas reais por requisição. "
-                           "É apoio à decisão — não altera o cálculo de reposição.")
-
-    with st.container(border=True):
-        st.markdown("#### :material/factory: Requisições por Setor & :material/person: Top Emitentes")
-        reqs = listar_requisicoes(limit=500)
-        if reqs:
-            df_r = pd.DataFrame(reqs)
-            colS, colE = st.columns(2)
-            with colS:
-                if "setor" in df_r.columns and not df_r["setor"].isna().all():
-                    dc = df_r["setor"].value_counts().head(7).reset_index()
-                    dc.columns = ["Setor", "Qtd"]
-                    st.bar_chart(dc.set_index("Setor"), color="#F7941E", height=250)
-                else:
-                    st.caption("Sem dados de setor preenchidos.")
-            with colE:
-                if "emitente" in df_r.columns and not df_r["emitente"].isna().all():
-                    dc = df_r["emitente"].value_counts().head(10).reset_index()
-                    dc.columns = ["Emitente", "Qtd"]
-                    st.dataframe(dc, width="stretch", hide_index=True, height=250,
-                                 column_config={"Qtd": st.column_config.ProgressColumn(
-                                     "Qtd", format="%d", min_value=0,
-                                     max_value=int(dc["Qtd"].max()) if not dc.empty else 100, color="#F7941E")})
-                else:
-                    st.caption("Sem dados de emitente preenchidos.")
-        else:
-            st.caption("Aguardando histórico de requisições.")
 
 
 _MESES_PT = ["", "jan", "fev", "mar", "abr", "mai", "jun",
@@ -2745,7 +2463,10 @@ def _render_cruzamento_upload_fallback():
                 st.dataframe(pd.DataFrame(_res["orfaos"]), width="stretch", hide_index=True)
 
 
-if pagina == "Dashboard":
+if pagina in ROTAS_MIGRADAS:
+    render_pagina(pagina)
+
+elif pagina == "Dashboard":
     st.title(":material/bar_chart: Dashboard — MRO Inventus Power")
     if not listar_inventario():
         st.info("Nenhum item cadastrado. Vá em **:material/add: Gerenciar Itens** para começar.")
@@ -4335,255 +4056,3 @@ elif pagina == "Ficha 360":
             # próprio e manual em "Controle de SC → ☂️ Guarda-Chuva" (tabela guarda_chuva).
             # A Ficha 360 volta a ser só a Visão Geral (read-only).
             _render_ficha_visao_geral(ficha)
-# ══════════════════════════════════════════════════════════════════════════════
-# FEEDBACK / SUGESTÕES (Item 3 / v2.1.0)
-# ══════════════════════════════════════════════════════════════════════════════
-elif pagina == "Ajuda":
-    st.title(":material/help: Central de Ajuda")
-    st.caption("Guias por perfil, o **Manual do Sistema** (tela a tela) e o canal de feedback. "
-               ":material/lightbulb: Tema claro/escuro: botão **Tema** na barra lateral.")
-
-    tab_inicio, tab_manual, tab_enviar, tab_gerenciar = st.tabs(
-        [":material/rocket_launch: Começar aqui", ":material/menu_book: Manual do Sistema", ":material/edit: Enviar Feedback", ":material/folder: Backlog"])
-
-    with tab_inicio:
-        st.caption("Guias rápidos por perfil. Para o detalhe de cada botão/card/gráfico, veja a "
-                   "aba **:material/menu_book: Manual do Sistema**.")
-        _perfil = st.radio("Qual é o seu perfil?",
-                           ["Assistente de Materiais (almoxarifado)", "Comprador"],
-                           horizontal=True, key="ajuda_perfil")
-        _chave = "assistente" if _perfil.startswith("Assistente") else "comprador"
-        st.markdown(GUIAS_PERSONA[_chave])
-
-    with tab_manual:
-        st.caption("Explica **cada elemento** da interface: para que serve · com base em quê · "
-                   "como o sistema calcula. Ligue o modo abaixo para uma explicação bem simples.")
-        _eli5 = st.toggle("Explicar em linguagem simples", value=False, key="ajuda_eli5",
-                          help="Reescreve tudo em linguagem simples — ótimo para entender os "
-                               "cálculos e os dashboards.")
-        _busca_manual = st.text_input(":material/search: Filtrar por palavra (opcional)", key="ajuda_busca",
-                                      placeholder="ex.: cobertura, ABC, conversão, saldo residual")
-        _b = (_busca_manual or "").strip().lower()
-        for _sec in MANUAL:
-            _itens = _sec["itens"]
-            if _b:
-                _itens = [it for it in _itens
-                          if _b in (it["nome"] + it["para_que"] + it["base"]
-                                    + it["como"] + it["crianca"] + _sec["tela"]).lower()]
-            if not _itens:
-                continue
-            st.subheader(_sec["tela"])
-            if _sec.get("intro"):
-                st.caption(_sec["intro"])
-            for _it in _itens:
-                with st.expander(_it["nome"]):
-                    if _eli5:
-                        st.markdown(f" {_it['crianca']}")
-                    else:
-                        st.markdown(f"**Para que serve:** {_it['para_que']}")
-                        st.markdown(f"**Com base em quê:** {_it['base']}")
-                        st.markdown(f"**Como o sistema faz:** {_it['como']}")
-
-    with tab_enviar:
-        with st.container(border=True):
-            with st.form("form_feedback", clear_on_submit=True):
-                c1, c2 = st.columns(2)
-                fb_tipo = c1.selectbox("Tipo *", TIPOS_FEEDBACK, index=0)
-                fb_autor = c2.text_input("Seu nome (opcional)", placeholder="Ex: Luis Oliveira")
-                fb_titulo = st.text_input("Título *", placeholder="Resuma em uma frase")
-                fb_desc = st.text_area("Descrição", height=120,
-                                       placeholder="Descreva a sugestão, o problema ou a ideia em detalhes...")
-                fb_pagina = st.selectbox("Página/área relacionada (opcional)",
-                                         ["—", "Dashboard", "Saldo em Estoque", "Gerenciar Itens",
-                                          "Movimentação", "Controle de SC",
-                                          "Configurações", "Geral"], index=0)
-                enviado = st.form_submit_button(":material/mail: Enviar Feedback", type="primary", width="stretch")
-                if enviado:
-                    ok, msg = registrar_feedback(
-                        fb_tipo, fb_titulo, fb_desc,
-                        autor=(fb_autor or None),
-                        pagina_origem=(None if fb_pagina == "—" else fb_pagina),
-                    )
-                    if ok:
-                        st.success(msg)
-                    else:
-                        st.error(msg)
-
-    with tab_gerenciar:
-        f1, f2 = st.columns(2)
-        filtro_tipo = f1.selectbox("Filtrar por tipo", ["Todos"] + TIPOS_FEEDBACK, index=0, key="fb_f_tipo")
-        filtro_status = f2.selectbox("Filtrar por status", ["Todos"] + STATUS_FEEDBACK, index=0, key="fb_f_status")
-        feedbacks = listar_feedbacks(tipo=filtro_tipo, status=filtro_status)
-
-        if not feedbacks:
-            st.info("Nenhum feedback encontrado com os filtros atuais.")
-        else:
-            df_fb = pd.DataFrame([{
-                "Data": fmt(f["data_hora"]), "Tipo": f["tipo"], "Título": f["titulo"],
-                "Status": f["status"], "Prioridade": f.get("prioridade") or "—",
-                "Autor": f.get("autor") or "—", "Página": f.get("pagina_origem") or "—",
-                "Descrição": f.get("descricao") or "",
-            } for f in feedbacks])
-            st.download_button("⬇️ Exportar backlog (CSV)",
-                               df_fb.to_csv(index=False).encode("utf-8-sig"),
-                               file_name="feedback_backlog.csv", mime="text/csv")
-            st.dataframe(df_fb, width="stretch", hide_index=True)
-
-            st.divider()
-            st.markdown("##### Atualizar um feedback")
-            mapa_fb = {f"#{f['id']} — [{f['tipo']}] {f['titulo']}": f for f in feedbacks}
-            escolha_fb = st.selectbox("Selecione", list(mapa_fb.keys()), key="fb_sel")
-            fb = mapa_fb[escolha_fb]
-            u1, u2 = st.columns(2)
-            novo_status = u1.selectbox("Status", STATUS_FEEDBACK,
-                                       index=STATUS_FEEDBACK.index(fb["status"]) if fb["status"] in STATUS_FEEDBACK else 0,
-                                       key="fb_up_status")
-            nova_prio = u2.selectbox("Prioridade", ["—", "Baixa", "Média", "Alta", "Crítica"],
-                                     index=(["—", "Baixa", "Média", "Alta", "Crítica"].index(fb["prioridade"])
-                                            if fb.get("prioridade") in ["Baixa", "Média", "Alta", "Crítica"] else 0),
-                                     key="fb_up_prio")
-            resposta = st.text_area("Resposta / nota interna", value=fb.get("resposta") or "", key="fb_up_resp")
-            if st.button(":material/save: Salvar atualização", type="primary", key="fb_up_btn"):
-                ok, msg = atualizar_feedback(
-                    fb["id"], status=novo_status,
-                    prioridade=(None if nova_prio == "—" else nova_prio),
-                    resposta=resposta,
-                )
-                if ok:
-                    st.success(msg)
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.error(msg)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# CONFIGURAÇÕES
-# ══════════════════════════════════════════════════════════════════════════════
-elif pagina == "Configurações":
-    st.title(":material/settings: Configurações do Sistema")
-    st.caption("Gestão de Listas Mestras e Parâmetros Globais.")
-
-    # ── Aparência / Tema (v2.11.0) ────────────────────────────────────────────
-    with st.container(border=True):
-        st.subheader(":material/palette: Aparência")
-        _tema_txt = ":material/dark_mode: Escuro" if PAL["tipo"] == "dark" else ":material/light_mode: Claro"
-        st.markdown(f"**Tema atual:** {_tema_txt}  ·  **Padrão:** :material/light_mode: Claro")
-        st.caption("Para alternar entre **claro** e **escuro**, use o botão **Tema** na **barra "
-                   "lateral** (abaixo do menu). A escolha é lembrada ao recarregar (fica na URL). "
-                   "O fundo, os textos, o menu e os gráficos acompanham. :material/warning: Observação: no modo "
-                   "escuro, as **tabelas** podem continuar claras — é uma limitação do Streamlit "
-                   "(as grades seguem o tema base); no modo claro (padrão) fica tudo consistente.")
-        st.markdown("<br>", unsafe_allow_html=True)
-
-    # ── Importação da base do Neidson — Tipo, Mínimo, Máximo, Lead Time (Item 1) ──
-    with st.container(border=True):
-        st.subheader(":material/download: Importar Base (Tipo/Categoria, Mínimo, Máximo, Lead Time)")
-        st.caption("Atualiza itens **existentes** (casados pelo PN) com os dados apurados pelo "
-                   "Compras. PNs não encontrados são apenas relatados — nenhum item é criado. "
-                   "Um backup do banco é criado automaticamente antes de aplicar.")
-        arq_neidson = st.file_uploader("Planilha (.xlsx)", type=["xlsx"], key="upl_neidson")
-        if arq_neidson is not None:
-            if st.button(":material/search: Pré-visualizar (simulação)", key="btn_prev_neidson"):
-                ok_p, res_p = importar_inventario_neidson(arq_neidson, arq_neidson.name, dry_run=True)
-                st.session_state["prev_neidson"] = (ok_p, res_p, arq_neidson.name)
-
-            prev = st.session_state.get("prev_neidson")
-            if prev:
-                ok_p, res_p, nome_p = prev
-                if not ok_p:
-                    st.error(res_p.get("erro", "Não foi possível ler a planilha."))
-                else:
-                    m1, m2, m3 = st.columns(3)
-                    m1.metric("Linhas lidas", res_p["linhas_lidas"])
-                    m2.metric("Serão atualizados", res_p["atualizados"])
-                    m3.metric("Ignorados (PN não encontrado)", res_p["ignorados"])
-                    if res_p["pns_nao_encontrados"]:
-                        with st.expander(f"Ver {len(res_p['pns_nao_encontrados'])} PNs não encontrados"):
-                            df_ne = pd.DataFrame({"PN não encontrado": res_p["pns_nao_encontrados"]})
-                            st.dataframe(df_ne, width="stretch", hide_index=True)
-                            st.download_button("⬇️ Baixar lista (CSV)",
-                                               df_ne.to_csv(index=False).encode("utf-8-sig"),
-                                               file_name="pns_nao_encontrados.csv", mime="text/csv",
-                                               key="dl_ne")
-                    if res_p["pns_duplicados_planilha"]:
-                        st.warning("PNs duplicados na planilha (mantém a última ocorrência): "
-                                   + ", ".join(res_p["pns_duplicados_planilha"][:20]))
-                    st.warning("Confira os números acima e clique em **Aplicar** para gravar.")
-                    if st.button(":material/check_circle: Aplicar atualização", type="primary", key="btn_apply_neidson"):
-                        ok_a, res_a = importar_inventario_neidson(arq_neidson, nome_p, dry_run=False)
-                        if ok_a:
-                            st.success(f"Importação concluída — atualizados: {res_a['atualizados']} | "
-                                       f"ignorados: {res_a['ignorados']}.")
-                            st.session_state.pop("prev_neidson", None)
-                            time.sleep(1.5)
-                            st.rerun()
-                        else:
-                            st.error(res_a.get("erro", "Falha na importação."))
-        st.markdown("<br>", unsafe_allow_html=True)
-
-    # Definição das categorias de listas
-    LISTAS_CONFIG = {
-        "centro_custo": ":material/work: Centros de Custo",
-        "local": ":material/location_on: Locais de Armazenagem",
-        "fornecedor": ":material/factory: Fornecedores",
-        "autorizador": ":material/key: Tipos de Autorizador",
-        "setor": ":material/apartment: Setores Solicitantes" # Adicionado setor se necessário
-    }
-
-    for tipo_lista, titulo in LISTAS_CONFIG.items():
-        with st.container(border=True):
-            st.subheader(titulo)
-            
-            # 1. Visualização da Lista Atual (Grid)
-            valores = listar_valores(tipo_lista)
-            
-            if valores:
-                # Cria colunas dinâmicas (4 por linha)
-                cols = st.columns(4)
-                for i, val in enumerate(valores):
-                    with cols[i % 4]:
-                        # Card simples para cada item
-                        with st.container(border=True):
-                            c_txt, c_btn = st.columns([3, 1])
-                            c_txt.markdown(f"**{val}**")
-                            if c_btn.button(":material/close:", key=f"rm_{tipo_lista}_{i}", help="Remover"):
-                                remover_valor_lista(tipo_lista, val)
-                                st.rerun()
-            else:
-                st.info(f"Nenhum {titulo.split(' ')[-1].lower()} cadastrado.")
-
-            st.divider()
-
-            # v3.3.0 — atalho: semear a lista com o cadastro mestre de fornecedores
-            if tipo_lista == "fornecedor":
-                if st.button(":material/sync: Sincronizar do Relatório de SCs", key="sync_forn",
-                             help="Adiciona os Nomes Fantasia do cadastro mestre (importado no "
-                                  "Relatório de SCs) que ainda não estão na lista."):
-                    _add, _tot = sincronizar_fornecedores_lista()
-                    st.success(f"{_add} fornecedor(es) adicionado(s) — {_tot} no cadastro mestre.")
-                    time.sleep(1.0)
-                    st.rerun()
-
-            # 2. Formulário de Adição
-            with st.form(f"form_add_{tipo_lista}", clear_on_submit=True):
-                c_input, c_btn = st.columns([3, 1])
-                novo_valor = c_input.text_input(
-                    f"Adicionar novo {titulo.split(' ', 1)[1].lower()}",
-                    placeholder="Digite e pressione Adicionar...",
-                    label_visibility="collapsed"
-                )
-                submitted = c_btn.form_submit_button(":material/add: Adicionar", width="stretch")
-
-                if submitted:
-                    if novo_valor.strip():
-                        ok, msg = adicionar_valor_lista(tipo_lista, novo_valor.strip())
-                        if ok:
-                            st.success(msg)
-                            time.sleep(0.5)
-                            st.rerun()
-                        else:
-                            st.error(msg)
-                    else:
-                        st.warning("O campo não pode estar vazio.")
-        
-        st.markdown("<br>", unsafe_allow_html=True) 

@@ -9,7 +9,10 @@ contexto.
 
 | Domínio | Arquivo |
 |---|---|
-| UI / telas / abas | `app.py` |
+| UI — shell + páginas ainda inline | `app.py` (encolhendo a cada fase da refatoração v5.x) |
+| UI — router (fonte única do menu) | `ui/router.py` (`ROTAS`, `ROTAS_MIGRADAS`, `render_pagina`) |
+| UI — sidebar / tema / formatos / cache | `ui/sidebar.py`, `ui/tema.py`, `ui/formatos.py`, `ui/cache.py` |
+| UI — páginas migradas (`render()`) | `ui/paginas/` (por ora: `ajuda.py`, `configuracoes.py`) |
 | Lógica + acesso a dados | `services/db_functions.py` |
 | Banco / schema / migração | `database.py`, `migrations/` |
 | Planejamento (min/máx, cobertura, lead time) | `services/planejamento.py` |
@@ -22,8 +25,11 @@ contexto.
 | Continuidade / backlog | `docs/HANDOFF.md` (seção "STATUS ATUAL" no topo), `docs/prompt.md` |
 | Changelog | `changelog/*.md` |
 
-`controllers/`, `repositories/`, `models/`, `core/` estão **vazios** (só `__init__.py`) — não há
-lógica ali.
+A camada de interface vive em **`ui/`** (regra de dependência: `ui/paginas/*` importa `ui/*` e
+`services/*`; `services/*` nunca importa `ui/`). As pastas `controllers/`, `repositories/`,
+`models/`, `core/`, `app/`, `pages/`, `dashboards/` são scaffolding **vazio** (só `__init__.py`/
+README) — não há lógica ali; serão removidas numa fase posterior (`pages/` é diretório mágico do
+Streamlit — evitar).
 
 ## Política de economia de contexto
 

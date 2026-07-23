@@ -6,20 +6,29 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 22/07/2026 (leia isto, não a seção 1-7 abaixo para status)
+## STATUS ATUAL — atualizado em 23/07/2026 (leia isto, não a seção 1-7 abaixo para status)
 
-- **Versão corrente do código: v4.10.0** (já commitada — Requisição Digital v4.7.0, Consumo/Mensal
-  v4.8.0, Guarda-Chuva manual v4.9.0, Monitor de SC via API SCM v4.10.0). Ver `changelog/`.
-- **🎯 PRÓXIMO TRABALHO — plano aprovado, pronto para executar:** `docs/PLANO_V5_EVOLUCAO.md`.
-  Grande evolução v5.x: (1) sincronização SCM persistente API→banco (hoje a API só alimenta uma
-  tabela efêmera; tudo que fica no `mro.db` vem do Excel diário — o plano inverte isso, com Excel
-  virando fallback), (2) nova página **SCM Integrado** (3 abas: Solicitações/Itens/Detalhes),
-  (3) refatoração faseada do `app.py` (~4.700 linhas monolíticas, sem cache) para `ui/` modular,
-  (4) distribuição via servidor no PC sempre ligado + acesso dos compradores (Miguel/Davi) por
-  navegador. Entrevista completa já feita com o Luis — decisões e diagnóstico técnico completo
-  estão no plano. **Nenhum código de produto foi alterado ainda.** Próximo passo: F0 (branch
-  `feat/v5.0.0`) + F1 (pacote `ui/`, router, extração de Ajuda/Configurações) — ver seção
-  "Próximo passo imediato" no fim do plano.
+- **Evolução v5.x — F1 (v5.0.0) IMPLEMENTADA, aguardando OK no app real + commit.** Branch
+  `feat/v5.0.0` (criada a partir de `feat/v3.10.0-4.0.0-ux-redesign`). F1 = fundação da
+  refatoração: novo pacote **`ui/`** — `router.py` (fonte única do menu: `ROTAS`,
+  `ROTAS_MIGRADAS`, `render_pagina`), `sidebar.py`, `tema.py`, `formatos.py`, `cache.py` — e as
+  páginas **Ajuda** e **Configurações** migradas para `ui/paginas/` com `render()`. O `app.py`
+  vira shell + páginas ainda inline: `if pagina in ROTAS_MIGRADAS: render_pagina(pagina)`; o
+  resto segue no if/elif (transição sem big-bang). `app.py`: **4.588 → 4.058 linhas** (removidos
+  blocos inline migrados, `def tema_atual`/`fmt`/`fmt_date_input`, consts de feedback e o morto
+  `_render_dash_gestao`). **Sem migração de schema; comportamento idêntico** ao da v4.10.0.
+  Testes: **431 verdes** (426 baseline + `tests/test_v500_router.py`, smoke parametrizado por
+  `ROTAS_MIGRADAS` via AppTest); smoke E2E do app inteiro (cópia do `mro.db`, `option_menu`/rede
+  SCM stubados) **OK nas 8 páginas**. Ver `changelog/5.0.0.md`. Decisões de fundação:
+  cache criado como infraestrutura com **ativação progressiva** (só as escritas de Configurações
+  chamam `invalidar_leituras()`; a sidebar segue leitura direta p/ não arriscar métrica velha);
+  `ui/componentes/` (graficos/selecao/drill_down) **adiados p/ F4** (usados só pelos `_render_*`
+  inline — mover antes seria churn sem ganho). **Ainda NÃO commitado** (regra: commit só após OK
+  no app real).
+- **🎯 PRÓXIMO — plano aprovado:** `docs/PLANO_V5_EVOLUCAO.md`. Depois do commit da F1: **F2
+  (v5.1.0)** sincronização SCM persistente API→`mro.db` (Excel vira fallback), **F3 (v5.2.0)**
+  página **SCM Integrado** (3 abas), **F4a/F4b** migração das demais páginas (Ficha 360 e
+  Movimentação por último) + cache pleno, **F5 (v5.5.0)** distribuição via servidor.
 - **Versão anterior: v4.7.0 — Requisição Digital (MVP).** Implementada e testada em
   `feat/v3.10.0-4.0.0-ux-redesign`; **aguardando commit** (o commit é feito só após o OK do Luis +
   validação no app real, regra do projeto). A **Requisição** ganhou **ciclo de vida**:
@@ -58,10 +67,11 @@
 ```
 Continuar o Sistema MRO (Inventus Power). Leia @docs/HANDOFF.md (seção "STATUS ATUAL" no topo) e
 @docs/PLANO_V5_EVOLUCAO.md — plano da grande evolução v5.x já aprovado (SCM Integrado com sync
-API→banco, refatoração faseada do app.py, distribuição via servidor). Comece pela F0 (branch
-feat/v5.0.0 a partir de feat/v3.10.0-4.0.0-ux-redesign) e F1 (pacote ui/, router, extração de
-Ajuda/Configurações). Siga a skill atualizar-sistema-mro, valide cada fase (pytest + smoke + app
-real) e PARE para aprovação antes de cada commit.
+API→banco, refatoração faseada do app.py, distribuição via servidor). F1 (v5.0.0) já implementada
+na branch feat/v5.0.0 e validada (431 testes + smoke E2E das 8 páginas). Se ainda não commitada,
+revise o diff e commite a F1 após meu OK; depois siga para a F2 (sincronização SCM persistente
+API→banco). Siga a skill atualizar-sistema-mro, valide cada fase (pytest + smoke + app real) e
+PARE para aprovação antes de cada commit.
 ```
 
 ---
