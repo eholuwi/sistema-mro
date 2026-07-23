@@ -1,0 +1,43 @@
+{
+  "succeeded": true,
+  "errors": [],
+  "result": {
+    "filial": "01",
+    "solicitante": "001053",
+    "centroCustoCodigo": "90402    ",
+    "centroCusto": { "codigo": "90402    ", "descricao": "DSI                                     " },
+    "classificacao": "DESPESAS",
+    "descricao": "SOLICITAÇÃO DE COMPRA - OUTROS",
+    "status": "03",
+    "dtCreated": "2026-07-16T11:33:17.6364895",
+    "dtAproved": "2026-07-16T11:37:34.3442706",
+    "dtUpdated": "2026-07-16T11:37:34.3442706",
+    "justificativa": "MATERIAIS ESSENCIAIS DE TI",
+    "isCritico": true,
+    "id": 41468,
+    "items": [
+      {
+        "item": "025",
+        "produto": "33AD0045",
+        "produtoData": { "codigo": "33AD0045", "descricao": "ADAPTADOR DE TOMADA                               ", "um": "PC    " },
+        "quantidade": 10.0,
+        "um": "UN",
+        "dataNecessidade": "2026-07-16T15:04:02.021",
+        "dataPedido": "0001-01-01T00:00:00",
+        "valorUnitaro": 0.0,
+        "valorTotal": 0.0
+      },
+      {
+        "item": "013",
+        "produto": "56IF0080",
+        "produtoData": { "codigo": "56IF0080", "descricao": "GAVETA PARA SSD M.2 NVME PARA USB                 ", "um": "PC    " },
+        "quantidade": 1.0,
+        "um": "UN",
+        "dataNecessidade": "2026-07-16T15:04:02.021",
+        "dataPedido": "0001-01-01T00:00:00",
+        "valorUnitaro": 12.5,
+        "valorTotal": 12.5
+      }
+    ]
+  }
+}

@@ -49,6 +49,42 @@ def _solicitantes_mro_norm(conn):
     return set(SOLICITANTES_MRO)
 
 
+def listar_solicitantes_mro(apenas_incluidos=True):
+    """v5.1.0 (F2) — solicitantes para a gestão do escopo MRO em Configurações.
+    `apenas_incluidos=True` → incluir_mro=1 (o escopo do sync); False → candidatos
+    (incluir_mro=0, vindos da aba SCM USERS)."""
+    alvo = 1 if apenas_incluidos else 0
+    with transaction() as conn:
+        rows = conn.execute(
+            "SELECT id, nome, codigo, departamento FROM solicitantes_mro "
+            "WHERE incluir_mro=? ORDER BY nome", (alvo,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def marcar_solicitante_mro(nome, incluir=True):
+    """v5.1.0 (F2) — inclui/remove um solicitante do escopo MRO (incluir_mro). Cria a linha
+    se o nome for novo (não veio da aba SCM USERS). Retorna (ok, msg)."""
+    nome = (nome or "").strip()
+    if not nome:
+        return False, "Nome vazio."
+    norm = _normalizar_txt(nome)
+    with transaction() as conn:
+        conn.execute("""
+            INSERT INTO solicitantes_mro (nome, nome_norm, incluir_mro) VALUES (?,?,?)
+            ON CONFLICT(nome_norm) DO UPDATE SET incluir_mro=excluded.incluir_mro, nome=excluded.nome
+        """, (nome, norm, 1 if incluir else 0))
+    return True, ("Solicitante incluído no escopo MRO." if incluir
+                  else "Solicitante removido do escopo MRO.")
+
+
+def definir_codigo_solicitante_mro(solicitante_id, codigo):
+    """v5.1.0 (F2) — override manual do código Protheus de um solicitante MRO."""
+    codigo = (codigo or "").strip() or None
+    with transaction() as conn:
+        conn.execute("UPDATE solicitantes_mro SET codigo=? WHERE id=?", (codigo, solicitante_id))
+    return True
+
+
 def obter_cadastro_mro_para_cruzamento():
     """v4.6.0 — cadastro MRO para o Monitor de SC 2.0 (cruzamento SCM × SC7).
 
@@ -3445,6 +3481,35 @@ def _sheet_df(xls, nome, header):
         return None
 
 
+def _upsert_item_sc_externo(conn, sc_id, part_number, descricao, quantidade, unidade,
+                            preco_unitario, valor_total, numero_po, data_necessidade, origem):
+    """v5.1.0 (F2) — upsert idempotente em `itens_sc_externos` (item de SC cujo PN NÃO está
+    no inventário MRO). Reusado pela ingestão do Excel (`origem='excel'`) e pelo sync da API
+    (`origem='api_scm'`) — a fonte única evita duplicar o SQL. Chave: (sc_id, part_number)."""
+    ex = conn.execute(
+        "SELECT id FROM itens_sc_externos WHERE sc_id=? AND part_number=?",
+        (sc_id, part_number)).fetchone()
+    if ex:
+        conn.execute("""
+            UPDATE itens_sc_externos SET
+                descricao=COALESCE(?, descricao), quantidade=?, unidade=COALESCE(?, unidade),
+                preco_unitario=CASE WHEN ?>0 THEN ? ELSE preco_unitario END,
+                valor_total=CASE WHEN ?>0 THEN ? ELSE valor_total END,
+                numero_po=COALESCE(?, numero_po),
+                data_necessidade=COALESCE(?, data_necessidade), origem=?
+            WHERE id=?
+        """, (descricao or None, quantidade, unidade or None, preco_unitario, preco_unitario,
+              valor_total, valor_total, numero_po or None, data_necessidade, origem, ex["id"]))
+    else:
+        conn.execute("""
+            INSERT INTO itens_sc_externos
+                (sc_id, part_number, descricao, quantidade, unidade, preco_unitario,
+                 valor_total, numero_po, data_necessidade, origem)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+        """, (sc_id, part_number, descricao or None, quantidade, unidade or None,
+              preco_unitario, valor_total, numero_po or None, data_necessidade, origem))
+
+
 def importar_relatorio_scs(arquivo_excel, nome_arquivo="Relatorio de SCs.xlsx"):
     """Roteador de ingestão do 'Relatório de SCs' (planilha diária dos compradores).
 
@@ -3531,7 +3596,7 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
     hoje = datetime.now().date()
     stats = {"linhas_lidas": int(len(df)), "linhas_importadas": 0, "linhas_ignoradas": 0,
              "scs_criadas": 0, "scs_atualizadas": 0, "precos_capturados": 0,
-             "rupturas": 0, "divergencias": 0, "criticos": 0}
+             "rupturas": 0, "divergencias": 0, "criticos": 0, "externos": 0}
     ignorados = []
     try:
         with transaction() as conn:
@@ -3561,12 +3626,10 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                 item = conn.execute(
                     "SELECT id, importancia FROM inventario WHERE part_number=?", (part_number,)
                 ).fetchone()
-                if not item:
-                    stats["linhas_ignoradas"] += 1
-                    if len(ignorados) < 10:
-                        ignorados.append({"linha": int(idx) + 2, "motivo": "Item não cadastrado no MRO DB", "produto": part_number})
-                    continue
-                item_id = item["id"]
+                # v5.1.0 (F2): PN fora do inventário não é mais descartado — a SC é criada e o
+                # item vai para itens_sc_externos (visibilidade do ciclo SC→PO; "promover" depois).
+                externo = item is None
+                item_id = None if externo else item["id"]
 
                 descricao_item = str(_valor(row, colunas["descricao_item"], part_number) or "").strip()
                 justificativa = str(_valor(row, colunas["justificativa"], "") or "").strip()
@@ -3602,7 +3665,7 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                 # de `inventario.unidade_compra`). Capturada, não descartada.
                 unidade_obs = (str(_valor(row, colunas["unidade"], "") or "").strip() or None)
 
-                if prioridade_critica and item["importancia"] != "Parada de Linha":
+                if not externo and prioridade_critica and item["importancia"] != "Parada de Linha":
                     conn.execute("UPDATE inventario SET importancia=?, data_atualizacao=? WHERE id=?",
                                  ("Parada de Linha", agora, item_id))
 
@@ -3638,6 +3701,15 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                           comprador, data_po, saving_val, departamento))
                     sc_id = cur.lastrowid
                     stats["scs_criadas"] += 1
+
+                # v5.1.0 (F2): item com PN fora do inventário → itens_sc_externos (não polui
+                # itens_sc/inventario/precos). A SC acima é criada/atualizada normalmente.
+                if externo:
+                    _upsert_item_sc_externo(conn, sc_id, part_number, descricao_item, qtd_sc,
+                                            unidade_obs, preco_unit, valor_total,
+                                            numero_po or None, data_necessidade, "excel")
+                    stats["externos"] += 1
+                    continue
 
                 dados_item = (
                     numero_po or None, qtd_sc, qtd_entregue, data_necessidade, justificativa,

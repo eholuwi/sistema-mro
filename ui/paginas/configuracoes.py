@@ -19,7 +19,9 @@ import streamlit as st
 from services.db_functions import (
     importar_inventario_neidson, listar_valores,
     adicionar_valor_lista, remover_valor_lista, sincronizar_fornecedores_lista,
+    listar_solicitantes_mro, marcar_solicitante_mro, definir_codigo_solicitante_mro,
 )
+from services import scm_sync
 from ui.cache import invalidar_leituras
 from ui.tema import paleta_atual
 
@@ -86,6 +88,72 @@ def render() -> None:
                             st.rerun()
                         else:
                             st.error(res_a.get("erro", "Falha na importação."))
+        st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Solicitantes MRO (SCM) — escopo do sync da API (v5.1.0 / F2) ──────────
+    with st.container(border=True):
+        st.subheader(":material/badge: Solicitantes MRO (SCM)")
+        st.caption("Quem é do **escopo MRO** ao puxar SCs da API do SCM (aba Monitor › "
+                   "*Atualizar agora*). O **código** Protheus é resolvido pelo nome via API — ou "
+                   "informado à mão. **Só solicitantes com código entram na sincronização.**")
+
+        incluidos = listar_solicitantes_mro(apenas_incluidos=True)
+        if incluidos:
+            for s in incluidos:
+                with st.container(border=True):
+                    cN, cC, cS, cB = st.columns([3, 2, 1, 1])
+                    _dep = f"  ·  _{s['departamento']}_" if s.get("departamento") else ""
+                    cN.markdown(f"**{s['nome']}**{_dep}")
+                    if not (s.get("codigo") or "").strip():
+                        cN.caption(":material/warning: sem código — não entra no sync")
+                    _cod = cC.text_input("Código", value=s.get("codigo") or "",
+                                         key=f"cod_sol_{s['id']}", placeholder="ex.: 001054",
+                                         label_visibility="collapsed")
+                    if cS.button(":material/save:", key=f"savecod_{s['id']}", help="Salvar código"):
+                        definir_codigo_solicitante_mro(s["id"], _cod)
+                        invalidar_leituras()
+                        st.rerun()
+                    if cB.button(":material/close:", key=f"rmsol_{s['id']}",
+                                 help="Remover do escopo MRO"):
+                        marcar_solicitante_mro(s["nome"], incluir=False)
+                        invalidar_leituras()
+                        st.rerun()
+        else:
+            st.info("Nenhum solicitante no escopo MRO ainda. Adicione abaixo.")
+
+        st.divider()
+        candidatos = [c["nome"] for c in listar_solicitantes_mro(apenas_incluidos=False)]
+        c_add1, c_add2 = st.columns([3, 1])
+        with c_add1:
+            escolhido = ""
+            if candidatos:
+                escolhido = st.selectbox("Adicionar da lista (aba SCM USERS)", [""] + candidatos,
+                                         key="add_sol_sel")
+            else:
+                st.caption("Sem candidatos importados (aba SCM USERS) — use o campo abaixo.")
+            novo_nome = st.text_input("…ou digite um nome novo", key="add_sol_txt",
+                                      placeholder="Nome completo do solicitante")
+        with c_add2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button(":material/person_add: Adicionar", key="add_sol_btn", width="stretch"):
+                alvo = (novo_nome or "").strip() or (escolhido or "").strip()
+                if alvo:
+                    marcar_solicitante_mro(alvo, incluir=True)
+                    invalidar_leituras()
+                    st.rerun()
+                else:
+                    st.warning("Escolha um nome da lista ou digite um.")
+
+        if st.button(":material/sync: Resolver códigos agora (via API)", key="resolve_cod_btn",
+                     help="Consulta a API do SCM e preenche os códigos faltantes casando pelo nome."):
+            try:
+                n = scm_sync.resolver_codigos_solicitantes()
+                invalidar_leituras()
+                st.success(f"{n} código(s) resolvido(s) pela API.")
+                time.sleep(0.8)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Não foi possível resolver via API: {e}")
         st.markdown("<br>", unsafe_allow_html=True)
 
     # Definição das categorias de listas

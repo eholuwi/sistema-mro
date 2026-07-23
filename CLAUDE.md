@@ -20,6 +20,7 @@ contexto.
 | Dashboards / KPIs / drill-down | `services/dashboards.py`, `services/drill_down.py` |
 | Ficha 360 | `services/ficha.py` |
 | SCM / Monitor de SC | `services/monitor_scm.py`, `services/monitor_cruzamento.py`, `services/scm_client.py` |
+| SCM Sync (API → mro.db, v5.1.0/F2) | `services/scm_sync.py` (parsers + orquestrador `sincronizar`), tabela `itens_sc_externos` |
 | Constantes / tema / estilos | `services/constants.py`, `services/tema.py`, `services/styles.py` |
 | Testes (regressão por versão) | `tests/test_vXXX_*.py` |
 | Continuidade / backlog | `docs/HANDOFF.md` (seção "STATUS ATUAL" no topo), `docs/prompt.md` |

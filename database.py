@@ -498,6 +498,37 @@ def criar_banco():
     """)
     c.execute("CREATE INDEX IF NOT EXISTS idx_guarda_chuva_item ON guarda_chuva(item_id)")
 
+    # v5.1.0 (F2) — Itens de SC cujo PN NÃO está no inventário MRO. Antes eram
+    # simplesmente descartados na ingestão (Excel e API); agora ficam registrados aqui,
+    # ligados à SC, para visibilidade completa do ciclo SC→PO e futura "promoção" ao
+    # inventário. Aditiva; UNIQUE(sc_id, part_number) garante upsert idempotente.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS itens_sc_externos (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            sc_id            INTEGER NOT NULL,
+            part_number      TEXT NOT NULL,
+            descricao        TEXT,
+            quantidade       REAL DEFAULT 0,
+            unidade          TEXT,
+            preco_unitario   REAL DEFAULT 0,
+            valor_total      REAL DEFAULT 0,
+            numero_po        TEXT,
+            data_necessidade TEXT,
+            origem           TEXT,
+            data_registro    TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (sc_id) REFERENCES solicitacoes_compra(id) ON DELETE CASCADE,
+            UNIQUE(sc_id, part_number)
+        )
+    """)
+
+    # v5.1.0 (F2) — código Protheus do solicitante (ex.: "001054"), necessário para o
+    # endpoint ByUser do sync SCM. Resolvido por nome via /Usuario (ou preenchido à mão
+    # em Configurações). Nullable — solicitantes sem código apenas não entram no sync.
+    cols_sm = {r[1] for r in conn.execute("PRAGMA table_info(solicitantes_mro)")}
+    if "codigo" not in cols_sm:
+        conn.execute("ALTER TABLE solicitantes_mro ADD COLUMN codigo TEXT")
+        logger.info("  -> Migracao: codigo em solicitantes_mro adicionada.")
+
     cols_sc = {r[1] for r in conn.execute("PRAGMA table_info(solicitacoes_compra)")}
     novas_cols_sc = {
         "solicitante": "TEXT",
@@ -512,6 +543,12 @@ def criar_banco():
         "data_po": "TEXT",
         "saving": "REAL",
         "departamento": "TEXT",
+        # v5.1.0 (F2) — Sincronização SCM persistente (API → mro.db). sc_id_scm é o id
+        # inteiro da SC na API (fonte de dedup ao lado de numero_sc); centro_custo vem do
+        # ByUser/Timeline; data_sync_api marca a última vez que a API atualizou esta SC.
+        "sc_id_scm": "INTEGER",
+        "centro_custo": "TEXT",
+        "data_sync_api": "TEXT",
     }
     for col, tipo in novas_cols_sc.items():
         if col not in cols_sc:
@@ -535,6 +572,9 @@ def criar_banco():
         "preco_unitario": "REAL DEFAULT 0",
         "valor_total": "REAL DEFAULT 0",
         "moeda": "TEXT",
+        # v5.1.0 (F2) — origem do item ('excel' | 'api_scm'), para rastrear a fonte que
+        # preencheu a linha (a API enriquece, o Excel é fallback).
+        "origem": "TEXT",
     }
     for col, tipo in novas_cols_isc.items():
         if col not in cols_isc:
@@ -560,6 +600,11 @@ def criar_banco():
     # v2.5.0 — histórico de sugestões de reposição (consultas por item e por data).
     c.execute("CREATE INDEX IF NOT EXISTS idx_sugest_item   ON sugestoes_reposicao(item_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_sugest_data   ON sugestoes_reposicao(data_geracao)")
+    # v5.1.0 (F2) — apoio ao sync SCM e às consultas por solicitante/comprador/id-API.
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sc_solicitante ON solicitacoes_compra(solicitante)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sc_comprador   ON solicitacoes_compra(comprador)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sc_scmid       ON solicitacoes_compra(sc_id_scm)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_isc_ext_sc     ON itens_sc_externos(sc_id)")
 
     conn.commit()
     _migrar(conn)
@@ -653,7 +698,7 @@ def criar_banco():
 
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 5.0.0")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 5.1.0")
 
 
 def _migrar(conn):

@@ -89,12 +89,19 @@ def test_importar_relatorio_idempotente(db, make_item, tmp_path):
     assert (n1, s1, i1) == (n2, s2, i2)
 
 
-def test_pn_inexistente_e_ignorado(db, tmp_path):
-    # Sem cadastrar PN-ING no inventário → linha ignorada (não cria item).
+def test_pn_inexistente_vira_externo(db, tmp_path):
+    # v5.1.0 (F2): PN fora do inventário NÃO é mais descartado — a SC é criada e o item vai
+    # para itens_sc_externos (antes: linha simplesmente ignorada).
     p = _build_relatorio(str(tmp_path / "rel.xlsx"))
     ok, res = F.importar_relatorio_scs(p, "rel.xlsx")
     assert res["SCM"]["linhas_importadas"] == 0
-    assert res["SCM"]["linhas_ignoradas"] == 1
+    assert res["SCM"]["externos"] == 1
+    assert res["SCM"]["linhas_ignoradas"] == 0
+    with database.transaction() as c:
+        n_ext = c.execute("SELECT COUNT(*) FROM itens_sc_externos").fetchone()[0]
+        n_sc = c.execute("SELECT COUNT(*) FROM solicitacoes_compra").fetchone()[0]
+        n_isc = c.execute("SELECT COUNT(*) FROM itens_sc").fetchone()[0]
+    assert (n_ext, n_sc, n_isc) == (1, 1, 0)
 
 
 def test_solicitante_dinamico_controla_escopo(db, make_item, tmp_path):

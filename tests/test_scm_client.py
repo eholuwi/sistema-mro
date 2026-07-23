@@ -116,6 +116,24 @@ def test_esta_disponivel(monkeypatch):
     assert C.esta_disponivel() is False
 
 
+# ── v5.1.0 (F2) — endpoints do sync ──────────────────────────────────────────
+
+def test_sc_por_usuario_monta_url_sem_cache(monkeypatch):
+    fake = _FakeSession([[{"id": 41468}]])
+    monkeypatch.setattr(C, "_session", fake)
+    assert C.sc_por_usuario("001054", "20260101", "20260716") == [{"id": 41468}]
+    assert fake.calls == [C.BASE_URL + "/solicitacaoCompras/ByUser/001054/20260101/20260716"]
+
+
+def test_usuarios_monta_url(monkeypatch):
+    if hasattr(C.usuarios, "clear"):
+        C.usuarios.clear()  # isola de eventual cache do Streamlit
+    fake = _FakeSession([[{"codigo": "001054", "nome": "Fulano"}]])
+    monkeypatch.setattr(C, "_session", fake)
+    assert C.usuarios() == [{"codigo": "001054", "nome": "Fulano"}]
+    assert fake.calls == [C.BASE_URL + "/Usuario"]
+
+
 # ── Amostras reais (pulam se a pasta do estudo não existir) ───────────────────
 
 @pytest.mark.skipif(not _SAMPLES.exists(), reason="openapi/samples não presente")

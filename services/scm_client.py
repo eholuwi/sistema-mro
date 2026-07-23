@@ -122,6 +122,27 @@ def sc_timeline(sc_id):
     return _get(f"/SolicitacaoCompras/Timeline/{sc_id}")
 
 
+# ── v5.1.0 (F2) — endpoints do SYNC persistente (API → mro.db) ────────────────
+
+def sc_por_usuario(usuario, ini, fim):
+    """`GET /solicitacaoCompras/ByUser/{usuario}/{ini}/{fim}` — SCs de um solicitante no
+    período. `usuario` = código Protheus (ex.: '001054'); `ini`/`fim` no formato
+    `yyyyMMdd`. Traz só o CABEÇALHO da SC (sem itens) — os itens vêm de `sc_timeline`.
+
+    **SEM cache** de propósito: é a fonte do sync manual; cada "Atualizar agora" precisa
+    de dado fresco. Endpoint FILTRADO (por usuário) — nunca usar os amplos (`/Produto`,
+    `/SolicitacaoCompras` sem filtro), que já derrubaram o serviço."""
+    return _get(f"/solicitacaoCompras/ByUser/{usuario}/{ini}/{fim}")
+
+
+@_cache(ttl=3600)
+def usuarios():
+    """`GET /Usuario` — diretório de usuários (código + nome + login + flags). Usado para
+    resolver o `codigo` Protheus dos solicitantes MRO por nome. Diretório moderado
+    (não é endpoint amplo proibido); cache de 1 h."""
+    return _get("/Usuario")
+
+
 @_cache(ttl=3600)
 def fornecedores():
     """`GET /Fornecedor` — cadastro de fornecedores (código + loja + nome)."""
