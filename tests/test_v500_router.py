@@ -28,7 +28,7 @@ def test_menu_opcoes_e_icones_alinhados():
 def test_rotas_migradas_sao_as_com_render():
     # Fonte única: ROTAS_MIGRADAS = exatamente as rotas com render != None.
     assert ROTAS_MIGRADAS == frozenset({"Ajuda", "Configurações", "SCM Integrado",
-                                        "Saldo em Estoque", "Gerenciar Itens"})
+                                        "Saldo em Estoque", "Gerenciar Itens", "Dashboard"})
     for nome in ROTAS_MIGRADAS:
         assert ROTAS[nome].render is not None
 
@@ -36,7 +36,7 @@ def test_rotas_migradas_sao_as_com_render():
 def test_render_pagina_recusa_pagina_nao_migrada():
     # O app só chama render_pagina quando pagina in ROTAS_MIGRADAS; fora disso, erra alto.
     with pytest.raises(KeyError):
-        render_pagina("Dashboard")     # ainda inline no app.py (migra na F4)
+        render_pagina("Movimentação")  # ainda inline no app.py (migra na F4b)
     with pytest.raises(KeyError):
         render_pagina("Inexistente")
 
