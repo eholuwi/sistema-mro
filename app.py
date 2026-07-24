@@ -1,73 +1,38 @@
-from services.db_functions import obter_dados_dashboard 
 import streamlit as st
 import pandas as pd
-import json, io, math, os, sys, time, urllib.parse
-from streamlit_option_menu import option_menu
-from datetime import date, datetime, timedelta
+import io, os, sys, time
+from datetime import date, datetime
 from services.styles import inject_custom_css
 from services.logging_config import setup_logging
-from services.constants import (
-    PREVISAO_RUPTURA_SEM_RISCO, ORDENACAO_RUPTURA_INFINITO,
-    AGING_ALERTA_DIAS, AGING_CRITICO_DIAS, RUPTURA_CRISE_DIAS,
-    PADROES_DEMANDA,
-    IMPORTANCIAS, TIPOS, SETORES, UNIDADES, STATUS_SC,
-)
+from services.constants import PREVISAO_RUPTURA_SEM_RISCO
 
 sys.path.insert(0, os.path.dirname(__file__))
 from database import criar_banco
 from services.db_functions import (
-    buscar_item_por_id, listar_inventario, salvar_item, desmarcar_inventariado,
+    listar_inventario,
     registrar_movimentacao, listar_movimentacoes, categoria_movimentacao,
-    criar_sc, atualizar_sc, registrar_recebimento_sc, listar_scs,
-    atualizar_pedido_guarda_chuva, obter_pedido_sc,
-    criar_guarda_chuva, listar_guarda_chuva, obter_guarda_chuva, atualizar_guarda_chuva,
-    registrar_recebimento_guarda_chuva, remover_guarda_chuva, saldo_total_por_material,
-    GUARDA_CHUVA_ESTAGIOS,
-    listar_itens_sc, buscar_scs_por_item, itens_com_sc_aberta, exportar_inventario_df,
-    listar_valores, adicionar_valor_lista, remover_valor_lista,
+    registrar_recebimento_sc, listar_scs,
+    listar_itens_sc, buscar_scs_por_item, exportar_inventario_df,
+    listar_valores,
     listar_setores_conhecidos, sincronizar_setores_config,
     criar_requisicao, listar_requisicoes, listar_itens_requisicao, mapa_pn_por_requisicao,
-    entregar_requisicao, adicionar_itens_requisicao, remover_item_requisicao,
+    entregar_requisicao, adicionar_itens_requisicao,
     cancelar_requisicao, listar_requisicoes_abertas,
-    importar_solicitacoes_protheus, listar_recebimentos_sc,
-    atualizar_localizacao_e_inventariar, atualizar_item_inventario,
     obter_analitico_movimentacoes, obter_analitico_divergencias,
     obter_analitico_rupturas, exportar_movimentacoes_df,
-    importar_inventario_neidson, alterar_part_number,
-    listar_historico_part_number, buscar_item_por_pn,
-    registrar_feedback, listar_feedbacks, atualizar_feedback,
-    importar_relatorio_scs, tirar_snapshot_estoque,
-    sincronizar_monitor_sc, listar_monitor_sc, salvar_monitor_sc,
-    carregar_planilha_livre, salvar_planilha_livre,
-    obter_cadastro_mro_para_cruzamento,
-    obter_maturidade_dados, calcular_giro,
+    tirar_snapshot_estoque,
+    sincronizar_monitor_sc,
     obter_valor_imobilizado, obter_evolucao_valor_imobilizado,
-    obter_evolucao_preco, obter_abc_valor,
-    obter_fornecedores_por_item,
-    filtrar_itens_por_busca, sincronizar_fornecedores_lista,
-    sugerir_conversao, setor_dominante_por_item,
-)
-from services.constants import UNIDADES_COMPRA_SUGERIDAS, FATOR_CONVERSAO_PADRAO
-from services.planejamento import (
-    gerar_sugestoes_reposicao, sugestao_para_item_sc,
-    registrar_desfecho_sugestao, buscar_sc_id_por_numero,
-    agrupar_por_tipo_material, resumir_grupo_sc,
+    obter_abc_valor,
 )
 from services.ficha import (
     montar_ficha_360, salvar_imagem_item, remover_imagem_item,
     agrupar_saldo_residual_por_fornecedor,
 )
-from services.monitor_cruzamento import preparar_df, cruzar_scm_sc7, COLUNAS_SAIDA
-from services import scm_client
-from services.monitor_scm import cotacoes_no_escopo, montar_scs_nao_atendidas, COLUNAS_SCS_NAO_ATENDIDAS
-from services.dashboards import (
-    montar_dashboard, montar_visao_compras_mro, montar_visao_almoxarifado,
-    PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_EXECUTIVO,
-)
 from ui.tema import paleta_atual
-from ui.formatos import fmt, fmt_date_input
+from ui.formatos import fmt
 from ui.sidebar import render_sidebar
-from ui.componentes.selecao import sel_material, opcoes_com_atual
+from ui.componentes.selecao import sel_material
 # Gráficos usados pelos blocos ainda inline (Movimentação/Requisição e Ficha 360 — F4b).
 from ui.componentes.graficos import _barv, _mes_label
 from ui.router import ROTAS_MIGRADAS, render_pagina

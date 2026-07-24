@@ -6,8 +6,25 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 23/07/2026 (leia isto, não a seção 1-7 abaixo para status)
+## STATUS ATUAL — atualizado em 24/07/2026 (leia isto, não a seção 1-7 abaixo para status)
 
+- **Evolução v5.x — F4a (v5.3.0) CONCLUÍDA e no remoto.** Migração das 4 páginas grandes ainda
+  inline para `ui/paginas/`, em 4 checkpoints na branch `feat/v5.0.0` (todos pushados):
+  **CP1 Saldo em Estoque** (`fc0d314`), **CP2 Gerenciar Itens** (`528b60d`), **CP3 Dashboard**
+  (`753bf14`, + extrai `ui/componentes/graficos.py`) com **fix do import `fmt`** (`bbf3190` — o
+  Dashboard referenciava `fmt` sem importar; só estourava com Relatório de SCs importado) e a nova
+  **guarda estática `tests/test_v530_lint_imports.py`** (pyflakes sobre `app.py` + `ui/**`, falha só
+  em `UndefinedName`; `pyflakes` em `requirements-dev.txt`), **CP4 Controle de SC** (`db765cb` — a
+  maior página, 8 abas + 6 helpers, migração FIEL; aba Monitor mantém o aviso p/ SCM Integrado; 9
+  escritas chamam `invalidar_leituras()`; morto `_dialog_pedido_guarda_chuva`/`_clear_gc_edit`
+  removido). No **fechamento** (commit de refactor): limpeza dos **83 imports órfãos** do `app.py`
+  (44 só do bloco `db_functions`) + `graphify update .` + esta atualização do HANDOFF. **`app.py`:
+  4.063 → 1.383 linhas (−66%) ao longo da F4a**; **7/7 páginas de produto agora em `ROTAS_MIGRADAS`**
+  — só **Movimentação** e **Ficha 360** seguem inline (F4b). `_render_ficha_guarda_chuva` fica no
+  `app.py` (é da Ficha 360). Rótulos 5.2.0 → 5.3.0 (page_config, sidebar, log do banco). **Sem
+  migração de schema.** Testes: **496 verdes** (475 + a guarda pyflakes parametrizada por módulo) +
+  smoke AppTest das páginas. **Validação no app real: Dashboard ✅ (Luis) e Controle de SC ✅ (Luis,
+  nesta sessão).** Ver `changelog/5.3.0.md`.
 - **Evolução v5.x — F3 (v5.2.0) COMMITADA e no remoto.** Commit `3721a57` na branch `feat/v5.0.0`
   (já pushado — F1/F2/F3 todas no `origin/feat/v5.0.0`). **Validação no app real ainda pendente** (o
   Luis autorizou o commit/push com base na suíte + smoke render semeado; ainda não abriu o Streamlit
@@ -68,11 +85,11 @@
   chamam `invalidar_leituras()`; a sidebar segue leitura direta p/ não arriscar métrica velha);
   `ui/componentes/` (graficos/selecao/drill_down) **adiados p/ F4** (usados só pelos `_render_*`
   inline — mover antes seria churn sem ganho). Validação manual no app real recomendada antes de seguir p/ a F2.
-- **🎯 PRÓXIMO — plano aprovado:** `docs/PLANO_V5_EVOLUCAO.md`. Depois do commit da F3: **F4a (v5.3.0)**
-  migrar **Saldo em Estoque, Gerenciar Itens, Dashboard, Controle de SC** para `ui/paginas/` adotando
-  `barra_filtros`/`tabela_paginada` (já prontos na F3) + cache nos assemblers; **F4b (v5.4.0)** migrar
-  **Ficha 360** e **Movimentação** (críticas, por último, 1 commit por página) + passada global de UX;
-  **F5 (v5.5.0)** distribuição no PC-servidor (Python embeddable + navegador).
+- **🎯 PRÓXIMO — F4b (v5.4.0):** `docs/PLANO_V5_EVOLUCAO.md`. Migrar **Movimentação** e **Ficha 360**
+  (as duas críticas, por último, **1 commit por página**) para `ui/paginas/`, extrair
+  `ui/componentes/drill_down.py` e **padronizar o Monitor** (o aviso "SCM Integrado" fica) + passada
+  global de UX — adotar `barra_filtros`/`tabela_paginada` nas tabelas que ficaram como migração pura
+  na F4a. Depois **F5 (v5.5.0)** distribuição no PC-servidor (Python embeddable + navegador).
 - **Versão anterior: v4.7.0 — Requisição Digital (MVP).** Implementada e testada em
   `feat/v3.10.0-4.0.0-ux-redesign`; **aguardando commit** (o commit é feito só após o OK do Luis +
   validação no app real, regra do projeto). A **Requisição** ganhou **ciclo de vida**:
@@ -111,18 +128,17 @@
 ```
 Continuar o Sistema MRO (Inventus Power). Leia @docs/HANDOFF.md (seção "STATUS ATUAL" no topo) e
 @docs/PLANO_V5_EVOLUCAO.md — plano da grande evolução v5.x já aprovado (SCM Integrado com sync
-API→banco, refatoração faseada do app.py, distribuição via servidor). F1 (v5.0.0), F2 (v5.1.0) e F3
-(v5.2.0 — página SCM Integrado + pacote ui/componentes/ + services/scm_consulta.py) estão COMMITADAS
-e PUSHADAS (ba01f61, c85390d, 3721a57) na branch feat/v5.0.0; 461 testes verdes + smoke render OK.
-Trabalhe na branch feat/v5.0.0 (git pull antes). ⚠️ A F3 foi commitada/pushada com base na suíte +
-smoke render semeado, mas o Luis AINDA NÃO validou no app real — se ele ainda não abriu o Streamlit,
-comece confirmando a página SCM Integrado no app (3 abas com API on/off, clique linha→Detalhes,
-"Buscar dados ao vivo", "Atualizar agora" grava, Monitor sem a UI antiga, Movimentação/Ficha 360
-intactas). Suspeitas herdadas da F2 a checar com dado real: códigos de status da API e a filial "01"
-do "ao vivo". Próximo passo do plano: F4a (v5.3.0) — migrar Saldo em Estoque, Gerenciar Itens,
-Dashboard e Controle de SC para ui/paginas/ adotando barra_filtros/tabela_paginada (já prontos na
-F3) + cache nos assemblers. Siga a skill atualizar-sistema-mro, valide cada fase (pytest + smoke +
-app real) e PARE para aprovação antes de cada commit.
+API→banco, refatoração faseada do app.py, distribuição via servidor). F1 (v5.0.0) a F4a (v5.3.0)
+estão COMMITADAS e PUSHADAS na branch feat/v5.0.0 — 7/7 páginas de produto já vivem em ui/paginas/;
+só Movimentação e Ficha 360 seguem inline no app.py (1.383 linhas, 496 testes verdes). Trabalhe na
+branch feat/v5.0.0 (git pull antes). Validação no app real: Dashboard e Controle de SC OK (Luis);
+F1/F2/F3 (SCM Integrado, sync API→banco) foram commitadas com base em suíte + smoke — se ainda não
+abriu o Streamlit, vale confirmar a página SCM Integrado (3 abas com API on/off, clique
+linha→Detalhes, "Atualizar agora" grava) e as suspeitas herdadas da F2 (códigos de status da API e a
+filial "01"). Próximo passo do plano: F4b (v5.4.0) — migrar Movimentação e Ficha 360 (as duas
+críticas, 1 commit por página), extrair drill_down.py e padronizar o Monitor + passada global de UX.
+Siga a skill atualizar-sistema-mro, valide cada fase (pytest + smoke + app real) e PARE para
+aprovação antes de cada commit.
 ```
 
 ---
