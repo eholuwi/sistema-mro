@@ -6,7 +6,11 @@ import logging
 from datetime import datetime
 from contextlib import contextmanager
 
-DB_PATH = "mro.db"
+# v5.5.0 (F5) — caminho do banco resolvido de forma ABSOLUTA e sobrescrevível por env.
+# Sem MRO_DB_PATH (dev do Luis): resolve p/ o mro.db ao lado deste arquivo — o mesmo lugar
+# onde o antigo "mro.db" relativo já caía quando o Streamlit roda a partir de sistema-mro/.
+# No servidor: MRO_DB_PATH=C:\MRO\dados\mro.db (banco fora da pasta do app, distribuível).
+DB_PATH = os.environ.get("MRO_DB_PATH") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "mro.db")
 logger = logging.getLogger(__name__)
 
 
@@ -25,6 +29,9 @@ def get_connection():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    # v5.5.0 (F5) — acesso concorrente (compradores via navegador): espera até 5 s por um
+    # lock em vez de estourar "database is locked" imediatamente. Complementa o WAL.
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 @contextmanager
@@ -702,7 +709,7 @@ def criar_banco():
 
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 5.4.0")
+    logger.info("Banco de dados criado/verificado com sucesso. Versão 5.5.0")
 
 
 def _migrar(conn):

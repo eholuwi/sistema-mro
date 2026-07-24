@@ -18,7 +18,7 @@ from services.db_functions import listar_inventario, listar_scs
 from ui.router import opcoes_menu, icones_menu
 from ui.tema import paleta_atual
 
-VERSAO = "v5.4.0"
+VERSAO = "v5.5.0"
 
 
 def render_sidebar() -> str:

@@ -1,0 +1,23 @@
+# Config de PRODUÇÃO (PC-servidor) — v5.5.0 / F5. NÃO usar no dev.
+# A doc docs/INSTALACAO_SERVIDOR.md instrui copiar este arquivo para
+# C:\MRO\app\.streamlit\config.toml no servidor. O .streamlit/config.toml
+# committado no repositório continua THEME-ONLY (dev do Luis intocado).
+
+# ── Tema da marca (idêntico ao .streamlit/config.toml de dev) ──────────────────
+[theme]
+base = "light"
+primaryColor = "#F36F21"
+backgroundColor = "#F6F7F9"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1A1D21"
+font = "sans serif"
+
+# ── Servidor (só produção) ─────────────────────────────────────────────────────
+[server]
+headless = true            # não abre navegador local / pula o prompt de e-mail
+address = "0.0.0.0"        # aceita conexões da rede (Miguel/Davi pelo navegador)
+port = 8501
+fileWatcherType = "none"   # produção: não vigiar arquivos (menos CPU e reruns)
+
+[browser]
+gatherUsageStats = false
