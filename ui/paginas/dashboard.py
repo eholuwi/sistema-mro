@@ -21,6 +21,7 @@ import streamlit as st
 from services.constants import PADROES_DEMANDA
 from services.dashboards import PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_EXECUTIVO
 from services.db_functions import listar_requisicoes
+from ui.formatos import fmt
 from ui.tema import paleta_atual
 from ui.cache import (
     inventario_cached, dashboard_cached, visao_compras_cached,

@@ -2,6 +2,9 @@
 # Instale com: pip install -r requirements-dev.txt
 pytest>=8,<10
 pytest-cov>=5
+# Análise estática de nomes indefinidos / imports (test_v530_lint_imports.py).
+# Guarda a refatoração v5.x contra "esqueci de importar X" ao mover código p/ ui/.
+pyflakes>=3
 
 # Runtime ja exigido pelo sistema, necessario para os testes de integracao leve:
 pandas
