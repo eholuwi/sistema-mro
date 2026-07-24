@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from ui.paginas import (
-    ajuda, configuracoes, dashboard, gerenciar_itens, saldo_estoque, scm_integrado,
+    ajuda, configuracoes, controle_sc, dashboard, gerenciar_itens, saldo_estoque,
+    scm_integrado,
 )
 
 
@@ -31,7 +32,7 @@ ROTAS: dict[str, Rota] = {
     "Ficha 360":        Rota("card-image"),              # inline (F4b)
     "Gerenciar Itens":  Rota("plus-circle", gerenciar_itens.render),  # F4a
     "Movimentação":     Rota("arrow-repeat"),            # inline (F4b)
-    "Controle de SC":   Rota("receipt"),                 # inline (F4)
+    "Controle de SC":   Rota("receipt", controle_sc.render),         # F4a
     "SCM Integrado":    Rota("cloud-check", scm_integrado.render),   # F3 — consulta unificada
     "Ajuda":            Rota("question-circle", ajuda.render),
     "Configurações":    Rota("gear", configuracoes.render),

@@ -28,7 +28,8 @@ def test_menu_opcoes_e_icones_alinhados():
 def test_rotas_migradas_sao_as_com_render():
     # Fonte única: ROTAS_MIGRADAS = exatamente as rotas com render != None.
     assert ROTAS_MIGRADAS == frozenset({"Ajuda", "Configurações", "SCM Integrado",
-                                        "Saldo em Estoque", "Gerenciar Itens", "Dashboard"})
+                                        "Saldo em Estoque", "Gerenciar Itens", "Dashboard",
+                                        "Controle de SC"})
     for nome in ROTAS_MIGRADAS:
         assert ROTAS[nome].render is not None
 
