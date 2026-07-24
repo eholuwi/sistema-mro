@@ -27,7 +27,7 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="MRO Inventus Power 5.3.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MRO Inventus Power 5.4.0", page_icon=":material/build:", layout="wide", initial_sidebar_state="expanded")
 
 
 # Paleta única do tema escolhido (via ui.tema.paleta_atual) — consumida pelo CSS

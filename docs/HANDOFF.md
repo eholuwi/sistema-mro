@@ -8,6 +8,21 @@
 
 ## STATUS ATUAL — atualizado em 24/07/2026 (leia isto, não a seção 1-7 abaixo para status)
 
+- **Evolução v5.x — F4b (v5.4.0) CONCLUÍDA, COMMITADA e PUSHADA na `feat/v5.0.0`.**
+  Migração das 2 páginas críticas (as últimas inline) para `ui/paginas/`, **1 commit por página**, cada
+  um validado no app real (Luis): **CP1 Ficha 360** (`56a2c80` — read-only; removido o morto
+  `_render_ficha_guarda_chuva`) e **CP2 Movimentação** (`de92388` — a que mais escreve estoque; extraída
+  byte-a-byte + **`invalidar_leituras()` nas 8 escritas**, corrigindo o cache velho do saldo pós-baixa —
+  agora sidebar/Saldo refrescam na hora). O **CP3 (fechamento)** faz o bump de rótulos 5.3.0 → 5.4.0
+  (page_config/sidebar/log do banco) + `changelog/5.4.0.md` + este HANDOFF + `graphify update .`. Com
+  isso `app.py` vira **SHELL de 44 linhas** (só setup + sidebar + `render_pagina`): **`ROTAS_MIGRADAS ==
+  ROTAS`**, fim do if/elif, **9/9 rotas em `ui/paginas/`**. **app.py: 1.383 → 44 (−97%); ao longo de toda
+  a v5.x: 4.588 → 44.** **Sem migração de schema.** Testes: **500 verdes** + smoke AppTest das páginas +
+  pyflakes limpo. Monitor já estava padronizado (aviso "SCM Integrado" no lugar desde a F3/F4a). **Passada
+  global de UX ADIADA** (decisão Luis): adotar `barra_filtros`/`tabela_paginada` nas tabelas de migração
+  pura da F4a vira fase própria, página a página com validação — não re-tocar telas estáveis no
+  fechamento. Ver `changelog/5.4.0.md`. Os **3 commits da F4b** (CP1 `56a2c80` / CP2 `de92388` +
+  fechamento) estão no `origin/feat/v5.0.0`.
 - **Evolução v5.x — F4a (v5.3.0) CONCLUÍDA e no remoto.** Migração das 4 páginas grandes ainda
   inline para `ui/paginas/`, em 4 checkpoints na branch `feat/v5.0.0` (todos pushados):
   **CP1 Saldo em Estoque** (`fc0d314`), **CP2 Gerenciar Itens** (`528b60d`), **CP3 Dashboard**
@@ -85,11 +100,15 @@
   chamam `invalidar_leituras()`; a sidebar segue leitura direta p/ não arriscar métrica velha);
   `ui/componentes/` (graficos/selecao/drill_down) **adiados p/ F4** (usados só pelos `_render_*`
   inline — mover antes seria churn sem ganho). Validação manual no app real recomendada antes de seguir p/ a F2.
-- **🎯 PRÓXIMO — F4b (v5.4.0):** `docs/PLANO_V5_EVOLUCAO.md`. Migrar **Movimentação** e **Ficha 360**
-  (as duas críticas, por último, **1 commit por página**) para `ui/paginas/`, extrair
-  `ui/componentes/drill_down.py` e **padronizar o Monitor** (o aviso "SCM Integrado" fica) + passada
-  global de UX — adotar `barra_filtros`/`tabela_paginada` nas tabelas que ficaram como migração pura
-  na F4a. Depois **F5 (v5.5.0)** distribuição no PC-servidor (Python embeddable + navegador).
+- **🎯 PRÓXIMO — F5 (v5.5.0):** `docs/PLANO_V5_EVOLUCAO.md`. **Distribuição no PC-servidor** (Python
+  embeddable + launcher `.bat`, acesso via navegador para Miguel/Davi, zero instalação): `DB_PATH` por
+  env var/absoluto, `_backup_db` fora da pasta do app, `PRAGMA busy_timeout=5000` em `get_connection()`,
+  `.streamlit/config.toml` headless (0.0.0.0:8501), Agendador de Tarefas + firewall 8501,
+  `atualizar_mro.bat`/`scripts/release.py`, doc `docs/INSTALACAO_SERVIDOR.md`. `drill_down.py` **não**
+  foi extraído (F4b): a UI do drill-down tem 1 só consumidor (Dashboard) — YAGNI; reabrir se surgir 2º.
+  **Backlog paralelo (ADIADO da F4b, decisão Luis):** passada global de UX — adotar
+  `barra_filtros`/`tabela_paginada` nas tabelas de migração pura da F4a + estados vazios/cabeçalhos
+  padronizados, **página a página com validação** (nunca em bloco).
 - **Versão anterior: v4.7.0 — Requisição Digital (MVP).** Implementada e testada em
   `feat/v3.10.0-4.0.0-ux-redesign`; **aguardando commit** (o commit é feito só após o OK do Luis +
   validação no app real, regra do projeto). A **Requisição** ganhou **ciclo de vida**:
@@ -128,15 +147,15 @@
 ```
 Continuar o Sistema MRO (Inventus Power). Leia @docs/HANDOFF.md (seção "STATUS ATUAL" no topo) e
 @docs/PLANO_V5_EVOLUCAO.md — plano da grande evolução v5.x já aprovado (SCM Integrado com sync
-API→banco, refatoração faseada do app.py, distribuição via servidor). F1 (v5.0.0) a F4a (v5.3.0)
-estão COMMITADAS e PUSHADAS na branch feat/v5.0.0 — 7/7 páginas de produto já vivem em ui/paginas/;
-só Movimentação e Ficha 360 seguem inline no app.py (1.383 linhas, 496 testes verdes). Trabalhe na
-branch feat/v5.0.0 (git pull antes). Validação no app real: Dashboard e Controle de SC OK (Luis);
-F1/F2/F3 (SCM Integrado, sync API→banco) foram commitadas com base em suíte + smoke — se ainda não
-abriu o Streamlit, vale confirmar a página SCM Integrado (3 abas com API on/off, clique
-linha→Detalhes, "Atualizar agora" grava) e as suspeitas herdadas da F2 (códigos de status da API e a
-filial "01"). Próximo passo do plano: F4b (v5.4.0) — migrar Movimentação e Ficha 360 (as duas
-críticas, 1 commit por página), extrair drill_down.py e padronizar o Monitor + passada global de UX.
+API→banco, refatoração faseada do app.py, distribuição via servidor). F1 (v5.0.0) a F4b (v5.4.0)
+estão COMMITADAS e PUSHADAS na branch feat/v5.0.0 (Ficha 360 56a2c80, Movimentação de92388 e o
+commit de fechamento). A refatoração de
+páginas ACABOU: app.py é um SHELL de 44 linhas, 9/9 páginas vivem em ui/paginas/ (ROTAS_MIGRADAS ==
+ROTAS), 500 testes verdes. Trabalhe na branch feat/v5.0.0 (git pull antes). Próximo passo do plano:
+F5 (v5.5.0) — distribuição no PC-servidor (Python embeddable + launcher .bat, navegador para
+Miguel/Davi, DB_PATH absoluto/env, busy_timeout, config headless, Agendador+firewall, doc
+INSTALACAO_SERVIDOR.md). Backlog paralelo adiado da F4b (decisão Luis): passada global de UX
+(barra_filtros/tabela_paginada nas tabelas de migração pura da F4a), página a página com validação.
 Siga a skill atualizar-sistema-mro, valide cada fase (pytest + smoke + app real) e PARE para
 aprovação antes de cada commit.
 ```
