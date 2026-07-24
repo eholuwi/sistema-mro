@@ -27,17 +27,18 @@ def test_menu_opcoes_e_icones_alinhados():
 
 def test_rotas_migradas_sao_as_com_render():
     # Fonte única: ROTAS_MIGRADAS = exatamente as rotas com render != None.
+    # F4b encerrou a migração: TODAS as rotas têm render (app.py é só shell).
+    assert ROTAS_MIGRADAS == frozenset(ROTAS)
     assert ROTAS_MIGRADAS == frozenset({"Ajuda", "Configurações", "SCM Integrado",
                                         "Saldo em Estoque", "Gerenciar Itens", "Dashboard",
-                                        "Controle de SC", "Ficha 360"})
+                                        "Controle de SC", "Ficha 360", "Movimentação"})
     for nome in ROTAS_MIGRADAS:
         assert ROTAS[nome].render is not None
 
 
-def test_render_pagina_recusa_pagina_nao_migrada():
-    # O app só chama render_pagina quando pagina in ROTAS_MIGRADAS; fora disso, erra alto.
-    with pytest.raises(KeyError):
-        render_pagina("Movimentação")  # ainda inline no app.py (migra na F4b)
+def test_render_pagina_recusa_pagina_inexistente():
+    # render_pagina erra alto para uma rota que não existe no menu (nome inválido).
+    # (Após a F4b não há mais páginas inline: toda rota do menu tem render.)
     with pytest.raises(KeyError):
         render_pagina("Inexistente")
 

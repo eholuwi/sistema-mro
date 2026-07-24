@@ -15,7 +15,7 @@ from typing import Callable, Optional
 
 from ui.paginas import (
     ajuda, configuracoes, controle_sc, dashboard, ficha_360, gerenciar_itens,
-    saldo_estoque, scm_integrado,
+    movimentacao, saldo_estoque, scm_integrado,
 )
 
 
@@ -31,7 +31,7 @@ ROTAS: dict[str, Rota] = {
     "Saldo em Estoque": Rota("box-seam", saldo_estoque.render),      # F4a
     "Ficha 360":        Rota("card-image", ficha_360.render),          # F4b
     "Gerenciar Itens":  Rota("plus-circle", gerenciar_itens.render),  # F4a
-    "Movimentação":     Rota("arrow-repeat"),            # inline (F4b)
+    "Movimentação":     Rota("arrow-repeat", movimentacao.render),     # F4b
     "Controle de SC":   Rota("receipt", controle_sc.render),         # F4a
     "SCM Integrado":    Rota("cloud-check", scm_integrado.render),   # F3 — consulta unificada
     "Ajuda":            Rota("question-circle", ajuda.render),
