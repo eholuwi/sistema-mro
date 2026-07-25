@@ -1,6 +1,8 @@
 # Database
 mro.db
 mro.db.bak-*
+# v5.5.0 (F5) — os .bak passaram a ser gravados aqui, ao lado do banco.
+backups/
 *.db-journal
 *.db-wal
 *.db-shm

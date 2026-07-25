@@ -433,6 +433,12 @@ def criar_banco():
     _monitor_novo = "monitor_sc" not in {
         r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if _monitor_novo:
+        # Commit antes do backup: `_backup_db` abre uma SEGUNDA conexão para o
+        # `wal_checkpoint(TRUNCATE)`. Com a transação desta conexão ainda aberta, o
+        # checkpoint espera o busy_timeout inteiro, devolve SQLITE_BUSY e o .bak sai
+        # sem o conteúdo do WAL. Os CREATE TABLE acima são `IF NOT EXISTS` — commitar
+        # aqui é idempotente e não altera o resultado da criação.
+        conn.commit()
         _backup_db("pre-monitor-sc-v390")
     c.execute("""
         CREATE TABLE IF NOT EXISTS monitor_sc (
@@ -741,6 +747,10 @@ def _migrar(conn):
     cols_req = {r[1] for r in conn.execute("PRAGMA table_info(requisicoes)")}
     if "status" not in cols_req:
         if conn.execute("SELECT 1 FROM requisicoes LIMIT 1").fetchone():
+            # Mesmo motivo do backup do monitor_sc: os ALTER TABLE acima deixam
+            # transação aberta. Sem este commit o backup sai incompleto justamente
+            # antes do UPDATE que reescreve o status das requisições legadas.
+            conn.commit()
             _backup_db("req-status-v470")
         conn.execute("ALTER TABLE requisicoes ADD COLUMN status TEXT DEFAULT 'Aberta'")
         conn.execute("UPDATE requisicoes SET status='Entregue'")  # legado: baixa já feita na criação
@@ -749,19 +759,42 @@ def _migrar(conn):
     conn.commit()
 
 
+def diretorio_backups():
+    """Pasta dos backups: `backups/` ao lado do banco (v5.5.0 / F5).
+
+    No servidor o banco fica em `C:\\MRO\\dados\\mro.db`, então os .bak caem em
+    `C:\\MRO\\dados\\backups\\` — fora da pasta do app, que é substituída inteira a
+    cada atualização (`atualizar_mro.bat`)."""
+    return os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "backups")
+
+
 def _backup_db(sufixo="pre-migracao"):
-    """Copia mro.db para um arquivo .bak com timestamp antes de migração destrutiva.
+    """Copia o banco para `backups/` com timestamp antes de migração destrutiva.
     Faz checkpoint do WAL para garantir que o arquivo principal esteja atualizado.
     Não falha a migração se o backup não puder ser feito (apenas loga)."""
     import shutil
+
     try:
         if not os.path.exists(DB_PATH):
             return None
         cp = sqlite3.connect(DB_PATH, timeout=5.0)
-        cp.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        # `PRAGMA wal_checkpoint` NÃO levanta exceção quando falha: devolve
+        # (busy, n_wal, n_checkpoint) com busy=1 em SQLITE_BUSY. Sem checar esse
+        # retorno, um checkpoint bloqueado vira falso sucesso e o .bak é gravado sem
+        # o WAL — exatamente antes de uma migração destrutiva.
+        busy, _, _ = cp.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
         cp.close()
+        if busy:
+            logger.warning(
+                "  ↳ Checkpoint do WAL retornou BUSY (lock ativo): o backup '%s' pode estar "
+                "incompleto. Verifique se há transação aberta antes do backup.",
+                sufixo,
+            )
+        destino_dir = diretorio_backups()
+        os.makedirs(destino_dir, exist_ok=True)
         carimbo = datetime.now().strftime("%Y%m%d-%H%M%S")
-        destino = f"{DB_PATH}.bak-{carimbo}-{sufixo}"
+        nome = f"{os.path.basename(DB_PATH)}.bak-{carimbo}-{sufixo}"
+        destino = os.path.join(destino_dir, nome)
         shutil.copy2(DB_PATH, destino)
         logger.info("  ↳ Backup do banco criado: %s", destino)
         return destino

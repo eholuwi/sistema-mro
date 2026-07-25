@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import glob
 import json
+import os
 from datetime import date, datetime, timedelta
 
 import database
@@ -295,10 +296,18 @@ def _resumo_zerado():
 
 
 def _backup_1x_dia():
-    """`_backup_db('sync-api')` no máximo 1×/dia (guarda pela data no nome do .bak)."""
+    """`_backup_db('sync-api')` no máximo 1×/dia (guarda pela data no nome do .bak).
+
+    v5.5.0/F5: os .bak passaram a ser gravados em `backups/` ao lado do banco, então a
+    guarda precisa varrer esse diretório — varrendo o local antigo ela nunca encontraria
+    nada e faria backup a cada sync."""
     try:
         hoje_str = date.today().strftime("%Y%m%d")
-        if not glob.glob(f"{database.DB_PATH}.bak-{hoje_str}-*sync-api"):
+        alvo = os.path.join(
+            database.diretorio_backups(),
+            f"{os.path.basename(database.DB_PATH)}.bak-{hoje_str}-*sync-api",
+        )
+        if not glob.glob(alvo):
             _backup_db("sync-api")
     except Exception:
         pass
