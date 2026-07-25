@@ -1,9 +1,45 @@
 {
-    "description": "Sistema MRO — Configurações do Claude Code",
-    "instructions": {
-        "session_start": [
-            "Leia CLAUDE.md: mapa de módulos, política de economia de contexto e regras invioláveis.",
-            "Pedido de evolução (feature/bug/cálculo/tela/KPI) → invoque a Skill atualizar-sistema-mro."
+  "permissions": {
+    "allow": [
+      "Bash(venv/Scripts/python.exe -m pytest:*)",
+      "Bash(venv/Scripts/python.exe -m ruff:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python -m ruff:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)"
+    ],
+    "deny": [
+      "Read(./mro.db)",
+      "Read(./backups/**)",
+      "Read(./mro.db.bak-*)",
+      "Read(../SCM_API_Docs/**)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/format_py.py\""
+          }
         ]
-    }
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/verify_on_stop.py\"",
+            "timeout": 700
+          }
+        ]
+      }
+    ]
+  }
 }

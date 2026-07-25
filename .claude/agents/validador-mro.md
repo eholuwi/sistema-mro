@@ -1,6 +1,6 @@
 ---
 name: validador-mro
-description: Valida uma mudança implementada no Sistema MRO antes do commit — roda os testes pytest relevantes, confere regressão e retorna um resumo curto. Acionado pela Skill atualizar-sistema-mro no passo "Validar". Não faz commit.
+description: Valida uma mudança implementada no Sistema MRO antes do commit — roda o gate `.\verify.ps1` (format + lint + testes), confere regressão e retorna um resumo curto. Acionado pela Skill atualizar-sistema-mro no passo "Validar". Não faz commit.
 tools: Read, Grep, Glob, Bash
 ---
 
@@ -14,10 +14,11 @@ existir — se o resumo virar um despejo de log, ele deixou de cumprir sua funç
 
 ## O que fazer
 
-1. Identificar quais `tests/test_vXXX_*.py` são relevantes para a mudança (pela versão/módulo
-   tocado) e rodar com `pytest`. Se não for óbvio quais são relevantes, rodar a suíte completa.
-2. Rodar a suíte completa de regressão (`pytest`) para garantir que nada quebrou fora do escopo da
-   mudança.
+1. Rodar **`.\verify.ps1`** — este é o critério objetivo: `ruff format --check` + `ruff check` +
+   `pytest`. **Exit 0 = PASS, exit 1 = FAIL.** Nunca julgar "parece bom". A suíte completa leva
+   ~1 min, então rodar tudo é o padrão; não vale a pena selecionar arquivos.
+2. Se falhar, identificar em qual das três etapas e reportar. Para iterar rápido durante a
+   investigação, `.\verify.ps1 -Rapido` pula o check de formatação.
 3. Conferir se a mudança tocou cálculos/regras de negócio críticos (planejamento, classificação,
    dashboards) e, se sim, checar se há teste cobrindo o caso alterado.
 4. **Graphify só quando necessário** — rode `graphify update .` **apenas se** a mudança introduziu
@@ -34,8 +35,11 @@ existir — se o resumo virar um despejo de log, ele deixou de cumprir sua funç
 
 ## Formato do retorno (resumo curto)
 
-- **Status:** PASS ou FAIL
-- **Testes:** N passaram / M falharam (listar só os que falharam, com o motivo em 1 linha cada)
+- **Status:** PASS ou FAIL (= exit code do `verify.ps1`, não impressão)
+- **Gate:** format ok/falhou · lint ok/N violações · testes N passaram / M falharam
+  (listar só os que falharam, com o motivo em 1 linha cada)
 - **Regressão:** ok / quebrou algo (o quê)
 - **Graphify:** rodado / não necessário
 - **Pendências de DoD:** changelog / HANDOFF — o que falta, se algo faltar
+- **Validação no app real:** sempre lembrar que continua pendente do usuário — o gate cobre
+  `services/` e `database.py`, mas `ui/` só tem o smoke de render por rota.
