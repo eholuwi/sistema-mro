@@ -1,0 +1,40 @@
+# Configuracao do ruff (lint + format) — Sistema MRO.
+#
+# Nao ha pyproject.toml porque o projeto nao e um pacote instalavel; ruff.toml evita
+# sugerir o contrario.
+#
+# EOL: `line-ending = "auto"` (padrao) preserva o fim de linha de cada arquivo. A
+# convencao do projeto e producao CRLF / testes LF (docs/HANDOFF.md §0.3) — o ruff nao
+# converte nada.
+
+line-length = 110
+target-version = "py311"
+extend-exclude = [
+    "venv",
+    "graphify-out",
+    # Scaffolding vazio herdado do setup antigo (so __init__.py/README). Some numa
+    # fase posterior; nao vale gastar lint com ele.
+    "app",
+    "controllers",
+    "core",
+    "dashboards",
+    "models",
+    "pages",
+    "reports",
+    "repositories",
+]
+
+[lint]
+# RAMPA — fase 1: so erros reais, nada de estilo.
+#   E9 = erros de sintaxe / IndentationError
+#   F  = pyflakes: nome indefinido (F821), import nao usado, f-string sem placeholder,
+#        variavel atribuida e nunca lida, redefinicao...
+# `F` cobre exatamente o que a guarda `tests/test_v530_lint_imports.py` fazia, so que
+# no repo inteiro em vez de `app.py` + `ui/`.
+# Ampliar para ["E", "I", "UP", "B"] so depois desta base limpa, em commit proprio:
+# abrir tudo de uma vez num codebase de ~11 mil linhas produz centenas de violacoes e
+# o gate acaba ignorado.
+select = ["E9", "F"]
+
+[format]
+quote-style = "double"

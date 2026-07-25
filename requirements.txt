@@ -1,6 +1,15 @@
-streamlit
-pandas
-openpyxl
-plotly
-streamlit-option-menu
-requests
+# Dependencias de runtime — versoes FIXADAS para build reproduzivel.
+#
+# Conjunto validado em 25/07/2026: suite completa verde (515 passed, 2 skipped).
+# Sem pin, `pip install` no PC-servidor traria versoes diferentes das testadas aqui —
+# e o CI (.github/workflows/verify.yml) seria nao-deterministico.
+#
+# Ao subir qualquer pin: rode `.\verify.ps1` E abra o app. A suite cobre services/ e
+# database.py; ui/ so tem o smoke de render por rota, entao regressao visual nao
+# aparece no gate automatico.
+streamlit==1.60.0
+pandas==3.0.5
+openpyxl==3.1.5
+plotly==6.9.0
+streamlit-option-menu==0.4.0
+requests==2.34.2

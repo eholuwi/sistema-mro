@@ -1,11 +1,15 @@
-# Dependencias de desenvolvimento / testes — Fase 0 (rede de seguranca)
-# Instale com: pip install -r requirements-dev.txt
-pytest>=8,<10
-pytest-cov>=5
-# Análise estática de nomes indefinidos / imports (test_v530_lint_imports.py).
-# Guarda a refatoração v5.x contra "esqueci de importar X" ao mover código p/ ui/.
-pyflakes>=3
+# Dependencias de desenvolvimento / testes.
+# Instale com: pip install -r requirements.txt -r requirements-dev.txt
+#
+# Versoes fixadas pelo mesmo motivo do requirements.txt: o gate (`.\verify.ps1` e o CI)
+# so e confiavel se todos rodam a mesma ferramenta. Um ruff de versao diferente pode
+# reprovar formatacao que outro aprova.
+pytest==9.1.1
+pytest-cov==7.1.0
 
-# Runtime ja exigido pelo sistema, necessario para os testes de integracao leve:
-pandas
-openpyxl
+# Lint + formatador. Config em ruff.toml (ruleset em rampa: so E9 e F por enquanto).
+ruff==0.16.0
+
+# Analise estatica de nomes indefinidos (tests/test_v530_lint_imports.py).
+# Guarda a refatoracao v5.x contra "esqueci de importar X" ao mover codigo p/ ui/.
+pyflakes==3.4.0
