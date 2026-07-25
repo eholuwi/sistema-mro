@@ -1,8 +1,0 @@
-# Saída gerada pelo Graphify (evita invalidação de cache e ruído)
-graphify-out/
-graph.json
-
-# Dados operacionais (exports), não conhecimento de código/arquitetura
-Inventário Improdutivo*.xlsx
-Inventário Improdutivo*.csv
-docs/itens/

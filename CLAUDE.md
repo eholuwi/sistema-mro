@@ -102,4 +102,8 @@ mapeia impacto, planeja versão/backlog e só implementa após aprovação.
 ## Graphify e Vault
 
 - Graphify é navegação; código é a fonte da verdade. Não atualizar automaticamente.
-- Vault Obsidian não deve ser modificado, salvo pedido explícito envolvendo apresentação/KPI mensal.
+- Vault Obsidian (`vault/`) **não é versionado** — está no `.gitignore` e sincroniza pelo OneDrive,
+  junto com o resto da pasta. Existe no disco; o protocolo de sessão segue em `vault/CLAUDE.md`.
+  Não modificar salvo pedido explícito envolvendo a apresentação/KPI mensal.
+- **Nunca versionar dado operacional.** O repositório é público: export de inventário, `mro.db`,
+  `.bak`, planilhas de SC e o vault ficam fora do git. O que entra no histórico não sai mais.

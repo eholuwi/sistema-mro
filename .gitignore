@@ -19,6 +19,7 @@ ENV/
 
 # Testes / cobertura
 .pytest_cache/
+.ruff_cache/
 .coverage
 
 # Pacotes de release gerados por scripts/release.py
@@ -32,3 +33,18 @@ docs/itens/
 
 # Graphify — grafo de conhecimento gerado localmente
 graphify-out/
+graph.json
+
+# ── Dado operacional e material de trabalho — NUNCA versionar ────────────────
+# O repositório é PÚBLICO. O que entra aqui fica no histórico para sempre.
+
+# Exports do inventário: part number, estoque, lead time, local, fornecedor e
+# criticidade "Parada de Linha" — o mapa de quais materiais param a produção.
+Inventário Improdutivo*.xlsx
+Inventário Improdutivo*.csv
+
+# Vault Obsidian (segundo cérebro). Foi escrito sob a premissa de que era
+# ignorado pelo git; a premissa mudou para sincronizar entre máquinas, sem
+# reauditar o conteúdo. Contém colegas nomeados com cargo, valores em R$ reais da
+# operação e material de outro setor. Sincroniza pelo OneDrive, como o resto.
+vault/
