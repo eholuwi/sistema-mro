@@ -11,6 +11,8 @@ escreve pelo caminho antigo (ver ui/cache.py e docs/PLANO_V5_EVOLUCAO.md).
 """
 from __future__ import annotations
 
+import os
+
 import streamlit as st
 from streamlit_option_menu import option_menu
 
@@ -20,13 +22,19 @@ from ui.tema import paleta_atual
 
 VERSAO = "v5.5.0"
 
+# v5.5.0 (F5) — caminho ABSOLUTO do logo. Em dev o Streamlit roda com cwd = raiz do
+# projeto e o caminho relativo funcionava; no servidor o `iniciar_mro.bat` sobe a partir
+# de C:\MRO\ apontando para app\app.py, então "inventus_logo.png" seria procurado em
+# C:\MRO\ e a sidebar subiria sem logo.
+LOGO = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inventus_logo.png")
+
 
 def render_sidebar() -> str:
     """Desenha a sidebar e devolve a página escolhida no menu."""
     pal = paleta_atual()
     with st.sidebar:
         # 1. Cabeçalho com Logo/Título (v4.1.0 — logo Inventus; versão no rodapé da nav)
-        st.image("inventus_logo.png", width="stretch")
+        st.image(LOGO, width="stretch")
         st.markdown("""
         <div class="sidebar-title">
             <span style="font-size: 1.4rem;">MRO Inventus</span>

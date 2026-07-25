@@ -21,6 +21,9 @@ ENV/
 .pytest_cache/
 .coverage
 
+# Pacotes de release gerados por scripts/release.py
+dist/
+
 # Streamlit
 .streamlit/secrets.toml
 
