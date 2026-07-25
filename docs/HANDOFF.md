@@ -200,8 +200,10 @@ graphify update .                    # re-indexa (AST-only, sem custo de API) �
 Também há tools MCP: `mcp__graphify__query_graph`, `get_node`, `get_neighbors`, `shortest_path`, `god_nodes`, etc.
 **Atenção:** `graphify-out/` é **git-ignored** (vive local, por máquina). Se abrir a próxima sessão **em outra máquina**, rode **`graphify update .`** antes de consultar. Se `graphify-out/wiki/index.md` existir, use-o para navegação ampla; leia `graphify-out/GRAPH_REPORT.md` só para arquitetura geral.
 
-### 0.2 Fluxo das 9 Skills (CLAUDE.md) — para TODA solicitação
-Entender problema → impactos/riscos → **análise das 9 skills** (PO, Supply Chain, DB, Backend, Data, UX/UI, QA, Arquitetura, DevOps) → plano → **aprovação** → implementar → validar. Detalhes na memory `project_mro_skills_framework.md`.
+### 0.2 Critério de parada — `.\verify.ps1`
+**Nada é "pronto" sem `.\verify.ps1` retornando exit 0** (`ruff format --check` + `ruff check` + `pytest`, ~1 min). Nunca usar critério subjetivo. O gate **não** substitui a validação no app real (regra inviolável nº6): a suíte cobre `services/` e `database.py`, mas `ui/` só tem o smoke de render por rota. Fluxo de mudança: Skill `atualizar-sistema-mro` → subagente `validador-mro` (roda o gate) → OK do Luis no app real → commit. Ver `CLAUDE.md`.
+
+> O antigo "fluxo das 9 skills" (PO, Supply Chain, DB, Backend, Data, UX/UI, QA, Arquitetura, DevOps) foi **descontinuado** — apontava para uma memory `project_mro_skills_framework.md` que nunca existiu e já contradizia o `CLAUDE.md` desde a reescrita dele. Os arquivos que ainda o pregavam (`MRO_QUICKSTART.md`, `.claude/pre-session.md`, `skills/`, `prompts/`, `templates/`, `config/`, `hooks/`) foram removidos.
 
 ### 0.3 Convenção de EOL (memory `eol-convention`)
 **Produção = CRLF · Testes = LF.** git usa autocrlf (index=LF, worktree=CRLF). Ao editar arquivos de produção (`app.py`, `services/*.py`, `database.py`), preservar CRLF — checar com `git ls-files --eol` / `grep -c $'\r$'` (0 linhas lone-LF = ok). `Write` gera LF (bom para testes; converter em produção se necessário).
@@ -307,4 +309,4 @@ Demais itens do §1 (ver `prompt.md`): header com **última atualização** (de 
 ---
 
 ## 7. Prompt sugerido para abrir a próxima sessão
-> "Continuando o Sistema MRO. Leia `@HANDOFF.md` e `@prompt.md`. Use **graphify** para navegar o código (rode `graphify update .` se estiver em outra máquina). Seguimos o fluxo das 9 skills. [Escolha: commitar a v3.3.0 / ir para o 2º lote do §3 / começar o §1 Dashboard de Comprador — e neste caso responda antes as 3 lacunas de dado da seção 4.2]."
+> "Continuando o Sistema MRO. Leia `@HANDOFF.md` e `@prompt.md`. Use **graphify** para navegar o código (rode `graphify update .` se estiver em outra máquina). Fluxo: Skill `atualizar-sistema-mro` + `.\verify.ps1` verde antes de qualquer commit. [Escolha: commitar a v3.3.0 / ir para o 2º lote do §3 / começar o §1 Dashboard de Comprador — e neste caso responda antes as 3 lacunas de dado da seção 4.2]."

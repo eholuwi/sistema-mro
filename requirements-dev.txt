@@ -8,8 +8,6 @@ pytest==9.1.1
 pytest-cov==7.1.0
 
 # Lint + formatador. Config em ruff.toml (ruleset em rampa: so E9 e F por enquanto).
+# `F` inclui F821 (nome indefinido) — o mesmo que a antiga guarda pyflakes garantia,
+# so que no repo inteiro em vez de apenas `app.py` + `ui/`.
 ruff==0.16.0
-
-# Analise estatica de nomes indefinidos (tests/test_v530_lint_imports.py).
-# Guarda a refatoracao v5.x contra "esqueci de importar X" ao mover codigo p/ ui/.
-pyflakes==3.4.0

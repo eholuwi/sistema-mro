@@ -38,14 +38,15 @@ Este repositório foi organizado para funcionar como uma base de desenvolvimento
 - logs/: logs e auditoria.
 - backups/: snapshots e cópias de segurança.
 - migrations/: histórico de mudanças de schema.
-- config/: configuração do projeto.
-- templates/: modelos de changelog, PR e documentação.
+- deploy/: config e launchers do PC-servidor (ver docs/INSTALACAO_SERVIDOR.md).
+- verify.ps1: gate de verificação (format + lint + testes) — critério de parada do projeto.
 - .claude/skills/atualizar-sistema-mro/: Skill do Claude Code (Product Owner técnico do fluxo de mudanças).
 - .claude/agents/validador-mro.md: subagente de validação (testes + regressão) do Claude Code.
 
 ## Documentação relevante
 
-- [docs/SETUP_DEFINITIVO.md](docs/SETUP_DEFINITIVO.md)
+- [docs/HANDOFF.md](docs/HANDOFF.md) — estado atual e continuidade entre sessões/máquinas
+- [docs/INSTALACAO_SERVIDOR.md](docs/INSTALACAO_SERVIDOR.md) — instalação no PC-servidor
 - [docs/ARQUITETURA.md](docs/ARQUITETURA.md)
 - [docs/FLUXO_DESENVOLVIMENTO.md](docs/FLUXO_DESENVOLVIMENTO.md)
 - [docs/BANCO_DE_DADOS.md](docs/BANCO_DE_DADOS.md)
