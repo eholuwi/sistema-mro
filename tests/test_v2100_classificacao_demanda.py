@@ -170,7 +170,7 @@ def test_listar_inventario_expoe_campos_derivados(db, make_item, registrar_consu
     com = make_item("PN-COM")
     for k in range(6):
         registrar_consumo(com, 10, (_BASE + timedelta(days=7 * k)).strftime("%Y-%m-%d %H:%M:%S"))
-    sem = make_item("PN-SEM")  # sem consumo real
+    make_item("PN-SEM")  # sem consumo real
 
     inv = {i["part_number"]: i for i in F.listar_inventario()}
     assert "padrao_demanda" in inv["PN-COM"] and "classe_xyz" in inv["PN-COM"]

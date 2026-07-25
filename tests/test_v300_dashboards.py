@@ -11,7 +11,6 @@ de banco temporário isolado).
 
 from datetime import date
 
-import pytest
 
 import database
 from services.constants import PREVISAO_RUPTURA_SEM_RISCO

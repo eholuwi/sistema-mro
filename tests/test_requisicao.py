@@ -5,7 +5,6 @@ núcleo criação+entrega; o fluxo estendido (adicionar item, cancelar, SESMT, f
 está em test_v470_requisicao_digital.py.
 """
 
-import pytest
 from services import db_functions as F
 
 CC = "21106 - MANUTENÇÃO"

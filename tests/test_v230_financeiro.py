@@ -64,7 +64,7 @@ def test_preco_valoracao_sem_preco(db, make_item):
 def test_valor_imobilizado_total_e_sem_preco(db, make_item):
     a = make_item("PN-I1", estoque=10)
     _set_preco_ref(a, 5.0)  # 10 × 5 = 50
-    b = make_item("PN-I2", estoque=4)  # estoque mas sem preço
+    make_item("PN-I2", estoque=4)  # estoque mas sem preço
     make_item("PN-I3", estoque=0)  # sem estoque e sem preço → não conta como "sem preço"
     vi = F.obter_valor_imobilizado()
     assert vi["total_brl"] == 50.0

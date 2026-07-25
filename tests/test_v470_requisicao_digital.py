@@ -3,7 +3,6 @@
 no mesmo papel'), remover item, cancelar, a regra SESMT e a fila de separação.
 """
 
-import pytest
 from services import db_functions as F
 
 CC = "21106 - MANUTENÇÃO"

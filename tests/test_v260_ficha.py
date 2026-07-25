@@ -9,7 +9,6 @@ altera a base do Neidson.
 
 from datetime import datetime
 
-import pytest
 
 import database
 from services import db_functions as F

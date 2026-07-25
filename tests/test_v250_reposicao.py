@@ -14,7 +14,6 @@ from services import db_functions as F
 from services import planejamento as P
 from services.constants import (
     HORIZONTE_REPOSICAO_DIAS,
-    ANTECEDENCIA_REPOSICAO_DIAS,
     LEAD_TIME_DEFAULT_DIAS,
 )
 
@@ -196,6 +195,7 @@ def test_qtd_desconta_guarda_chuva_e_nunca_negativa():
 def test_qtd_arredonda_para_cima():
     q = P.calcular_qtd_sugerida(_item(consumo_medio_diario=0.5, estoque_maximo=0, estoque_atual=0))
     # alvo = 0.5*60 = 30.0 -> qtd 30 (exato). Testa fração:
+    assert q["qtd"] == 30
     q2 = P.calcular_qtd_sugerida(_item(consumo_medio_diario=0.51, estoque_maximo=0, estoque_atual=0))
     assert q2["qtd"] == 31  # ceil(30.6)
 

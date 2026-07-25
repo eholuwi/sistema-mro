@@ -9,7 +9,6 @@ Cobre as três camadas novas sem depender de rede nem de Streamlit em execução
 """
 
 import pandas as pd
-import pytest
 
 from services import scm_consulta, scm_sync
 from services.db_functions import _upsert_item_sc_externo

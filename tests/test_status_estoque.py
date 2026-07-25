@@ -1,7 +1,6 @@
 """Fase 2 (DT-4): fixa a regra OFICIAL de status de estoque (faixa com margem
 de 20%) e documenta o alvo de unificacao do dashboard."""
 
-import pytest
 from services.db_functions import calcular_status_inventario as status
 
 

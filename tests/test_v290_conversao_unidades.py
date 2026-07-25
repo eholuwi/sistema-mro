@@ -19,7 +19,7 @@ import pytest
 import database
 from services import db_functions as F
 from services import planejamento as P
-from services.constants import extrair_fator_embalagem, FATOR_CONVERSAO_PADRAO
+from services.constants import extrair_fator_embalagem
 
 
 CC = "21194 - ALMOXARIFADO"

@@ -1,11 +1,10 @@
-import sqlite3, json, re, math, unicodedata
+import sqlite3, json, re, unicodedata
 import logging
 from datetime import datetime, date, timedelta
 from database import transaction
 from services.constants import (
     MARGEM_ATENCAO,
     FATOR_ESTOQUE_MAXIMO,
-    FATOR_ESTOQUE_SEGURANCA,
     JANELA_CONSUMO_DIAS,
     PREVISAO_RUPTURA_SEM_RISCO,
     SNAPSHOT_RETENCAO_DIAS,
@@ -15,7 +14,6 @@ from services.constants import (
     TENDENCIA_LIMIAR_PCT,
     GIRO_JANELA_DIAS,
     LEAD_TIME_MAX_DIAS,
-    LEAD_TIME_DEFAULT_DIAS,
     ABC_LIMIAR_A,
     ABC_LIMIAR_B,
     VALOR_CONSUMIDO_JANELA_DIAS,
@@ -716,7 +714,7 @@ def sincronizar_monitor_sc(conn=None, hoje=None, force=False):
         # 2) Desativa todas as linhas de sistema; as pendentes serão reativadas no upsert.
         c.execute("UPDATE monitor_sc SET ativo=0 WHERE origem='sistema'")
 
-        rows = c.execute(f"""
+        rows = c.execute("""
             SELECT isc.id AS item_sc_id, sc.numero_sc, sc.status AS status_sc,
                    isc.numero_po AS po_item, sc.numero_po AS po_sc,
                    inv.part_number, inv.nome_item, inv.unidade,
@@ -3497,7 +3495,7 @@ def obter_analitico_divergencias(days=90):
     """
     with transaction() as conn:
         rows = conn.execute(
-            f"""
+            """
             SELECT
                 i.part_number,
                 i.nome_item,
@@ -3540,7 +3538,7 @@ def obter_analitico_rupturas(days=90):
     """
     with transaction() as conn:
         rows = conn.execute(
-            f"""
+            """
             SELECT
                 i.part_number,
                 i.nome_item,

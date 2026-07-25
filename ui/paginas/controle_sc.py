@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import io
 import math
-import os
 import time
 import urllib.parse
 from datetime import date, datetime
@@ -40,7 +39,6 @@ from services.db_functions import (
     listar_guarda_chuva,
     listar_inventario,
     listar_itens_sc,
-    listar_monitor_sc,
     listar_recebimentos_sc,
     listar_scs,
     listar_valores,
