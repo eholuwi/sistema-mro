@@ -9,10 +9,11 @@ contexto.
 
 | Domínio | Arquivo |
 |---|---|
-| UI — shell + páginas ainda inline | `app.py` (encolhendo a cada fase da refatoração v5.x) |
+| UI — shell (só setup + sidebar + despacho) | `app.py` (44 linhas; a migração terminou na F4b) |
 | UI — router (fonte única do menu) | `ui/router.py` (`ROTAS`, `ROTAS_MIGRADAS`, `render_pagina`) |
 | UI — sidebar / tema / formatos / cache | `ui/sidebar.py`, `ui/tema.py`, `ui/formatos.py`, `ui/cache.py` |
-| UI — páginas migradas (`render()`) | `ui/paginas/` (por ora: `ajuda.py`, `configuracoes.py`) |
+| UI — páginas (`render()`) | `ui/paginas/` — as 9 rotas; `ROTAS_MIGRADAS == ROTAS` |
+| UI — componentes reusáveis | `ui/componentes/` (`filtros`, `tabela`, `selecao`, `status`, `graficos`) |
 | Lógica + acesso a dados | `services/db_functions.py` |
 | Banco / schema / migração | `database.py`, `migrations/` |
 | Planejamento (min/máx, cobertura, lead time) | `services/planejamento.py` |
@@ -23,6 +24,9 @@ contexto.
 | SCM Sync (API → mro.db, v5.1.0/F2) | `services/scm_sync.py` (parsers + orquestrador `sincronizar`), tabela `itens_sc_externos` |
 | Constantes / tema / estilos | `services/constants.py`, `services/tema.py`, `services/styles.py` |
 | Testes (regressão por versão) | `tests/test_vXXX_*.py` |
+| **Gate de verificação** | `verify.ps1`, `ruff.toml`, `.github/workflows/verify.yml` |
+| Automação do harness | `.claude/hooks/`, `.claude/settings.json`, `.claude/agents/validador-mro.md` |
+| Distribuição (servidor) | `deploy/`, `scripts/release.py`, `docs/INSTALACAO_SERVIDOR.md` |
 | Continuidade / backlog | `docs/HANDOFF.md` (seção "STATUS ATUAL" no topo), `docs/prompt.md` |
 | Changelog | `changelog/*.md` |
 
@@ -31,6 +35,44 @@ A camada de interface vive em **`ui/`** (regra de dependência: `ui/paginas/*` i
 `models/`, `core/`, `app/`, `pages/`, `dashboards/` são scaffolding **vazio** (só `__init__.py`/
 README) — não há lógica ali; serão removidas numa fase posterior (`pages/` é diretório mágico do
 Streamlit — evitar).
+
+## Comandos
+
+```powershell
+python -m venv venv                                          # setup, uma vez
+venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt
+
+.\verify.ps1                                     # GATE: format + lint + testes → exit 0/1
+.\verify.ps1 -Rapido                             # pula o format check (loop apertado)
+venv\Scripts\python.exe -m pytest -q             # só os testes (~1 min, 517)
+venv\Scripts\python.exe -m streamlit run app.py  # sobe o app
+python scripts/release.py                        # empacota p/ o servidor → dist/
+```
+
+Dependências têm **versão fixada**. Ao mexer em qualquer pin, rode o gate **e** abra o app.
+
+## Critério de parada
+
+**Nada é "pronto" sem `.\verify.ps1` retornando exit 0.** Nunca use critério subjetivo
+("parece bom", "deve funcionar"). O gate roda `ruff format --check` + `ruff check` + `pytest`.
+
+Ele **não substitui** a validação no app real (regra inviolável nº6): a suíte cobre `services/`
+e `database.py`, mas `ui/` só tem o smoke de render por rota — regressão visual não aparece ali.
+
+Quanto rigor **além** do gate, conforme o que a mudança toca:
+
+| Mudou | Além do gate |
+|---|---|
+| Tela, texto, refactor local | nada |
+| Cálculo, regra de negócio, Protheus/SCM | teste novo obrigatório; conferir bordas (zero, `None`, item sem consumo) e unidades (UN/CX/GL/RL/PCT/LT/RM) |
+| `database.py`, migração, schema | + migração idempotente e aditiva, `_backup_db` antes, **rollback testado**, FKs preservadas |
+
+Na dúvida entre dois níveis, use o mais alto e diga qual assumiu.
+
+⚠️ **Armadilha de banco já paga:** `PRAGMA` não levanta exceção — `wal_checkpoint` devolve
+`(busy, n, n)`. Nunca abra uma segunda conexão para checkpoint/backup com transação pendente na
+primeira, e sempre confira o retorno de PRAGMAs em vez de confiar no `except`.
+Ver `tests/test_v550_backup.py`.
 
 ## Política de economia de contexto
 
