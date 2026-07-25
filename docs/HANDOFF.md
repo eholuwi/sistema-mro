@@ -6,7 +6,7 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 24/07/2026 (leia isto, não a seção 1-7 abaixo para status)
+## STATUS ATUAL — atualizado em 25/07/2026 (leia isto, não a seção 1-7 abaixo para status)
 
 - **Evolução v5.x — F4b (v5.4.0) CONCLUÍDA, COMMITADA e PUSHADA na `feat/v5.0.0`.**
   Migração das 2 páginas críticas (as últimas inline) para `ui/paginas/`, **1 commit por página**, cada
@@ -100,15 +100,35 @@
   chamam `invalidar_leituras()`; a sidebar segue leitura direta p/ não arriscar métrica velha);
   `ui/componentes/` (graficos/selecao/drill_down) **adiados p/ F4** (usados só pelos `_render_*`
   inline — mover antes seria churn sem ganho). Validação manual no app real recomendada antes de seguir p/ a F2.
-- **🎯 PRÓXIMO — F5 (v5.5.0):** `docs/PLANO_V5_EVOLUCAO.md`. **Distribuição no PC-servidor** (Python
-  embeddable + launcher `.bat`, acesso via navegador para Miguel/Davi, zero instalação): `DB_PATH` por
-  env var/absoluto, `_backup_db` fora da pasta do app, `PRAGMA busy_timeout=5000` em `get_connection()`,
-  `.streamlit/config.toml` headless (0.0.0.0:8501), Agendador de Tarefas + firewall 8501,
-  `atualizar_mro.bat`/`scripts/release.py`, doc `docs/INSTALACAO_SERVIDOR.md`. `drill_down.py` **não**
-  foi extraído (F4b): a UI do drill-down tem 1 só consumidor (Dashboard) — YAGNI; reabrir se surgir 2º.
+- **F5 (v5.5.0) — distribuição.** Parte 1/3 no commit `0e510bb` (`DB_PATH` por env/absoluto,
+  `busy_timeout=5000`, `deploy/config-servidor.toml`, rótulos 5.5.0). Partes 2/3 e 3/3 fecham a fase:
+  `_backup_db` grava em `backups/` ao lado do banco (via `database.diretorio_backups()`), com
+  `services/scm_sync.py::_backup_1x_dia` ajustado para varrer o diretório novo; `ui/sidebar.py` passa a
+  resolver o logo por caminho **absoluto** (com cwd do servidor o relativo quebrava);
+  `deploy/iniciar_mro.bat` + `deploy/atualizar_mro.bat`; `scripts/release.py` (inclusão explícita —
+  nunca empacota `.db`/`vault/`); `docs/INSTALACAO_SERVIDOR.md`; `changelog/5.5.0.md`.
+  **🐛 Defeito corrigido no caminho:** o backup pré-migração rodava `wal_checkpoint(TRUNCATE)` numa
+  segunda conexão com a transação da primeira **ainda aberta** → esperava o busy_timeout inteiro e
+  devolvia `SQLITE_BUSY`. Como `PRAGMA` **não levanta exceção**, o BUSY vinha como valor de retorno,
+  o `except` nunca via nada e o `.bak` era gravado **sem o WAL**, logo antes de migração destrutiva
+  (idem `req-status-v470`, que precede o UPDATE das requisições legadas). Corrigido com `conn.commit()`
+  antes dos dois backups + checagem do retorno do checkpoint. **Suíte: ~47 min → ~58 s.**
+  Testes: `tests/test_v550_backup.py` e `tests/test_v550_release.py` (7 cada); **515 verdes, 2 skipped**.
+  ⚠️ **Validação física pendente (Luis):** reboot-test no PC-servidor, acesso de outra máquina, ensaio
+  de backup/restore e de atualização. `drill_down.py` **não** foi extraído (F4b): a UI do drill-down tem
+  1 só consumidor (Dashboard) — YAGNI; reabrir se surgir 2º.
   **Backlog paralelo (ADIADO da F4b, decisão Luis):** passada global de UX — adotar
   `barra_filtros`/`tabela_paginada` nas tabelas de migração pura da F4a + estados vazios/cabeçalhos
   padronizados, **página a página com validação** (nunca em bloco).
+- **🎯 PRÓXIMO — harness de verificação (branch `chore/harness-v5`).** O projeto não tem lint,
+  formatador nem CI, e o `.claude/settings.json` usa chaves inventadas que o Claude Code ignora
+  (nenhuma instrução de sessão jamais chegou ao modelo). Plano: `ruff` (ruleset em rampa `E9`,`F`) +
+  `verify.ps1` (format + lint + testes → exit 0/1) como critério de parada objetivo, hooks reais
+  (formata ao editar; bloqueia o fim do turno com teste quebrado), CI no GitHub Actions, o subagente
+  `validador-mro` passando a rodar `verify.ps1`, e a remoção da governança legada das 9 personas
+  (`.claude/pre-session.md`, `MRO_QUICKSTART.md`, `skills/`, `prompts/`, `templates/`, `config/`,
+  `hooks/`) que ainda **contradiz** o `CLAUDE.md` atual — junto com os guardas
+  `tests/test_setup_definitivo.py` e `scripts/validate_project.py`, que exigem essas pastas.
 - **Versão anterior: v4.7.0 — Requisição Digital (MVP).** Implementada e testada em
   `feat/v3.10.0-4.0.0-ux-redesign`; **aguardando commit** (o commit é feito só após o OK do Luis +
   validação no app real, regra do projeto). A **Requisição** ganhou **ciclo de vida**:
