@@ -7,8 +7,7 @@ seria redundante. Exigimos apenas os 3 indices que cobrem FKs sem indice."""
 
 def test_indices_essenciais_existem(db):
     conn = db.get_connection()
-    nomes = {r["name"] for r in
-             conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    nomes = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     # part_number ja possui indice automatico via UNIQUE
     autoidx_pn = {r["name"] for r in conn.execute("PRAGMA index_list(inventario)")}
     conn.close()

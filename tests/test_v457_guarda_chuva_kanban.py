@@ -5,6 +5,7 @@ testáveis: `atualizar_pedido_guarda_chuva` (edita metadados de 1 pedido SEM toc
 ledger) e `obter_pedido_sc` (linha única com campos derivados), além da composição com
 `registrar_recebimento_sc` (o único caminho que mexe em estoque/movimentações).
 """
+
 import database
 from services import db_functions as F
 
@@ -16,16 +17,14 @@ def _abrir_sc(numero, itens):
     ok, msg = F.criar_sc(numero, "2026-01-01", itens, "")
     assert ok, msg
     conn = database.get_connection()
-    sc_id = conn.execute(
-        "SELECT id FROM solicitacoes_compra WHERE numero_sc=?", (numero,)).fetchone()["id"]
+    sc_id = conn.execute("SELECT id FROM solicitacoes_compra WHERE numero_sc=?", (numero,)).fetchone()["id"]
     conn.close()
     return sc_id
 
 
 def _first_item_sc_id(sc_id):
     conn = database.get_connection()
-    r = conn.execute(
-        "SELECT id FROM itens_sc WHERE sc_id=? ORDER BY id LIMIT 1", (sc_id,)).fetchone()
+    r = conn.execute("SELECT id FROM itens_sc WHERE sc_id=? ORDER BY id LIMIT 1", (sc_id,)).fetchone()
     conn.close()
     return r["id"]
 
@@ -67,8 +66,7 @@ def _estagio(p):
 # ── obter_pedido_sc ──────────────────────────────────────────────────────────────
 def test_obter_pedido_sc_campos_derivados(db, make_item):
     item = make_item("PN-OBT", estoque=0, minimo=5)
-    sc_id = _abrir_sc("SC-OBT", [
-        {"item_id": item, "quantidade_solicitada": 8, "quantidade_pedido": 8}])
+    sc_id = _abrir_sc("SC-OBT", [{"item_id": item, "quantidade_solicitada": 8, "quantidade_pedido": 8}])
     isc = _first_item_sc_id(sc_id)
 
     p = F.obter_pedido_sc(isc)
@@ -90,15 +88,20 @@ def test_obter_pedido_sc_inexistente(db):
 # ── atualizar_pedido_guarda_chuva: metadados ────────────────────────────────────
 def test_atualizar_grava_metadados_e_recomputa_saldo(db, make_item):
     item = make_item("PN-META", estoque=0, minimo=5)
-    sc_id = _abrir_sc("SC-META", [
-        {"item_id": item, "quantidade_solicitada": 10, "quantidade_pedido": 10}])
+    sc_id = _abrir_sc("SC-META", [{"item_id": item, "quantidade_solicitada": 10, "quantidade_pedido": 10}])
     isc = _first_item_sc_id(sc_id)
 
-    ok, msg = F.atualizar_pedido_guarda_chuva(isc, {
-        "numero_po": "PO-123", "fornecedor_item": "Fornecedor X",
-        "documento_nf": "NF-55", "data_prev_nfe": "2026-03-01",
-        "data_necessidade": "2026-02-15", "quantidade_pedido": 12,
-    })
+    ok, msg = F.atualizar_pedido_guarda_chuva(
+        isc,
+        {
+            "numero_po": "PO-123",
+            "fornecedor_item": "Fornecedor X",
+            "documento_nf": "NF-55",
+            "data_prev_nfe": "2026-03-01",
+            "data_necessidade": "2026-02-15",
+            "quantidade_pedido": 12,
+        },
+    )
     assert ok, msg
 
     p = F.obter_pedido_sc(isc)
@@ -108,14 +111,13 @@ def test_atualizar_grava_metadados_e_recomputa_saldo(db, make_item):
     assert str(p["data_prev_nfe"]) == "2026-03-01"
     assert str(p["data_necessidade"]) == "2026-02-15"
     assert p["quantidade_negociada"] == 12
-    assert p["pendente"] == 12          # recebida 0 → saldo = negociada
+    assert p["pendente"] == 12  # recebida 0 → saldo = negociada
     assert p["status_item"] == "Aberto"
 
 
 def test_editar_qtd_negociada_nao_toca_ledger(db, make_item):
     item = make_item("PN-LEDGER", estoque=100, minimo=5)
-    sc_id = _abrir_sc("SC-LEDGER", [
-        {"item_id": item, "quantidade_solicitada": 10, "quantidade_pedido": 10}])
+    sc_id = _abrir_sc("SC-LEDGER", [{"item_id": item, "quantidade_solicitada": 10, "quantidade_pedido": 10}])
     isc = _first_item_sc_id(sc_id)
 
     est0, nmov0, rec0 = _estoque(item), _n_mov(item), _recebida(isc)
@@ -133,8 +135,7 @@ def test_editar_qtd_negociada_nao_toca_ledger(db, make_item):
 
 def test_move_estagios_via_edicao_e_limpar_nf_volta(db, make_item):
     item = make_item("PN-STAGE", estoque=0, minimo=5)
-    sc_id = _abrir_sc("SC-STAGE", [
-        {"item_id": item, "quantidade_solicitada": 10, "quantidade_pedido": 10}])
+    sc_id = _abrir_sc("SC-STAGE", [{"item_id": item, "quantidade_solicitada": 10, "quantidade_pedido": 10}])
     isc = _first_item_sc_id(sc_id)
 
     assert _estagio(F.obter_pedido_sc(isc)) == "Pedido Colocado"
@@ -157,13 +158,11 @@ def test_move_estagios_via_edicao_e_limpar_nf_volta(db, make_item):
 
 def test_negociada_menor_que_recebida_fecha_pedido_e_sc(db, make_item):
     item = make_item("PN-CLAMP", estoque=0, minimo=5)
-    sc_id = _abrir_sc("SC-CLAMP", [
-        {"item_id": item, "quantidade_solicitada": 10, "quantidade_pedido": 10}])
+    sc_id = _abrir_sc("SC-CLAMP", [{"item_id": item, "quantidade_solicitada": 10, "quantidade_pedido": 10}])
     isc = _first_item_sc_id(sc_id)
 
     # Recebe 4 de 10 (ledger).
-    ok, msg = F.registrar_recebimento_sc(sc_id, isc, 4, CC, "Alm", "Alm", "Forn",
-                                         "2026-01-10", "NF-1")
+    ok, msg = F.registrar_recebimento_sc(sc_id, isc, 4, CC, "Alm", "Alm", "Forn", "2026-01-10", "NF-1")
     assert ok, msg
     assert _sc_status(sc_id) == "Parcial"
 
@@ -179,26 +178,23 @@ def test_negociada_menor_que_recebida_fecha_pedido_e_sc(db, make_item):
 # ── Composição: metadados (sem ledger) + recebimento (com ledger) ────────────────
 def test_composicao_metadados_mais_recebimento(db, make_item):
     item = make_item("PN-COMP", estoque=0, minimo=5)
-    sc_id = _abrir_sc("SC-COMP", [
-        {"item_id": item, "quantidade_solicitada": 5, "quantidade_pedido": 5}])
+    sc_id = _abrir_sc("SC-COMP", [{"item_id": item, "quantidade_solicitada": 5, "quantidade_pedido": 5}])
     isc = _first_item_sc_id(sc_id)
 
     # 1) Edita metadados (não mexe no estoque).
-    ok, _ = F.atualizar_pedido_guarda_chuva(isc, {
-        "numero_po": "PO-COMP", "data_prev_nfe": "2026-02-01"})
+    ok, _ = F.atualizar_pedido_guarda_chuva(isc, {"numero_po": "PO-COMP", "data_prev_nfe": "2026-02-01"})
     assert ok
     nmov_antes = _n_mov(item)
 
     # 2) Recebe tudo (ledger).
-    ok, msg = F.registrar_recebimento_sc(sc_id, isc, 5, CC, "Alm", "Alm", "Forn",
-                                         "2026-01-10", "NF-9")
+    ok, msg = F.registrar_recebimento_sc(sc_id, isc, 5, CC, "Alm", "Alm", "Forn", "2026-01-10", "NF-9")
     assert ok, msg
 
     p = F.obter_pedido_sc(isc)
-    assert p["po_item"] == "PO-COMP"     # metadado preservado após o recebimento
+    assert p["po_item"] == "PO-COMP"  # metadado preservado após o recebimento
     assert p["pendente"] == 0
     assert p["status_item"] == "Recebido"
     assert _estagio(p) == "Recebido"
-    assert _estoque(item) == 5            # 0 + 5 recebidos
+    assert _estoque(item) == 5  # 0 + 5 recebidos
     assert _n_mov(item) == nmov_antes + 1  # exatamente 1 entrada no ledger
     assert _sc_status(sc_id) == "Recebido"

@@ -5,6 +5,7 @@ manual (fatia + botões) e, opcionalmente, seleção de linha única para navega
 (clique → devolve a linha). A fatia/paginação é pura (`_paginar`), testável sem
 Streamlit.
 """
+
 from __future__ import annotations
 
 import math
@@ -21,11 +22,10 @@ def _paginar(df, pagina, page_size):
     total = max(1, math.ceil(n / page_size))
     pagina = max(0, min(pagina, total - 1))
     ini = pagina * page_size
-    return df.iloc[ini:ini + page_size], total, pagina
+    return df.iloc[ini : ini + page_size], total, pagina
 
 
-def tabela_paginada(df, chave, colunas_config=None, page_size=50,
-                    ordenar_padrao=None, on_select=None):
+def tabela_paginada(df, chave, colunas_config=None, page_size=50, ordenar_padrao=None, on_select=None):
     """Renderiza a tabela e devolve a linha selecionada (dict) ou None.
 
     - `colunas_config`: dict p/ `st.dataframe(column_config=...)` (rótulos PT-BR).
@@ -60,18 +60,27 @@ def tabela_paginada(df, chave, colunas_config=None, page_size=50,
     if total_paginas > 1:
         c1, c2, c3 = st.columns([1, 2, 1])
         with c1:
-            if st.button(":material/chevron_left: Anterior", key=f"{chave}__prev",
-                         disabled=pagina <= 0, width="stretch"):
+            if st.button(
+                ":material/chevron_left: Anterior",
+                key=f"{chave}__prev",
+                disabled=pagina <= 0,
+                width="stretch",
+            ):
                 st.session_state[pag_key] = pagina - 1
                 st.rerun()
         with c2:
             st.markdown(
                 f"<div style='text-align:center;padding-top:6px;'>Página "
                 f"<b>{pagina + 1}</b> de <b>{total_paginas}</b></div>",
-                unsafe_allow_html=True)
+                unsafe_allow_html=True,
+            )
         with c3:
-            if st.button("Próxima :material/chevron_right:", key=f"{chave}__next",
-                         disabled=pagina >= total_paginas - 1, width="stretch"):
+            if st.button(
+                "Próxima :material/chevron_right:",
+                key=f"{chave}__next",
+                disabled=pagina >= total_paginas - 1,
+                width="stretch",
+            ):
                 st.session_state[pag_key] = pagina + 1
                 st.rerun()
 

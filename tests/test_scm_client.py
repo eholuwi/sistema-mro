@@ -5,6 +5,7 @@ Testa o NÚCLEO puro (sem rede): normalização dos dois formatos de resposta
 com uma sessão FALSA. Os testes que usam as amostras reais em `openapi/samples/` pulam
 se a pasta não estiver presente (o estudo vive fora do repo do MRO).
 """
+
 import json
 from pathlib import Path
 
@@ -22,6 +23,7 @@ def _load(nome):
 
 # ── _extrair_result: os dois formatos da API ─────────────────────────────────
 
+
 def test_extrair_result_envelope():
     assert C._extrair_result({"succeeded": True, "errors": [], "result": {"a": 1}}) == {"a": 1}
 
@@ -35,6 +37,7 @@ def test_extrair_result_dict_sem_result_passa_direto():
 
 
 # ── _trim / _num ─────────────────────────────────────────────────────────────
+
 
 def test_trim_remove_padding_protheus():
     assert C._trim("90402    ") == "90402"
@@ -53,6 +56,7 @@ def test_num_formatos():
 
 # ── Transporte _get (sessão FALSA; sem rede) ─────────────────────────────────
 
+
 class _FakeResp:
     def __init__(self, payload, status=200):
         self._payload, self.status = payload, status
@@ -67,6 +71,7 @@ class _FakeResp:
 
 class _FakeSession:
     """Devolve respostas em sequência; um item Exception é levantado (simula falha)."""
+
     def __init__(self, respostas):
         self._respostas = list(respostas)
         self.calls = []
@@ -118,6 +123,7 @@ def test_esta_disponivel(monkeypatch):
 
 # ── v5.1.0 (F2) — endpoints do sync ──────────────────────────────────────────
 
+
 def test_sc_por_usuario_monta_url_sem_cache(monkeypatch):
     fake = _FakeSession([[{"id": 41468}]])
     monkeypatch.setattr(C, "_session", fake)
@@ -135,6 +141,7 @@ def test_usuarios_monta_url(monkeypatch):
 
 
 # ── Amostras reais (pulam se a pasta do estudo não existir) ───────────────────
+
 
 @pytest.mark.skipif(not _SAMPLES.exists(), reason="openapi/samples não presente")
 def test_extrair_result_com_amostra_envelope():

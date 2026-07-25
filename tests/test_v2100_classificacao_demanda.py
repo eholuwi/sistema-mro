@@ -7,6 +7,7 @@ requisição — `SAIDA_REAL_WHERE`). Esta suíte cobre:
   - integração: consumo_mensal ignora ajustes; campos derivados em listar_inventario.
 Princípio do PO: só diagnóstico — não altera status/reposição; base do Neidson intacta.
 """
+
 from datetime import datetime, timedelta
 
 import database
@@ -26,6 +27,7 @@ def _ev(semana, qtd):
 # ══════════════════════════════════════════════════════════════════════════════
 # NÚCLEO PURO — SBC (as 4 classes) e casos degenerados
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 def test_sbc_suave():
     # demanda TODA semana, tamanhos iguais → ADI≈1, CV²≈0.
@@ -80,6 +82,7 @@ def test_sbc_multiplos_no_mesmo_balde_somam():
 # NÚCLEO PURO — XYZ
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def test_xyz_estavel_x():
     r = C._xyz_from_meses([100, 100, 100])
     assert r["classe"] == "X" and r["cv"] == 0.0
@@ -91,13 +94,13 @@ def test_xyz_variavel_y():
 
 
 def test_xyz_erratico_z():
-    r = C._xyz_from_meses([5, 10, 300])    # cv ≈ 1.31
+    r = C._xyz_from_meses([5, 10, 300])  # cv ≈ 1.31
     assert r["classe"] == "Z"
 
 
 def test_xyz_insuficiente():
     assert C._xyz_from_meses([])["confianca"] == "sem_dados"
-    r1 = C._xyz_from_meses([42])           # 1 mês → não dá p/ medir variabilidade
+    r1 = C._xyz_from_meses([42])  # 1 mês → não dá p/ medir variabilidade
     assert r1["classe"] is None and r1["confianca"] == "insuficiente"
 
 
@@ -105,16 +108,15 @@ def test_xyz_insuficiente():
 # AGREGAÇÃO MENSAL & SAZONALIDADE (gate de maturidade)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def test_meses_from_eventos_agrega_por_mes():
-    eventos = [(datetime(2026, 4, 10), 5), (datetime(2026, 4, 20), 3),
-               (datetime(2026, 6, 1), 7)]
+    eventos = [(datetime(2026, 4, 10), 5), (datetime(2026, 4, 20), 3), (datetime(2026, 6, 1), 7)]
     serie = C._meses_from_eventos(eventos)
     assert serie == [{"mes": "2026-04", "qtd": 8.0}, {"mes": "2026-06", "qtd": 7.0}]
 
 
 def test_sazonalidade_bloqueada_com_poucos_meses():
-    serie = [{"mes": "2026-04", "qtd": 1}, {"mes": "2026-05", "qtd": 2},
-             {"mes": "2026-06", "qtd": 3}]
+    serie = [{"mes": "2026-04", "qtd": 1}, {"mes": "2026-05", "qtd": 2}, {"mes": "2026-06", "qtd": 3}]
     saz = C._sazonalidade_from_serie(serie)
     assert saz["disponivel"] is False
     assert saz["meses_atuais"] == 3 and saz["meses_necessarios"] == 12
@@ -131,6 +133,7 @@ def test_sazonalidade_liberada_com_ciclo_anual():
 # INTEGRAÇÃO COM O BANCO
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def _saida_ajuste(item_id, quantidade, data_hora):
     """Insere uma saída de AJUSTE (requisicao_id NULL) — NÃO é consumo real."""
     conn = database.get_connection()
@@ -139,8 +142,7 @@ def _saida_ajuste(item_id, quantidade, data_hora):
             "INSERT INTO movimentacoes (item_id,tipo,quantidade,saldo_apos,data_hora,"
             "centro_custo,setor,emitente,observacao,requisicao_id) "
             "VALUES (?,?,?,?,?,?,?,?,?,NULL)",
-            (item_id, "saida", quantidade, None, data_hora,
-             "INVENTÁRIO", "", "Inventário", "Ajuste"),
+            (item_id, "saida", quantidade, None, data_hora, "INVENTÁRIO", "", "Inventário", "Ajuste"),
         )
         conn.commit()
     finally:

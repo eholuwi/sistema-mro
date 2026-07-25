@@ -15,6 +15,7 @@ Regras invioláveis (ver `openapi/RELATORIO_FINAL.md` §4.4 e §11):
 - **Campos Protheus vêm com padding de espaços** (`"90402    "`) → usar `_trim`.
 - A API pode **reciclar sob carga** → `timeout` + **retry com backoff**.
 """
+
 from __future__ import annotations
 
 import time
@@ -23,24 +24,28 @@ import requests
 
 try:  # cache do Streamlit quando disponível; no-op fora dele (ex.: testes/CLI).
     import streamlit as st
+
     _cache = st.cache_data
 except Exception:  # pragma: no cover - ambiente sem streamlit
+
     def _cache(**_kwargs):
         def _deco(fn):
             return fn
+
         return _deco
 
 
 BASE_URL = "http://mansrvapp03:5715/api"
-_TIMEOUT = 60          # generoso: a API pode ser lenta sob carga
-_RETRIES = 3           # nº de tentativas antes de desistir
-_BACKOFF = 1.5         # segundos × tentativa (backoff linear)
+_TIMEOUT = 60  # generoso: a API pode ser lenta sob carga
+_RETRIES = 3  # nº de tentativas antes de desistir
+_BACKOFF = 1.5  # segundos × tentativa (backoff linear)
 
 _session = requests.Session()
 _session.headers.update({"Accept": "application/json"})
 
 
 # ── Helpers PUROS (testáveis sem rede) ────────────────────────────────────────
+
 
 def _extrair_result(payload):
     """Normaliza os dois formatos da API: envelope `{succeeded, errors, result}` →
@@ -74,6 +79,7 @@ def _num(valor, default=0.0):
 
 # ── Transporte (GET com timeout + retry/backoff) ──────────────────────────────
 
+
 def _get(path, *, timeout=_TIMEOUT, retries=_RETRIES):
     """GET em `BASE_URL + path`, desembrulhando o `result`. SÓ LEITURA.
 
@@ -94,6 +100,7 @@ def _get(path, *, timeout=_TIMEOUT, retries=_RETRIES):
 
 
 # ── Endpoints de LEITURA priorizados para o MRO (Monitor de SC) ───────────────
+
 
 @_cache(ttl=900)  # 15 min
 def cotacoes_em_andamento():
@@ -123,6 +130,7 @@ def sc_timeline(sc_id):
 
 
 # ── v5.1.0 (F2) — endpoints do SYNC persistente (API → mro.db) ────────────────
+
 
 def sc_por_usuario(usuario, ini, fim):
     """`GET /solicitacaoCompras/ByUser/{usuario}/{ini}/{fim}` — SCs de um solicitante no
@@ -156,6 +164,7 @@ def pedido(filial, numero):
 
 
 # ── v5.2.0 (F3) — endpoints do "ao vivo da API" da página SCM Integrado ────────
+
 
 @_cache(ttl=900)
 def sc_timeline_v2(sc_id):

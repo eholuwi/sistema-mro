@@ -8,6 +8,7 @@ imagem do produto (arquivo em docs/itens/, fora do SQLite) e (c) reúne tudo num
 único dict via `montar_ficha_360`. A única escrita da ficha é o upload/remoção da
 imagem; nada aqui altera a base do Sr. Neidson.
 """
+
 from __future__ import annotations
 
 import os
@@ -83,8 +84,9 @@ def salvar_imagem_item(item_id, nome_arquivo, conteudo, conn=None):
     if ext == "jpe":
         ext = "jpg"
     if ext not in IMAGEM_EXTS:
-        return False, (f"Formato não suportado ({ext or 'desconhecido'}). "
-                       f"Use: {', '.join(sorted(IMAGEM_EXTS))}.")
+        return False, (
+            f"Formato não suportado ({ext or 'desconhecido'}). Use: {', '.join(sorted(IMAGEM_EXTS))}."
+        )
     if not conteudo:
         return False, "Arquivo vazio."
     if len(conteudo) > IMAGEM_MAX_BYTES:
@@ -120,6 +122,7 @@ def remover_imagem_item(item_id, conn=None):
 # DEPARTAMENTOS / CENTROS DE CUSTO CONSUMIDORES (agregação nova)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def obter_consumo_por_departamento(item_id, dias=180, conn=None):
     """Quem consome o item: agrega as SAÍDAS por centro de custo e por setor na
     janela (qtd + % do total), ordenado do maior para o menor. Vazios viram
@@ -128,6 +131,7 @@ def obter_consumo_por_departamento(item_id, dias=180, conn=None):
     v2.7.1: considera apenas CONSUMO REAL (saída por requisição — `SAIDA_REAL_WHERE`).
     Ajustes/inventário/testes (requisicao_id NULL) NÃO são consumidores reais e
     poluíam a lista (ex.: aparecia "Inventário" como se consumisse)."""
+
     def _agg(campo, c):
         rows = c.execute(
             f"""SELECT COALESCE(NULLIF(TRIM({campo}), ''), '(não informado)') AS chave,
@@ -163,6 +167,7 @@ def obter_consumo_por_departamento(item_id, dias=180, conn=None):
 # SALDO RESIDUAL (GUARDA-CHUVA) POR FORNECEDOR — v3.1.0 (fundação)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def agrupar_saldo_residual_por_fornecedor(scs_pos):
     """Agrupa as linhas de SC/PO do item (já buscadas por `buscar_scs_por_item`,
     disponíveis em `ficha['scs_pos']`) por fornecedor, somando o saldo pendente —
@@ -178,30 +183,39 @@ def agrupar_saldo_residual_por_fornecedor(scs_pos):
         if pendente <= 0:
             continue
         fornecedor = s.get("fornecedor_item") or "Sem fornecedor"
-        g = grupos.setdefault(fornecedor, {
-            "fornecedor": fornecedor, "saldo_pendente": 0.0, "n_pedidos": 0, "linhas": [],
-        })
+        g = grupos.setdefault(
+            fornecedor,
+            {
+                "fornecedor": fornecedor,
+                "saldo_pendente": 0.0,
+                "n_pedidos": 0,
+                "linhas": [],
+            },
+        )
         recebida = s.get("quantidade_recebida") or 0
         g["saldo_pendente"] += pendente
         g["n_pedidos"] += 1
-        g["linhas"].append({
-            "sc": s.get("numero_sc"),
-            "po": s.get("po_item") or s.get("numero_po"),
-            "status": s.get("status"),
-            "quantidade_negociada": s.get("quantidade_negociada"),
-            "quantidade_recebida": recebida,
-            "pendente": pendente,
-            "preco_unitario": s.get("preco_unitario"),
-            "valor_total": s.get("valor_total"),
-            "moeda": s.get("moeda"),
-            "entrega_parcial": recebida > 0 and pendente > 0,
-        })
+        g["linhas"].append(
+            {
+                "sc": s.get("numero_sc"),
+                "po": s.get("po_item") or s.get("numero_po"),
+                "status": s.get("status"),
+                "quantidade_negociada": s.get("quantidade_negociada"),
+                "quantidade_recebida": recebida,
+                "pendente": pendente,
+                "preco_unitario": s.get("preco_unitario"),
+                "valor_total": s.get("valor_total"),
+                "moeda": s.get("moeda"),
+                "entrega_parcial": recebida > 0 and pendente > 0,
+            }
+        )
     return sorted(grupos.values(), key=lambda g: -g["saldo_pendente"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ASSEMBLER — reúne todas as seções (read-only) num único dict
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 def montar_ficha_360(item_id, conn=None):
     """Reúne toda a Ficha 360 de um item reusando as funções já existentes.
@@ -218,8 +232,7 @@ def montar_ficha_360(item_id, conn=None):
     prioridade = P.classificar_prioridade(item)
 
     fornecedores = obter_fornecedores_por_item(item_id)
-    melhor = next((f for f in fornecedores if f.get("melhor")),
-                  fornecedores[0] if fornecedores else None)
+    melhor = next((f for f in fornecedores if f.get("melhor")), fornecedores[0] if fornecedores else None)
     justificativa = P.montar_justificativa(item, calc, qtd, melhor)
 
     giro = calcular_giro(item_id)

@@ -5,16 +5,24 @@ segurança. Agora o buffer é o próprio Mínimo do Neidson: o ROP = consumo × 
 proteção de itens sem consumo vem do gatilho de piso (estoque ≤ mínimo) em
 `precisa_repor` — não mais de um estoque de segurança efetivo.
 """
+
 from services.planejamento import (
-    estoque_seguranca_efetivo, calcular_ponto_reposicao, precisa_repor,
+    estoque_seguranca_efetivo,
+    calcular_ponto_reposicao,
+    precisa_repor,
 )
 
 
 def _item(**over):
     base = dict(
-        estoque_atual=0.0, estoque_em_transito=0.0, estoque_minimo=0.0,
-        estoque_seguranca=0.0, estoque_seguranca_calculado=0.0,
-        consumo_medio_diario=0.0, lead_time_dias=0, lead_time_calculado=None,
+        estoque_atual=0.0,
+        estoque_em_transito=0.0,
+        estoque_minimo=0.0,
+        estoque_seguranca=0.0,
+        estoque_seguranca_calculado=0.0,
+        consumo_medio_diario=0.0,
+        lead_time_dias=0,
+        lead_time_calculado=None,
     )
     base.update(over)
     return base
@@ -22,14 +30,17 @@ def _item(**over):
 
 # ── estoque_seguranca_efetivo: no-op (sempre 0) ────────────────────────────────
 
+
 def test_seguranca_efetiva_sempre_zero_mesmo_com_manual():
     val, origem = estoque_seguranca_efetivo(
-        _item(estoque_seguranca=10, estoque_seguranca_calculado=20, estoque_minimo=8))
+        _item(estoque_seguranca=10, estoque_seguranca_calculado=20, estoque_minimo=8)
+    )
     assert val == 0
     assert origem == "não utilizado"
 
 
 # ── ROP = consumo × lead (sem segurança) ───────────────────────────────────────
+
 
 def test_rop_nao_soma_seguranca():
     calc = calcular_ponto_reposicao(_item(consumo_medio_diario=2.0, lead_time_dias=10))
@@ -38,6 +49,7 @@ def test_rop_nao_soma_seguranca():
 
 
 # ── Proteção de itens sem consumo: gatilho de PISO (estoque ≤ mínimo) ───────────
+
 
 def test_piso_do_minimo_ainda_dispara_reposicao_sem_consumo():
     # Sem consumo, mas abaixo do mínimo → ainda entra na fila (gatilho de piso).

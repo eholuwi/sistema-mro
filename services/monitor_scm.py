@@ -12,6 +12,7 @@ Definições (decisões do Luis):
 - **Status / Esgotado em / Faltando (d)** vêm do MRO (mesma semântica da aba 'Saldo em
   Estoque'): `status_material` e `previsao_ruptura_dias` do inventário.
 """
+
 from __future__ import annotations
 
 from datetime import date, timedelta
@@ -20,8 +21,15 @@ from services.constants import PREVISAO_RUPTURA_SEM_RISCO
 from services.db_functions import _normalizar_txt
 
 COLUNAS_SCS_NAO_ATENDIDAS = [
-    "SC", "Produto", "Descrição", "Status", "UN",
-    "QTY Solicitada", "Saldo PO", "Esgotado em", "Faltando (d)",
+    "SC",
+    "Produto",
+    "Descrição",
+    "Status",
+    "UN",
+    "QTY Solicitada",
+    "Saldo PO",
+    "Esgotado em",
+    "Faltando (d)",
 ]
 
 
@@ -31,7 +39,7 @@ def cotacoes_no_escopo(list_in_cotacoes, solicitantes_mro):
     `solicitantes_mro`. `solicitantes_mro=None` desliga o filtro. Deduplica por `sc_id`.
     Retorna [{'sc_id', 'solicitante'}]."""
     vistos, out = set(), []
-    for x in (list_in_cotacoes or []):
+    for x in list_in_cotacoes or []:
         sc = x.get("solicitacaoCompras") or {}
         nome = (sc.get("solicitante_Usuario") or {}).get("nome")
         if solicitantes_mro is not None and _normalizar_txt(nome) not in solicitantes_mro:
@@ -66,27 +74,30 @@ def montar_scs_nao_atendidas(cotacoes_escopo, itens_por_sc, inv_por_pn, hoje=Non
     foi pedido ainda). Ordena por 'Faltando (d)' asc (None por último)."""
     hoje = hoje or date.today()
     linhas = []
-    for cot in (cotacoes_escopo or []):
+    for cot in cotacoes_escopo or []:
         sc_id = cot.get("sc_id")
-        for it in (itens_por_sc.get(sc_id) or []):
+        for it in itens_por_sc.get(sc_id) or []:
             pn = str(it.get("produto") or "").strip().upper()
             inv = inv_por_pn.get(pn)
             if not inv:
                 continue
             esgotado, faltando = _esgotado_faltando(inv.get("previsao_ruptura_dias"), hoje)
             qty = float(it.get("quantidade") or 0)
-            un = (str(it.get("um") or "").strip() or inv.get("unidade") or "")
-            linhas.append({
-                "SC": sc_id,
-                "Produto": pn,
-                "Descrição": inv.get("nome_item") or str(it.get("descricaoGenerico") or "").strip(),
-                "Status": inv.get("status_material") or "",
-                "UN": un,
-                "QTY Solicitada": qty,
-                "Saldo PO": qty,   # em cotação: nada pedido ainda → saldo = qtd solicitada
-                "Esgotado em": esgotado,
-                "Faltando (d)": faltando,
-            })
-    linhas.sort(key=lambda r: (r["Faltando (d)"] is None,
-                               r["Faltando (d)"] if r["Faltando (d)"] is not None else 0.0))
+            un = str(it.get("um") or "").strip() or inv.get("unidade") or ""
+            linhas.append(
+                {
+                    "SC": sc_id,
+                    "Produto": pn,
+                    "Descrição": inv.get("nome_item") or str(it.get("descricaoGenerico") or "").strip(),
+                    "Status": inv.get("status_material") or "",
+                    "UN": un,
+                    "QTY Solicitada": qty,
+                    "Saldo PO": qty,  # em cotação: nada pedido ainda → saldo = qtd solicitada
+                    "Esgotado em": esgotado,
+                    "Faltando (d)": faltando,
+                }
+            )
+    linhas.sort(
+        key=lambda r: (r["Faltando (d)"] is None, r["Faltando (d)"] if r["Faltando (d)"] is not None else 0.0)
+    )
     return linhas

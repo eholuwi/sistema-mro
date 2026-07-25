@@ -4,6 +4,7 @@ o que permite atendimento parcial e em lote (o jeito do Juan). Este arquivo cobr
 núcleo criação+entrega; o fluxo estendido (adicionar item, cancelar, SESMT, fila)
 está em test_v470_requisicao_digital.py.
 """
+
 import pytest
 from services import db_functions as F
 
@@ -25,8 +26,18 @@ def _status(db, req_id):
 
 
 def _criar(item_id, qtd=10):
-    return F.criar_requisicao("Manut", "Joao", CC, "", "", False, [], False, "",
-                              [{"item_id": item_id, "quantidade_solicitada": qtd}])
+    return F.criar_requisicao(
+        "Manut",
+        "Joao",
+        CC,
+        "",
+        "",
+        False,
+        [],
+        False,
+        "",
+        [{"item_id": item_id, "quantidade_solicitada": qtd}],
+    )
 
 
 def test_criacao_nao_baixa_estoque(db, make_item):
@@ -47,8 +58,7 @@ def test_entrega_total_baixa_e_status_entregue(db, make_item):
     ok, num = _criar(item_id, 10)
     rid = _req_id(db, num)
     it = F.listar_itens_requisicao(rid)[0]
-    ok, status = F.entregar_requisicao(rid, [{"item_req_id": it["id"], "quantidade": 10}],
-                                       "Gestor", "Chefe")
+    ok, status = F.entregar_requisicao(rid, [{"item_req_id": it["id"], "quantidade": 10}], "Gestor", "Chefe")
     assert ok, status
     assert status == "Entregue"
     assert F.buscar_item_por_id(item_id)["estoque_atual"] == 90  # baixa 10 (entregue)
@@ -60,13 +70,11 @@ def test_entrega_parcial_status_parcial_e_acumula(db, make_item):
     rid = _req_id(db, num)
     it_id = F.listar_itens_requisicao(rid)[0]["id"]
 
-    ok, status = F.entregar_requisicao(rid, [{"item_req_id": it_id, "quantidade": 4}],
-                                       "Gestor", "Chefe")
+    ok, status = F.entregar_requisicao(rid, [{"item_req_id": it_id, "quantidade": 4}], "Gestor", "Chefe")
     assert ok and status == "Parcial"
     assert F.buscar_item_por_id(item_id)["estoque_atual"] == 96  # baixa só do entregue
 
-    ok, status = F.entregar_requisicao(rid, [{"item_req_id": it_id, "quantidade": 6}],
-                                       "Gestor", "Chefe")
+    ok, status = F.entregar_requisicao(rid, [{"item_req_id": it_id, "quantidade": 6}], "Gestor", "Chefe")
     assert ok and status == "Entregue"
     assert F.buscar_item_por_id(item_id)["estoque_atual"] == 90  # 4 + 6 acumulados
 
@@ -95,9 +103,18 @@ def test_entrega_estoque_insuficiente_faz_rollback(db, make_item):
 def test_entrega_multiplos_itens_rollback_atomico(db, make_item):
     a = make_item("PN-MR-A", estoque=100)
     b = make_item("PN-MR-B", estoque=1)  # saldo insuficiente -> aborta a entrega inteira
-    ok, num = F.criar_requisicao("Manut", "Joao", CC, "", "", False, [], False, "",
-        [{"item_id": a, "quantidade_solicitada": 10},
-         {"item_id": b, "quantidade_solicitada": 5}])
+    ok, num = F.criar_requisicao(
+        "Manut",
+        "Joao",
+        CC,
+        "",
+        "",
+        False,
+        [],
+        False,
+        "",
+        [{"item_id": a, "quantidade_solicitada": 10}, {"item_id": b, "quantidade_solicitada": 5}],
+    )
     rid = _req_id(db, num)
     itens = F.listar_itens_requisicao(rid)
     ent = [{"item_req_id": it["id"], "quantidade": 10 if it["item_id"] == a else 5} for it in itens]

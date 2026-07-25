@@ -4,6 +4,7 @@ criar_sc e um upsert por numero_sc (numero repetido ATUALIZA, nao falha).
 atualizar_sc tem logica de status; status invalido viola o CHECK do schema e
 deve sofrer rollback. Todos os testes usam banco isolado via fixture `db`.
 """
+
 from services import db_functions as F
 
 
@@ -22,34 +23,28 @@ def _conta_scs(db, numero=None):
 
 def _conta_itens_sc(db, sc_id):
     conn = db.get_connection()
-    n = conn.execute(
-        "SELECT COUNT(*) c FROM itens_sc WHERE sc_id=?", (sc_id,)
-    ).fetchone()["c"]
+    n = conn.execute("SELECT COUNT(*) c FROM itens_sc WHERE sc_id=?", (sc_id,)).fetchone()["c"]
     conn.close()
     return n
 
 
 def _status_sc(db, sc_id):
     conn = db.get_connection()
-    row = conn.execute(
-        "SELECT status FROM solicitacoes_compra WHERE id=?", (sc_id,)
-    ).fetchone()
+    row = conn.execute("SELECT status FROM solicitacoes_compra WHERE id=?", (sc_id,)).fetchone()
     conn.close()
     return row["status"] if row else None
 
 
 # ---------- criar_sc ----------
 
+
 def test_criar_sc_cria_sc_e_item(db, make_item):
     item_id = make_item("PN-SC1")
-    ok, msg = F.criar_sc("SC-1", "2026-01-01",
-                         [{"item_id": item_id, "quantidade_solicitada": 10}])
+    ok, msg = F.criar_sc("SC-1", "2026-01-01", [{"item_id": item_id, "quantidade_solicitada": 10}])
     assert ok, msg
     assert _conta_scs(db, "SC-1") == 1
     conn = db.get_connection()
-    sc_id = conn.execute(
-        "SELECT id FROM solicitacoes_compra WHERE numero_sc='SC-1'"
-    ).fetchone()["id"]
+    sc_id = conn.execute("SELECT id FROM solicitacoes_compra WHERE numero_sc='SC-1'").fetchone()["id"]
     conn.close()
     assert _conta_itens_sc(db, sc_id) == 1
 
@@ -62,23 +57,21 @@ def test_criar_sc_sem_itens_rejeita(db):
 
 def test_criar_sc_numero_repetido_faz_upsert(db, make_item):
     item_id = make_item("PN-SC2")
-    F.criar_sc("SC-2", "2026-01-01",
-               [{"item_id": item_id, "quantidade_solicitada": 10}])
-    ok, msg = F.criar_sc("SC-2", "2026-01-01",
-                         [{"item_id": item_id, "quantidade_solicitada": 10}])
+    F.criar_sc("SC-2", "2026-01-01", [{"item_id": item_id, "quantidade_solicitada": 10}])
+    ok, msg = F.criar_sc("SC-2", "2026-01-01", [{"item_id": item_id, "quantidade_solicitada": 10}])
     assert ok, msg
     assert _conta_scs(db, "SC-2") == 1  # upsert: nao duplica a SC
 
 
 def test_criar_sc_item_inexistente_faz_rollback(db):
     antes = _conta_scs(db)
-    ok, msg = F.criar_sc("SC-BAD", "2026-01-01",
-                         [{"item_id": 99999, "quantidade_solicitada": 5}])
+    ok, msg = F.criar_sc("SC-BAD", "2026-01-01", [{"item_id": 99999, "quantidade_solicitada": 5}])
     assert ok is False
     assert _conta_scs(db) == antes  # rollback: nenhuma SC persistida
 
 
 # ---------- atualizar_sc ----------
+
 
 def test_atualizar_sc_altera_status(db, make_sc):
     sc_id = make_sc(numero_sc="SC-UP1")

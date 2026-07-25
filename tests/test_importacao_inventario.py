@@ -1,6 +1,7 @@
 """Item 1 (v2.1.0): importador da base do Neidson (Tipo/Categoria, Mínimo, Máximo,
 Lead Time). Cobre parsing de lead time, aceitação de categorias novas (pós-rebuild
 sem CHECK), match/ignore por PN, dry-run sem gravação e idempotência."""
+
 from services import db_functions as F
 import database
 
@@ -13,10 +14,10 @@ def test_atualiza_campos_e_parseia_lead_time(db, make_item, xlsx_factory):
     assert ok, s
     assert s["atualizados"] == 1
     item = F.buscar_item_por_id(item_id)
-    assert item["tipo_material"] == "Químico"     # categoria nova aceita (sem CHECK)
+    assert item["tipo_material"] == "Químico"  # categoria nova aceita (sem CHECK)
     assert item["estoque_minimo"] == 96
     assert item["estoque_maximo"] == 192
-    assert item["lead_time_dias"] == 20           # "20 dias" -> 20
+    assert item["lead_time_dias"] == 20  # "20 dias" -> 20
 
 
 def test_pn_nao_encontrado_apenas_relatado(db, xlsx_factory):
@@ -27,7 +28,7 @@ def test_pn_nao_encontrado_apenas_relatado(db, xlsx_factory):
     assert s["atualizados"] == 0
     assert s["ignorados"] == 1
     assert "PN-NAO-EXISTE" in s["pns_nao_encontrados"]
-    assert F.buscar_item_por_pn("PN-NAO-EXISTE") is None   # não cria item
+    assert F.buscar_item_por_pn("PN-NAO-EXISTE") is None  # não cria item
 
 
 def test_dry_run_nao_grava(db, make_item, xlsx_factory):
@@ -37,11 +38,11 @@ def test_dry_run_nao_grava(db, make_item, xlsx_factory):
     ok, s = F.importar_inventario_neidson(xlsx_factory(rows, cols), "t.xlsx", dry_run=True)
     assert ok, s
     assert s["atualizados"] == 1 and s["dry_run"] is True
-    assert F.buscar_item_por_id(item_id)["estoque_minimo"] == 10   # inalterado
+    assert F.buscar_item_por_id(item_id)["estoque_minimo"] == 10  # inalterado
     conn = database.get_connection()
     n = conn.execute("SELECT COUNT(*) c FROM log_importacoes").fetchone()["c"]
     conn.close()
-    assert n == 0                                                  # auditoria não gravada
+    assert n == 0  # auditoria não gravada
 
 
 def test_real_run_grava_log(db, make_item, xlsx_factory):

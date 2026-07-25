@@ -9,6 +9,7 @@ nesta fase — a ativação do cache é progressiva e pareada com invalidação 
 migradas, para não arriscar métricas desatualizadas enquanto a maioria das telas ainda
 escreve pelo caminho antigo (ver ui/cache.py e docs/PLANO_V5_EVOLUCAO.md).
 """
+
 from __future__ import annotations
 
 import os
@@ -35,11 +36,14 @@ def render_sidebar() -> str:
     with st.sidebar:
         # 1. Cabeçalho com Logo/Título (v4.1.0 — logo Inventus; versão no rodapé da nav)
         st.image(LOGO, width="stretch")
-        st.markdown("""
+        st.markdown(
+            """
         <div class="sidebar-title">
             <span style="font-size: 1.4rem;">MRO Inventus</span>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
         # 2. Navegação (Option Menu) — opções/ícones vêm do router (fonte única).
         pagina = option_menu(
@@ -56,9 +60,13 @@ def render_sidebar() -> str:
         # do script reaplica a paleta. Padrão claro. (Tabelas seguem o tema base do config.)
         _op_tema = {"Claro": "light", "Escuro": "dark"}
         _lbl_atual = "Escuro" if pal["tipo"] == "dark" else "Claro"
-        _escolha_tema = st.radio("Tema", list(_op_tema.keys()),
-                                 index=list(_op_tema.keys()).index(_lbl_atual),
-                                 horizontal=True, key="sb_tema")
+        _escolha_tema = st.radio(
+            "Tema",
+            list(_op_tema.keys()),
+            index=list(_op_tema.keys()).index(_lbl_atual),
+            horizontal=True,
+            key="sb_tema",
+        )
         if _op_tema[_escolha_tema] != pal["tipo"]:
             st.query_params["tema"] = _op_tema[_escolha_tema]
             st.rerun()
@@ -74,7 +82,8 @@ def render_sidebar() -> str:
         scs_abertas = len(listar_scs(apenas_abertas=True))
         inv_count = sum(1 for i in itens_all if i.get("data_inventario"))
 
-        st.markdown(f"""
+        st.markdown(
+            f"""
         <div class="sidebar-metrics-grid">
             <div class="metric-card">
                 <div class="metric-label">Total</div>
@@ -93,22 +102,28 @@ def render_sidebar() -> str:
                 <div class="metric-value">{scs_abertas}</div>
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
         # 4. Barra de Progresso de Inventário
         progresso = inv_count / total if total > 0 else 0
-        st.markdown(f"""
+        st.markdown(
+            f"""
         <div class="progress-container">
             <div class="progress-label">Inventariados: {inv_count}/{total}</div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
         # Usa o st.progress nativo, mas o CSS acima tenta estilizar o container se possível
         st.progress(progresso)
 
         # 5. Perfil do Usuário (Rodapé)
         avatar_url = "https://ui-avatars.com/api/?name=Luis+Oliveira&background=F36F21&color=fff"
-        st.markdown(f"""
+        st.markdown(
+            f"""
         <div class="user-profile">
             <img src="{avatar_url}" class="user-avatar" alt="User">
             <div class="user-info">
@@ -116,7 +131,9 @@ def render_sidebar() -> str:
                 <p>Inventus Power</p>
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
         # v4.1.0 — versão do sistema no rodapé da barra de navegação
         st.markdown(

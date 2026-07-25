@@ -11,6 +11,7 @@ Escopo: só falha em `UndefinedName` (bug real). Import não usado é estilo, n�
 não falhamos por isso (o `app.py` ainda carrega imports órfãos a limpar no fechamento).
 Skip gracioso se pyflakes não estiver instalado (é dependência só de desenvolvimento).
 """
+
 import ast
 import glob
 import os

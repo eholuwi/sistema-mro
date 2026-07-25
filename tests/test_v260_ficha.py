@@ -6,6 +6,7 @@ com isolamento via docs/itens/ ancorado ao diretório do banco de teste) e o
 assembler `montar_ficha_360` (item cheio, item vazio, inexistente). Nada aqui
 altera a base do Neidson.
 """
+
 from datetime import datetime
 
 import pytest
@@ -33,8 +34,13 @@ def _saida(item_id, qtd, centro_custo="", setor="", quando=None, requisicao=True
             cur = c.execute(
                 "INSERT INTO requisicoes (numero_requisicao, data_hora, setor, emitente, centro_custo) "
                 "VALUES (?,?,?,?,?)",
-                (f"REQ-T{_req_seq}", quando, setor or "MANUTENÇÃO", "t",
-                 centro_custo or "21106 - MANUTENÇÃO"),
+                (
+                    f"REQ-T{_req_seq}",
+                    quando,
+                    setor or "MANUTENÇÃO",
+                    "t",
+                    centro_custo or "21106 - MANUTENÇÃO",
+                ),
             )
             req_id = cur.lastrowid
         c.execute(
@@ -48,6 +54,7 @@ def _saida(item_id, qtd, centro_custo="", setor="", quando=None, requisicao=True
 
 # ── Schema ──────────────────────────────────────────────────────────────────
 
+
 def test_schema_imagem_path(db):
     with database.transaction() as c:
         cols = {r[1] for r in c.execute("PRAGMA table_info(inventario)")}
@@ -55,6 +62,7 @@ def test_schema_imagem_path(db):
 
 
 # ── Consumo por departamento / centro de custo ──────────────────────────────
+
 
 def test_consumo_por_departamento_agrega_e_percentua(db, make_item):
     item_id = make_item("PN-DEP", estoque=1000, minimo=10)
@@ -66,7 +74,7 @@ def test_consumo_por_departamento_agrega_e_percentua(db, make_item):
     assert dep["total"] == 50
     cc = {r["chave"]: r for r in dep["por_centro_custo"]}
     assert cc["21106 - MANUTENÇÃO"]["qtd"] == 40
-    assert cc["21106 - MANUTENÇÃO"]["pct"] == 80.0        # 40/50
+    assert cc["21106 - MANUTENÇÃO"]["pct"] == 80.0  # 40/50
     assert cc["21194 - ALMOXARIFADO"]["pct"] == 20.0
     # Ordenado do maior p/ o menor.
     assert dep["por_centro_custo"][0]["chave"] == "21106 - MANUTENÇÃO"
@@ -94,8 +102,9 @@ def test_quem_consome_ignora_ajuste_sem_requisicao(db, make_item):
     # (ex.: "Inventário", retirada sem requisição) NÃO devem aparecer.
     item_id = make_item("PN-DEP4", estoque=1000, minimo=10)
     _saida(item_id, 40, centro_custo="21106 - MANUTENÇÃO", setor="MANUTENÇÃO")  # requisição real
-    _saida(item_id, 999, centro_custo="INVENTÁRIO", setor="INVENTÁRIO",
-           requisicao=False)  # ajuste — não conta
+    _saida(
+        item_id, 999, centro_custo="INVENTÁRIO", setor="INVENTÁRIO", requisicao=False
+    )  # ajuste — não conta
     dep = ficha.obter_consumo_por_departamento(item_id)
     chaves = {r["chave"] for r in dep["por_centro_custo"]}
     assert "INVENTÁRIO" not in chaves
@@ -116,6 +125,7 @@ def test_salvar_imagem_grava_arquivo_e_path(db, make_item):
     abs_path = ficha.caminho_absoluto_imagem(rel)
     assert abs_path and abs_path.endswith(f"item_{item_id}.png")
     import os
+
     assert os.path.exists(abs_path)
     it = F.buscar_item_por_id(item_id)
     assert it["imagem_path"] == rel
@@ -138,17 +148,19 @@ def test_salvar_imagem_rejeita_tamanho(db, make_item):
 
 def test_troca_de_formato_nao_deixa_orfao(db, make_item):
     import os
+
     item_id = make_item("PN-IMG4", estoque=10, minimo=1)
     ficha.salvar_imagem_item(item_id, "a.png", _PNG)
     ok, rel = ficha.salvar_imagem_item(item_id, "b.jpg", _PNG)
     assert ok
     arquivos = sorted(os.listdir(ficha._itens_dir()))
-    assert arquivos == [f"item_{item_id}.jpg"]        # png antigo removido
+    assert arquivos == [f"item_{item_id}.jpg"]  # png antigo removido
     assert F.buscar_item_por_id(item_id)["imagem_path"] == rel
 
 
 def test_remover_imagem(db, make_item):
     import os
+
     item_id = make_item("PN-IMG5", estoque=10, minimo=1)
     _, rel = ficha.salvar_imagem_item(item_id, "foto.png", _PNG)
     abs_path = ficha.caminho_absoluto_imagem(rel)
@@ -162,9 +174,21 @@ def test_remover_imagem(db, make_item):
 # ── Assembler ───────────────────────────────────────────────────────────────
 
 _CHAVES_FICHA = {
-    "item", "imagem_path", "imagem_abs", "reposicao", "giro", "valor", "abc",
-    "fornecedores", "melhor_fornecedor", "departamentos", "movimentacoes",
-    "scs_pos", "evolucao_preco", "historico_pn", "maturidade",
+    "item",
+    "imagem_path",
+    "imagem_abs",
+    "reposicao",
+    "giro",
+    "valor",
+    "abc",
+    "fornecedores",
+    "melhor_fornecedor",
+    "departamentos",
+    "movimentacoes",
+    "scs_pos",
+    "evolucao_preco",
+    "historico_pn",
+    "maturidade",
 }
 
 
@@ -205,45 +229,68 @@ def test_montar_ficha_item_cheio(db, make_item, make_sc):
     assert len(f["scs_pos"]) >= 1
     assert len(f["evolucao_preco"]) >= 1
     assert f["imagem_abs"] is not None
-    assert f["reposicao"]["precisa"] is True     # estoque 8 < mínimo 10
+    assert f["reposicao"]["precisa"] is True  # estoque 8 < mínimo 10
 
 
 # ── Saldo Residual (Guarda-Chuva) por Fornecedor — v3.1.0 (fundação) ─────────
 
+
 def test_agrupar_saldo_residual_ignora_pedidos_sem_saldo():
     scs_pos = [
-        {"numero_sc": "SC-1", "fornecedor_item": "Fornecedor A", "pendente": 0,
-         "quantidade_recebida": 10},
+        {"numero_sc": "SC-1", "fornecedor_item": "Fornecedor A", "pendente": 0, "quantidade_recebida": 10},
     ]
     assert ficha.agrupar_saldo_residual_por_fornecedor(scs_pos) == []
 
 
 def test_agrupar_saldo_residual_soma_por_fornecedor():
     scs_pos = [
-        {"numero_sc": "SC-1", "numero_po": "PO-1", "status": "Parcial",
-         "fornecedor_item": "Fornecedor A", "quantidade_negociada": 10,
-         "quantidade_recebida": 4, "pendente": 6,
-         "preco_unitario": 12.5, "valor_total": 125.0, "moeda": "BRL"},
-        {"numero_sc": "SC-2", "numero_po": "PO-2", "status": "Aberto",
-         "fornecedor_item": "Fornecedor A", "quantidade_negociada": 20,
-         "quantidade_recebida": 0, "pendente": 20,
-         "preco_unitario": 12.5, "valor_total": 250.0, "moeda": "BRL"},
-        {"numero_sc": "SC-3", "numero_po": "PO-3", "status": "Aberto",
-         "fornecedor_item": "Fornecedor B", "quantidade_negociada": 5,
-         "quantidade_recebida": 0, "pendente": 5,
-         "preco_unitario": 8.0, "valor_total": 40.0, "moeda": "BRL"},
+        {
+            "numero_sc": "SC-1",
+            "numero_po": "PO-1",
+            "status": "Parcial",
+            "fornecedor_item": "Fornecedor A",
+            "quantidade_negociada": 10,
+            "quantidade_recebida": 4,
+            "pendente": 6,
+            "preco_unitario": 12.5,
+            "valor_total": 125.0,
+            "moeda": "BRL",
+        },
+        {
+            "numero_sc": "SC-2",
+            "numero_po": "PO-2",
+            "status": "Aberto",
+            "fornecedor_item": "Fornecedor A",
+            "quantidade_negociada": 20,
+            "quantidade_recebida": 0,
+            "pendente": 20,
+            "preco_unitario": 12.5,
+            "valor_total": 250.0,
+            "moeda": "BRL",
+        },
+        {
+            "numero_sc": "SC-3",
+            "numero_po": "PO-3",
+            "status": "Aberto",
+            "fornecedor_item": "Fornecedor B",
+            "quantidade_negociada": 5,
+            "quantidade_recebida": 0,
+            "pendente": 5,
+            "preco_unitario": 8.0,
+            "valor_total": 40.0,
+            "moeda": "BRL",
+        },
     ]
     grupos = ficha.agrupar_saldo_residual_por_fornecedor(scs_pos)
     assert [g["fornecedor"] for g in grupos] == ["Fornecedor A", "Fornecedor B"]  # maior saldo primeiro
     a = grupos[0]
     assert a["saldo_pendente"] == 26
     assert a["n_pedidos"] == 2
-    assert any(l["entrega_parcial"] for l in a["linhas"])   # SC-1 recebeu parte
+    assert any(l["entrega_parcial"] for l in a["linhas"])  # SC-1 recebeu parte
     assert not any(l["entrega_parcial"] for l in grupos[1]["linhas"])  # Fornecedor B: nada recebido ainda
 
 
 def test_agrupar_saldo_residual_sem_fornecedor_usa_rotulo_padrao():
-    scs_pos = [{"numero_sc": "SC-9", "fornecedor_item": None,
-                "quantidade_recebida": 0, "pendente": 3}]
+    scs_pos = [{"numero_sc": "SC-9", "fornecedor_item": None, "quantidade_recebida": 0, "pendente": 3}]
     grupos = ficha.agrupar_saldo_residual_por_fornecedor(scs_pos)
     assert grupos[0]["fornecedor"] == "Sem fornecedor"

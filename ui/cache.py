@@ -13,13 +13,16 @@ call sites (sidebar e páginas) é progressiva e pareada com `invalidar_leituras
 cada caminho de escrita — evita servir estoque desatualizado enquanto as páginas
 ainda não migraram. Ver docs/PLANO_V5_EVOLUCAO.md (F1 passo 5, F4).
 """
+
 from __future__ import annotations
 
 import streamlit as st
 
 from services.db_functions import listar_inventario, listar_scs, obter_dados_dashboard
 from services.dashboards import (
-    montar_dashboard, montar_visao_compras_mro, montar_visao_almoxarifado,
+    montar_dashboard,
+    montar_visao_compras_mro,
+    montar_visao_almoxarifado,
 )
 
 
@@ -39,6 +42,7 @@ def scs_cached(apenas_abertas: bool = True):
 # São as leituras mais CARAS do app (varrem inventário/movimentações/SCs para montar
 # os view models). Ficavam sem cache e rodavam a cada rerun das 3 abas do Dashboard.
 # Os assemblers seguem PUROS em services/dashboards.py; o cache vive só aqui.
+
 
 @st.cache_data(ttl=120, show_spinner=False)
 def dashboard_cached(publico: str):

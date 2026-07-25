@@ -9,6 +9,7 @@ páginas ainda inline no app.py (Movimentação/Ficha 360) cujas escritas ainda 
 foram pareadas com `invalidar_leituras()`. A ativação de cache das telas migradas é
 feita no read da própria página (ex.: `inventario_cached()`), não neste selectbox.
 """
+
 from __future__ import annotations
 
 import streamlit as st

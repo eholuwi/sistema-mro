@@ -9,6 +9,7 @@ fundação: (1) a paleta vem de `ui.tema.paleta_atual()` em vez do global `PAL`;
 porque as leituras ainda não são cacheadas; correta quando o cache ativar). É a
 página que prova o caminho escrita→invalidação da refatoração.
 """
+
 from __future__ import annotations
 
 import time
@@ -17,9 +18,14 @@ import pandas as pd
 import streamlit as st
 
 from services.db_functions import (
-    importar_inventario_neidson, listar_valores,
-    adicionar_valor_lista, remover_valor_lista, sincronizar_fornecedores_lista,
-    listar_solicitantes_mro, marcar_solicitante_mro, definir_codigo_solicitante_mro,
+    importar_inventario_neidson,
+    listar_valores,
+    adicionar_valor_lista,
+    remover_valor_lista,
+    sincronizar_fornecedores_lista,
+    listar_solicitantes_mro,
+    marcar_solicitante_mro,
+    definir_codigo_solicitante_mro,
 )
 from services import scm_sync
 from ui.cache import invalidar_leituras
@@ -36,19 +42,23 @@ def render() -> None:
         st.subheader(":material/palette: Aparência")
         _tema_txt = ":material/dark_mode: Escuro" if pal["tipo"] == "dark" else ":material/light_mode: Claro"
         st.markdown(f"**Tema atual:** {_tema_txt}  ·  **Padrão:** :material/light_mode: Claro")
-        st.caption("Para alternar entre **claro** e **escuro**, use o botão **Tema** na **barra "
-                   "lateral** (abaixo do menu). A escolha é lembrada ao recarregar (fica na URL). "
-                   "O fundo, os textos, o menu e os gráficos acompanham. :material/warning: Observação: no modo "
-                   "escuro, as **tabelas** podem continuar claras — é uma limitação do Streamlit "
-                   "(as grades seguem o tema base); no modo claro (padrão) fica tudo consistente.")
+        st.caption(
+            "Para alternar entre **claro** e **escuro**, use o botão **Tema** na **barra "
+            "lateral** (abaixo do menu). A escolha é lembrada ao recarregar (fica na URL). "
+            "O fundo, os textos, o menu e os gráficos acompanham. :material/warning: Observação: no modo "
+            "escuro, as **tabelas** podem continuar claras — é uma limitação do Streamlit "
+            "(as grades seguem o tema base); no modo claro (padrão) fica tudo consistente."
+        )
         st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Importação da base do Neidson — Tipo, Mínimo, Máximo, Lead Time (Item 1) ──
     with st.container(border=True):
         st.subheader(":material/download: Importar Base (Tipo/Categoria, Mínimo, Máximo, Lead Time)")
-        st.caption("Atualiza itens **existentes** (casados pelo PN) com os dados apurados pelo "
-                   "Compras. PNs não encontrados são apenas relatados — nenhum item é criado. "
-                   "Um backup do banco é criado automaticamente antes de aplicar.")
+        st.caption(
+            "Atualiza itens **existentes** (casados pelo PN) com os dados apurados pelo "
+            "Compras. PNs não encontrados são apenas relatados — nenhum item é criado. "
+            "Um backup do banco é criado automaticamente antes de aplicar."
+        )
         arq_neidson = st.file_uploader("Planilha (.xlsx)", type=["xlsx"], key="upl_neidson")
         if arq_neidson is not None:
             if st.button(":material/search: Pré-visualizar (simulação)", key="btn_prev_neidson"):
@@ -69,19 +79,28 @@ def render() -> None:
                         with st.expander(f"Ver {len(res_p['pns_nao_encontrados'])} PNs não encontrados"):
                             df_ne = pd.DataFrame({"PN não encontrado": res_p["pns_nao_encontrados"]})
                             st.dataframe(df_ne, width="stretch", hide_index=True)
-                            st.download_button("⬇️ Baixar lista (CSV)",
-                                               df_ne.to_csv(index=False).encode("utf-8-sig"),
-                                               file_name="pns_nao_encontrados.csv", mime="text/csv",
-                                               key="dl_ne")
+                            st.download_button(
+                                "⬇️ Baixar lista (CSV)",
+                                df_ne.to_csv(index=False).encode("utf-8-sig"),
+                                file_name="pns_nao_encontrados.csv",
+                                mime="text/csv",
+                                key="dl_ne",
+                            )
                     if res_p["pns_duplicados_planilha"]:
-                        st.warning("PNs duplicados na planilha (mantém a última ocorrência): "
-                                   + ", ".join(res_p["pns_duplicados_planilha"][:20]))
+                        st.warning(
+                            "PNs duplicados na planilha (mantém a última ocorrência): "
+                            + ", ".join(res_p["pns_duplicados_planilha"][:20])
+                        )
                     st.warning("Confira os números acima e clique em **Aplicar** para gravar.")
-                    if st.button(":material/check_circle: Aplicar atualização", type="primary", key="btn_apply_neidson"):
+                    if st.button(
+                        ":material/check_circle: Aplicar atualização", type="primary", key="btn_apply_neidson"
+                    ):
                         ok_a, res_a = importar_inventario_neidson(arq_neidson, nome_p, dry_run=False)
                         if ok_a:
-                            st.success(f"Importação concluída — atualizados: {res_a['atualizados']} | "
-                                       f"ignorados: {res_a['ignorados']}.")
+                            st.success(
+                                f"Importação concluída — atualizados: {res_a['atualizados']} | "
+                                f"ignorados: {res_a['ignorados']}."
+                            )
                             st.session_state.pop("prev_neidson", None)
                             invalidar_leituras()
                             time.sleep(1.5)
@@ -93,9 +112,11 @@ def render() -> None:
     # ── Solicitantes MRO (SCM) — escopo do sync da API (v5.1.0 / F2) ──────────
     with st.container(border=True):
         st.subheader(":material/badge: Solicitantes MRO (SCM)")
-        st.caption("Quem é do **escopo MRO** ao puxar SCs da API do SCM (aba Monitor › "
-                   "*Atualizar agora*). O **código** Protheus é resolvido pelo nome via API — ou "
-                   "informado à mão. **Só solicitantes com código entram na sincronização.**")
+        st.caption(
+            "Quem é do **escopo MRO** ao puxar SCs da API do SCM (aba Monitor › "
+            "*Atualizar agora*). O **código** Protheus é resolvido pelo nome via API — ou "
+            "informado à mão. **Só solicitantes com código entram na sincronização.**"
+        )
 
         incluidos = listar_solicitantes_mro(apenas_incluidos=True)
         if incluidos:
@@ -106,15 +127,18 @@ def render() -> None:
                     cN.markdown(f"**{s['nome']}**{_dep}")
                     if not (s.get("codigo") or "").strip():
                         cN.caption(":material/warning: sem código — não entra no sync")
-                    _cod = cC.text_input("Código", value=s.get("codigo") or "",
-                                         key=f"cod_sol_{s['id']}", placeholder="ex.: 001054",
-                                         label_visibility="collapsed")
+                    _cod = cC.text_input(
+                        "Código",
+                        value=s.get("codigo") or "",
+                        key=f"cod_sol_{s['id']}",
+                        placeholder="ex.: 001054",
+                        label_visibility="collapsed",
+                    )
                     if cS.button(":material/save:", key=f"savecod_{s['id']}", help="Salvar código"):
                         definir_codigo_solicitante_mro(s["id"], _cod)
                         invalidar_leituras()
                         st.rerun()
-                    if cB.button(":material/close:", key=f"rmsol_{s['id']}",
-                                 help="Remover do escopo MRO"):
+                    if cB.button(":material/close:", key=f"rmsol_{s['id']}", help="Remover do escopo MRO"):
                         marcar_solicitante_mro(s["nome"], incluir=False)
                         invalidar_leituras()
                         st.rerun()
@@ -127,12 +151,14 @@ def render() -> None:
         with c_add1:
             escolhido = ""
             if candidatos:
-                escolhido = st.selectbox("Adicionar da lista (aba SCM USERS)", [""] + candidatos,
-                                         key="add_sol_sel")
+                escolhido = st.selectbox(
+                    "Adicionar da lista (aba SCM USERS)", [""] + candidatos, key="add_sol_sel"
+                )
             else:
                 st.caption("Sem candidatos importados (aba SCM USERS) — use o campo abaixo.")
-            novo_nome = st.text_input("…ou digite um nome novo", key="add_sol_txt",
-                                      placeholder="Nome completo do solicitante")
+            novo_nome = st.text_input(
+                "…ou digite um nome novo", key="add_sol_txt", placeholder="Nome completo do solicitante"
+            )
         with c_add2:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button(":material/person_add: Adicionar", key="add_sol_btn", width="stretch"):
@@ -144,8 +170,11 @@ def render() -> None:
                 else:
                     st.warning("Escolha um nome da lista ou digite um.")
 
-        if st.button(":material/sync: Resolver códigos agora (via API)", key="resolve_cod_btn",
-                     help="Consulta a API do SCM e preenche os códigos faltantes casando pelo nome."):
+        if st.button(
+            ":material/sync: Resolver códigos agora (via API)",
+            key="resolve_cod_btn",
+            help="Consulta a API do SCM e preenche os códigos faltantes casando pelo nome.",
+        ):
             try:
                 n = scm_sync.resolver_codigos_solicitantes()
                 invalidar_leituras()
@@ -162,7 +191,7 @@ def render() -> None:
         "local": ":material/location_on: Locais de Armazenagem",
         "fornecedor": ":material/factory: Fornecedores",
         "autorizador": ":material/key: Tipos de Autorizador",
-        "setor": ":material/apartment: Setores Solicitantes"  # Adicionado setor se necessário
+        "setor": ":material/apartment: Setores Solicitantes",  # Adicionado setor se necessário
     }
 
     for tipo_lista, titulo in LISTAS_CONFIG.items():
@@ -192,9 +221,12 @@ def render() -> None:
 
             # v3.3.0 — atalho: semear a lista com o cadastro mestre de fornecedores
             if tipo_lista == "fornecedor":
-                if st.button(":material/sync: Sincronizar do Relatório de SCs", key="sync_forn",
-                             help="Adiciona os Nomes Fantasia do cadastro mestre (importado no "
-                                  "Relatório de SCs) que ainda não estão na lista."):
+                if st.button(
+                    ":material/sync: Sincronizar do Relatório de SCs",
+                    key="sync_forn",
+                    help="Adiciona os Nomes Fantasia do cadastro mestre (importado no "
+                    "Relatório de SCs) que ainda não estão na lista.",
+                ):
                     _add, _tot = sincronizar_fornecedores_lista()
                     invalidar_leituras()
                     st.success(f"{_add} fornecedor(es) adicionado(s) — {_tot} no cadastro mestre.")
@@ -207,7 +239,7 @@ def render() -> None:
                 novo_valor = c_input.text_input(
                     f"Adicionar novo {titulo.split(' ', 1)[1].lower()}",
                     placeholder="Digite e pressione Adicionar...",
-                    label_visibility="collapsed"
+                    label_visibility="collapsed",
                 )
                 submitted = c_btn.form_submit_button(":material/add: Adicionar", width="stretch")
 

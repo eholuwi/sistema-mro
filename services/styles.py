@@ -16,30 +16,33 @@ def inject_custom_css(pal=None):
     # Apenas o :root é gerado a partir da paleta; o corpo do CSS referencia as variáveis.
     root = f"""
         :root {{
-            --primary-orange: {c['accent']};
-            --primary-hover: {c['accent_hover']};
-            --accent-tint: {c['accent_tint']};
-            --bg-sidebar: {c['bg_sidebar']};
-            --bg-main: {c['bg_main']};
-            --bg-card: {c['bg_card']};
-            --bg-metric: {c['bg_metric']};
-            --bg-grid: {c['bg_grid']};
-            --bg-th: {c['bg_th']};
-            --bg-expander: {c['bg_expander']};
-            --bg-input-focus: {c['bg_input_foco']};
-            --border-color: {c['borda']};
-            --text-white: {c['texto']};
-            --text-gray: {c['texto_suave']};
-            --shadow: {c['shadow']};
-            --shadow-lg: {c['shadow_lg']};
+            --primary-orange: {c["accent"]};
+            --primary-hover: {c["accent_hover"]};
+            --accent-tint: {c["accent_tint"]};
+            --bg-sidebar: {c["bg_sidebar"]};
+            --bg-main: {c["bg_main"]};
+            --bg-card: {c["bg_card"]};
+            --bg-metric: {c["bg_metric"]};
+            --bg-grid: {c["bg_grid"]};
+            --bg-th: {c["bg_th"]};
+            --bg-expander: {c["bg_expander"]};
+            --bg-input-focus: {c["bg_input_foco"]};
+            --border-color: {c["borda"]};
+            --text-white: {c["texto"]};
+            --text-gray: {c["texto_suave"]};
+            --shadow: {c["shadow"]};
+            --shadow-lg: {c["shadow_lg"]};
         }}
     """
 
-    st.markdown("""
+    st.markdown(
+        """
     <style>
         /* --- 1. FONTES --- */
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
-    """ + root + """
+    """
+        + root
+        + """
         /* --- 2. SIDEBAR --- */
         section[data-testid="stSidebar"] {
             background-color: var(--bg-sidebar) !important;
@@ -265,4 +268,6 @@ def inject_custom_css(pal=None):
         }
 
     </style>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )

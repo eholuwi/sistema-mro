@@ -13,6 +13,7 @@ A API do SCM (só-leitura, anônima, interna) passa a ser **fonte primária** pe
 Regras herdadas (ver `scm_client`): API só-GET, dois formatos de resposta, padding Protheus,
 datas nulas `0001-01-01`, campo de preço com o typo `valorUnitaro`.
 """
+
 from __future__ import annotations
 
 import glob
@@ -25,11 +26,15 @@ from database import transaction, _backup_db
 from services import scm_client
 from services.scm_client import _num, _trim
 from services.db_functions import (
-    _status_sc_importado, _log_importacao, _normalizar_txt, _upsert_item_sc_externo,
+    _status_sc_importado,
+    _log_importacao,
+    _normalizar_txt,
+    _upsert_item_sc_externo,
 )
 
 
 # ── Helpers puros ─────────────────────────────────────────────────────────────
+
 
 def _data_api(valor):
     """Data ISO da API (`2026-07-16T11:33:17.63`) → `'YYYY-MM-DD'`.
@@ -52,8 +57,8 @@ def _data_api(valor):
 # dado real e ajustar este dict (o código cru fica salvo em `status_protheus`, nada se perde).
 _STATUS_SC_API = {
     "01": ("aprovacao", 1),  # criada / aguardando aprovação
-    "03": ("cotacao", 1),    # aprovada, em cotação
-    "05": ("pedido", 1),     # pedido emitido
+    "03": ("cotacao", 1),  # aprovada, em cotação
+    "05": ("pedido", 1),  # pedido emitido
 }
 
 
@@ -77,6 +82,7 @@ _RANK_STATUS = {
 
 
 # ── Parsers puros ─────────────────────────────────────────────────────────────
+
 
 def normalizar_sc_api(sc):
     """Cabeçalho de uma SC do `ByUser` → dict de campos do MRO. PURO (sem rede/banco).
@@ -120,26 +126,29 @@ def normalizar_itens_api(timeline_result):
     if not isinstance(timeline_result, dict):
         return []
     itens = []
-    for it in (timeline_result.get("items") or []):
+    for it in timeline_result.get("items") or []:
         if not isinstance(it, dict):
             continue
         pn = _trim(it.get("produto"))
         if not pn:
             continue
         pdata = it.get("produtoData") or {}
-        itens.append({
-            "part_number": pn,
-            "descricao": _trim(pdata.get("descricao")) or _trim(it.get("descricaoGenerico")) or pn,
-            "quantidade": _num(it.get("quantidade")),
-            "unidade": _trim(it.get("um")) or None,
-            "preco_unitario": _num(it.get("valorUnitaro")),
-            "valor_total": _num(it.get("valorTotal")),
-            "data_necessidade": _data_api(it.get("dataNecessidade")),
-        })
+        itens.append(
+            {
+                "part_number": pn,
+                "descricao": _trim(pdata.get("descricao")) or _trim(it.get("descricaoGenerico")) or pn,
+                "quantidade": _num(it.get("quantidade")),
+                "unidade": _trim(it.get("um")) or None,
+                "preco_unitario": _num(it.get("valorUnitaro")),
+                "valor_total": _num(it.get("valorTotal")),
+                "data_necessidade": _data_api(it.get("dataNecessidade")),
+            }
+        )
     return itens
 
 
 # ── Resolução de código do solicitante (nome → código Protheus via /Usuario) ──
+
 
 def resolver_codigos_solicitantes(conn=None):
     """Preenche `solicitantes_mro.codigo` (faltantes, incluir_mro=1) casando o nome com o
@@ -150,8 +159,7 @@ def resolver_codigos_solicitantes(conn=None):
         with transaction() as c:
             return resolver_codigos_solicitantes(c)
     faltantes = conn.execute(
-        "SELECT id, nome FROM solicitantes_mro "
-        "WHERE incluir_mro=1 AND (codigo IS NULL OR TRIM(codigo)='')"
+        "SELECT id, nome FROM solicitantes_mro WHERE incluir_mro=1 AND (codigo IS NULL OR TRIM(codigo)='')"
     ).fetchall()
     if not faltantes:
         return 0
@@ -187,6 +195,7 @@ def _solicitantes_para_sync(conn):
 
 # ── Upserts (mesmo espírito COALESCE de ingerir_scm: API enriquece, não apaga) ─
 
+
 def _upsert_item_api(conn, sc_id, it, agora, resumo):
     """Item da API: PN no inventário → `itens_sc`; fora do inventário → `itens_sc_externos`."""
     inv = conn.execute("SELECT id FROM inventario WHERE part_number=?", (it["part_number"],)).fetchone()
@@ -197,7 +206,8 @@ def _upsert_item_api(conn, sc_id, it, agora, resumo):
     item_id = inv["id"]
     ex = conn.execute("SELECT id FROM itens_sc WHERE sc_id=? AND item_id=?", (sc_id, item_id)).fetchone()
     if ex:
-        conn.execute("""
+        conn.execute(
+            """
             UPDATE itens_sc SET
                 quantidade_solicitada=COALESCE(?, quantidade_solicitada),
                 descricao_detalhada=COALESCE(?, descricao_detalhada),
@@ -206,18 +216,45 @@ def _upsert_item_api(conn, sc_id, it, agora, resumo):
                 valor_total=CASE WHEN ?>0 THEN ? ELSE valor_total END,
                 ultima_importacao=?, origem=?
             WHERE id=?
-        """, (it["quantidade"], it["descricao"], it["data_necessidade"],
-              preco, preco, vtot, vtot, agora, "api_scm", ex["id"]))
+        """,
+            (
+                it["quantidade"],
+                it["descricao"],
+                it["data_necessidade"],
+                preco,
+                preco,
+                vtot,
+                vtot,
+                agora,
+                "api_scm",
+                ex["id"],
+            ),
+        )
     else:
         # Novo item pela API: nada recebido ainda → saldo = qtd solicitada, status 'Aberto'.
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO itens_sc
                 (sc_id, item_id, quantidade_solicitada, quantidade_recebida, data_necessidade,
                  descricao_detalhada, saldo_residual, status_item, ultima_importacao,
                  preco_unitario, valor_total, origem)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (sc_id, item_id, it["quantidade"], 0, it["data_necessidade"],
-              it["descricao"], it["quantidade"], "Aberto", agora, preco, vtot, "api_scm"))
+        """,
+            (
+                sc_id,
+                item_id,
+                it["quantidade"],
+                0,
+                it["data_necessidade"],
+                it["descricao"],
+                it["quantidade"],
+                "Aberto",
+                agora,
+                preco,
+                vtot,
+                "api_scm",
+            ),
+        )
         conn.execute("UPDATE inventario SET ultima_sc_id=? WHERE id=?", (sc_id, item_id))
     resumo["itens"] += 1
 
@@ -225,9 +262,19 @@ def _upsert_item_api(conn, sc_id, it, agora, resumo):
 def _upsert_externo_api(conn, sc_id, it, resumo):
     """Item cujo PN não está no inventário MRO → `itens_sc_externos` (reusa o helper do
     importador; a API não fornece PO no item, então `numero_po=None`)."""
-    _upsert_item_sc_externo(conn, sc_id, it["part_number"], it["descricao"], it["quantidade"],
-                            it["unidade"], it["preco_unitario"], it["valor_total"], None,
-                            it["data_necessidade"], "api_scm")
+    _upsert_item_sc_externo(
+        conn,
+        sc_id,
+        it["part_number"],
+        it["descricao"],
+        it["quantidade"],
+        it["unidade"],
+        it["preco_unitario"],
+        it["valor_total"],
+        None,
+        it["data_necessidade"],
+        "api_scm",
+    )
     resumo["externos"] += 1
 
 
@@ -240,7 +287,8 @@ def _upsert_sc_api(conn, cab, itens, resumo, divergencias):
     api_status = _mapear_status_api(cab["status_code"])
     row = conn.execute(
         "SELECT id, status FROM solicitacoes_compra WHERE sc_id_scm=? OR numero_sc=? LIMIT 1",
-        (cab["sc_id_scm"], cab["numero_sc"])).fetchone()
+        (cab["sc_id_scm"], cab["numero_sc"]),
+    ).fetchone()
     if row:
         sc_id = row["id"]
         atual = row["status"]
@@ -249,9 +297,16 @@ def _upsert_sc_api(conn, cab, itens, resumo, divergencias):
         rebaixaria = atual and _RANK_STATUS.get(atual, 0) > _RANK_STATUS.get(api_status, 0)
         status_final = atual if rebaixaria else api_status
         if atual and atual != api_status and len(divergencias) < 50:
-            divergencias.append({"numero_sc": cab["numero_sc"], "banco": atual,
-                                 "api": api_status, "mantido_banco": bool(rebaixaria)})
-        conn.execute("""
+            divergencias.append(
+                {
+                    "numero_sc": cab["numero_sc"],
+                    "banco": atual,
+                    "api": api_status,
+                    "mantido_banco": bool(rebaixaria),
+                }
+            )
+        conn.execute(
+            """
             UPDATE solicitacoes_compra SET
                 sc_id_scm=COALESCE(?, sc_id_scm), status=?, status_protheus=?,
                 data_abertura=COALESCE(?, data_abertura),
@@ -263,24 +318,55 @@ def _upsert_sc_api(conn, cab, itens, resumo, divergencias):
                 cotacao_codigo=COALESCE(?, cotacao_codigo),
                 prioridade_critica=?, origem_importacao=?, data_importacao=?, data_sync_api=?
             WHERE id=?
-        """, (cab["sc_id_scm"], status_final, cab["status_code"], cab["data_abertura"],
-              cab["data_aprovacao"], cab["centro_custo"], cab["solicitante"] or None,
-              cab["descricao_sc"], cab["justificativa"] or None, cab["cotacao_codigo"],
-              1 if cab["prioridade_critica"] else 0, "api_scm", agora, agora, sc_id))
+        """,
+            (
+                cab["sc_id_scm"],
+                status_final,
+                cab["status_code"],
+                cab["data_abertura"],
+                cab["data_aprovacao"],
+                cab["centro_custo"],
+                cab["solicitante"] or None,
+                cab["descricao_sc"],
+                cab["justificativa"] or None,
+                cab["cotacao_codigo"],
+                1 if cab["prioridade_critica"] else 0,
+                "api_scm",
+                agora,
+                agora,
+                sc_id,
+            ),
+        )
         resumo["scs_atualizadas"] += 1
     else:
         # data_abertura é NOT NULL — fallback p/ hoje se a API não trouxe emissão (idem ingerir_scm).
         data_abertura = cab["data_abertura"] or date.today().strftime("%Y-%m-%d")
-        cur = conn.execute("""
+        cur = conn.execute(
+            """
             INSERT INTO solicitacoes_compra
                 (numero_sc, sc_id_scm, data_abertura, data_aprovacao, centro_custo, status,
                  observacoes, solicitante, descricao_solicitacao, status_protheus,
                  cotacao_codigo, prioridade_critica, origem_importacao, data_importacao, data_sync_api)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (cab["numero_sc"], cab["sc_id_scm"], data_abertura, cab["data_aprovacao"],
-              cab["centro_custo"], api_status, cab["justificativa"] or None,
-              cab["solicitante"] or None, cab["descricao_sc"], cab["status_code"],
-              cab["cotacao_codigo"], 1 if cab["prioridade_critica"] else 0, "api_scm", agora, agora))
+        """,
+            (
+                cab["numero_sc"],
+                cab["sc_id_scm"],
+                data_abertura,
+                cab["data_aprovacao"],
+                cab["centro_custo"],
+                api_status,
+                cab["justificativa"] or None,
+                cab["solicitante"] or None,
+                cab["descricao_sc"],
+                cab["status_code"],
+                cab["cotacao_codigo"],
+                1 if cab["prioridade_critica"] else 0,
+                "api_scm",
+                agora,
+                agora,
+            ),
+        )
         sc_id = cur.lastrowid
         resumo["scs_criadas"] += 1
     for it in itens:
@@ -290,9 +376,18 @@ def _upsert_sc_api(conn, cab, itens, resumo, divergencias):
 
 # ── Orquestrador ──────────────────────────────────────────────────────────────
 
+
 def _resumo_zerado():
-    return {"solicitantes": 0, "scs": 0, "scs_criadas": 0, "scs_atualizadas": 0,
-            "itens": 0, "externos": 0, "divergencias": 0, "erros": []}
+    return {
+        "solicitantes": 0,
+        "scs": 0,
+        "scs_criadas": 0,
+        "scs_atualizadas": 0,
+        "itens": 0,
+        "externos": 0,
+        "divergencias": 0,
+        "erros": [],
+    }
 
 
 def _backup_1x_dia():
@@ -375,20 +470,40 @@ def sincronizar(periodo_dias=180, progress_cb=None, hoje=None, backup=True):
     status_geral = "parcial" if resumo["erros"] else "ok"
     with transaction() as conn:
         _log_importacao(
-            conn, "api_scm", "sincronizacao SCM",
-            resumo["scs"], resumo["scs_criadas"] + resumo["scs_atualizadas"], resumo["externos"],
-            {"status": status_geral, "periodo_dias": periodo_dias, "ini": ini, "fim": fim,
-             "resumo": {k: resumo[k] for k in
-                        ("solicitantes", "scs", "scs_criadas", "scs_atualizadas", "itens", "externos", "divergencias")},
-             "divergencias_amostra": divergencias[:50], "erros": resumo["erros"][:20]})
+            conn,
+            "api_scm",
+            "sincronizacao SCM",
+            resumo["scs"],
+            resumo["scs_criadas"] + resumo["scs_atualizadas"],
+            resumo["externos"],
+            {
+                "status": status_geral,
+                "periodo_dias": periodo_dias,
+                "ini": ini,
+                "fim": fim,
+                "resumo": {
+                    k: resumo[k]
+                    for k in (
+                        "solicitantes",
+                        "scs",
+                        "scs_criadas",
+                        "scs_atualizadas",
+                        "itens",
+                        "externos",
+                        "divergencias",
+                    )
+                },
+                "divergencias_amostra": divergencias[:50],
+                "erros": resumo["erros"][:20],
+            },
+        )
     return resumo
 
 
 def ultima_sync(conn=None):
     """Última sincronização via API (linha mais recente de `log_importacoes` tipo `api_scm`).
     Retorna `{'data_hora', 'detalhe'}` ou `None`."""
-    q = ("SELECT data_hora, detalhe_json FROM log_importacoes "
-         "WHERE tipo='api_scm' ORDER BY id DESC LIMIT 1")
+    q = "SELECT data_hora, detalhe_json FROM log_importacoes WHERE tipo='api_scm' ORDER BY id DESC LIMIT 1"
     if conn is not None:
         row = conn.execute(q).fetchone()
     else:

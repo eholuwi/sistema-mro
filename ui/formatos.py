@@ -3,6 +3,7 @@
 Helpers sem estado extraídos de app.py na fundação da refatoração (F1). Puros
 (dependem só de datetime), reusáveis por qualquer página do pacote ui/.
 """
+
 from __future__ import annotations
 
 from datetime import date, datetime

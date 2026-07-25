@@ -13,12 +13,22 @@ from collections import Counter
 from datetime import date, datetime
 
 from services.constants import (
-    ABC_LIMIAR_A, ABC_LIMIAR_B, AGING_ALERTA_DIAS, AGING_CRITICO_DIAS,
-    CC_GENERICOS, PREVISAO_RUPTURA_SEM_RISCO, SAIDA_REAL_WHERE,
+    ABC_LIMIAR_A,
+    ABC_LIMIAR_B,
+    AGING_ALERTA_DIAS,
+    AGING_CRITICO_DIAS,
+    CC_GENERICOS,
+    PREVISAO_RUPTURA_SEM_RISCO,
+    SAIDA_REAL_WHERE,
 )
 from services.db_functions import (
-    _preco_valoracao, calcular_giro, listar_inventario, listar_scs,
-    obter_valor_imobilizado, obter_abc_valor, transaction,
+    _preco_valoracao,
+    calcular_giro,
+    listar_inventario,
+    listar_scs,
+    obter_valor_imobilizado,
+    obter_abc_valor,
+    transaction,
     setor_dominante_por_item,
 )
 from services.planejamento import gerar_scs_sugeridas, gerar_sugestoes_reposicao
@@ -26,7 +36,7 @@ from services.planejamento import gerar_scs_sugeridas, gerar_sugestoes_reposicao
 # Rótulos dos públicos — fonte única de verdade (app.py e manual de Ajuda consomem).
 PUBLICO_COMPRADOR = "Comprador"
 PUBLICO_GESTAO = "Gestão"
-PUBLICO_EXECUTIVO = "KPI Mensal"   # v3.2.0 apresentação mês a mês; v3.3.0 renomeado (era "Mensal")
+PUBLICO_EXECUTIVO = "KPI Mensal"  # v3.2.0 apresentação mês a mês; v3.3.0 renomeado (era "Mensal")
 PUBLICOS = [PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_EXECUTIVO]
 
 
@@ -65,21 +75,21 @@ def _giro_medio(itens):
 # 👤 COMPRADOR — "o que fazer agora"
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def montar_visao_comprador(top_n=12, hoje=None):
     """View-model do Comprador: KPIs de ação, fila priorizada, SCs sugeridas e aging.
 
     Reusa a fila e os agrupamentos do Assistente de Reposição (v2.5/v2.8) — nada é
     recalculado aqui. `top_n` limita a prévia da fila (o total vem em `total_fila`)."""
-    sugestoes = gerar_sugestoes_reposicao()          # já ordenada por urgência
-    scs_sugeridas = gerar_scs_sugeridas()            # agrupadas por natureza
+    sugestoes = gerar_sugestoes_reposicao()  # já ordenada por urgência
+    scs_sugeridas = gerar_scs_sugeridas()  # agrupadas por natureza
     scs_abertas = listar_scs(apenas_abertas=True)
     itens = listar_inventario()
 
     criticos = sum(1 for s in sugestoes if s.get("prioridade_tier") == 0)
     atrasados = sum(1 for s in sugestoes if s.get("comprar_atrasado"))
     # Ruptura = item com consumo real E estoque físico zerado (risco imediato).
-    rupturas = sum(1 for i in itens
-                   if not i.get("sem_movimentacao") and (i.get("estoque_atual") or 0) <= 0)
+    rupturas = sum(1 for i in itens if not i.get("sem_movimentacao") and (i.get("estoque_atual") or 0) <= 0)
 
     # Aging das SCs abertas por faixa de dias desde a abertura (transparência do gargalo).
     aging = {"0-7": 0, "8-15": 0, "15+": 0, "sem_data": 0}
@@ -118,11 +128,13 @@ SCPO_FAIXAS = ["1 dia", "2-5", "6-10", "11-20", "20+"]
 
 def _dias_entre(iso1, iso2):
     """Dias inteiros de iso1 até iso2. None se algum não parsear."""
+
     def _p(x):
         try:
             return datetime.strptime(str(x).strip()[:10], "%Y-%m-%d").date()
         except (ValueError, TypeError, AttributeError):
             return None
+
     a, b = _p(iso1), _p(iso2)
     return (b - a).days if (a and b) else None
 
@@ -130,20 +142,28 @@ def _dias_entre(iso1, iso2):
 def _faixa_aging(d):
     if d is None:
         return None
-    if d <= 7:  return "0-7"
-    if d <= 15: return "8-15"
-    if d <= 30: return "16-30"
-    if d <= 60: return "31-60"
+    if d <= 7:
+        return "0-7"
+    if d <= 15:
+        return "8-15"
+    if d <= 30:
+        return "16-30"
+    if d <= 60:
+        return "31-60"
     return "60+"
 
 
 def _faixa_sc_po(d):
     if d is None:
         return None
-    if d <= 1:  return "1 dia"
-    if d <= 5:  return "2-5"
-    if d <= 10: return "6-10"
-    if d <= 20: return "11-20"
+    if d <= 1:
+        return "1 dia"
+    if d <= 5:
+        return "2-5"
+    if d <= 10:
+        return "6-10"
+    if d <= 20:
+        return "11-20"
     return "20+"
 
 
@@ -162,6 +182,7 @@ def montar_visao_compras_mro(hoje=None):
     o `app.py` só desenha. WK por ISO week (`date.isocalendar`)."""
     from collections import defaultdict
     from services.db_functions import _normalizar_txt, _nome_fornecedor_valido
+
     hoje = hoje or date.today()
     hoje_iso = hoje.strftime("%Y-%m-%d")
     # Escopo: ANO CORRENTE (pedido do usuário / prompt "Ano corrente quase sempre") —
@@ -173,7 +194,10 @@ def montar_visao_compras_mro(hoje=None):
         for r in conn.execute("SELECT nome, departamento FROM solicitantes_mro"):
             dep_por_solic[_normalizar_txt(r["nome"])] = (r["departamento"] or "").strip() or "—"
 
-        scs = [dict(r) for r in conn.execute("""
+        scs = [
+            dict(r)
+            for r in conn.execute(
+                """
             SELECT sc.id, sc.numero_sc, sc.status, sc.data_abertura, sc.data_aprovacao,
                    sc.data_po, sc.numero_po, sc.fornecedor, sc.comprador, sc.solicitante,
                    sc.departamento,
@@ -185,9 +209,15 @@ def montar_visao_compras_mro(hoje=None):
             LEFT JOIN itens_sc i ON i.sc_id = sc.id
             WHERE substr(sc.data_abertura, 1, 4) = ?
             GROUP BY sc.id
-        """, (ano_f,)).fetchall()]
+        """,
+                (ano_f,),
+            ).fetchall()
+        ]
 
-        itens_abertos = [dict(r) for r in conn.execute("""
+        itens_abertos = [
+            dict(r)
+            for r in conn.execute(
+                """
             SELECT sc.numero_sc, sc.data_abertura, sc.data_aprovacao, sc.numero_po, sc.status,
                    sc.comprador, sc.solicitante, sc.departamento,
                    inv.id AS item_id, inv.part_number, inv.nome_item,
@@ -198,18 +228,27 @@ def montar_visao_compras_mro(hoje=None):
             WHERE sc.status NOT IN ('Recebido', 'Cancelado')
               AND substr(sc.data_abertura, 1, 4) = ?
               AND COALESCE(i.saldo_residual, i.quantidade_solicitada - i.quantidade_recebida) > 0
-        """, (ano_f,)).fetchall()]
+        """,
+                (ano_f,),
+            ).fetchall()
+        ]
 
         # Item-level: o nome do fornecedor válido é escolhido no Python porque o
         # fornecedor_item às vezes traz lixo numérico ("1.0"/"2.0") junto do valor,
         # enquanto o nome real está em sc.fornecedor (ou vice-versa).
-        forn_rows = [dict(r) for r in conn.execute("""
+        forn_rows = [
+            dict(r)
+            for r in conn.execute(
+                """
             SELECT sc.id AS sc_id, i.fornecedor_item AS fi, sc.fornecedor AS sf,
                    COALESCE(i.valor_total, 0) AS valor,
                    sc.data_abertura AS da, sc.data_po AS dp
             FROM itens_sc i JOIN solicitacoes_compra sc ON sc.id = i.sc_id
             WHERE substr(sc.data_abertura, 1, 4) = ?
-        """, (ano_f,)).fetchall()]
+        """,
+                (ano_f,),
+            ).fetchall()
+        ]
 
         row = conn.execute(
             "SELECT MAX(data_hora) AS dh FROM log_importacoes WHERE tipo LIKE 'relatorio%'"
@@ -230,8 +269,9 @@ def montar_visao_compras_mro(hoje=None):
     agings = [a for a in (_aging_sc(s) for s in scs) if a is not None and a >= 0]
     aging_medio = round(sum(agings) / len(agings), 1) if agings else None
 
-    scpo = [d for d in (_dias_entre(s["data_abertura"], s["data_po"]) for s in com_po)
-            if d is not None and d >= 0]
+    scpo = [
+        d for d in (_dias_entre(s["data_abertura"], s["data_po"]) for s in com_po) if d is not None and d >= 0
+    ]
     scpo_hist = {f: 0 for f in SCPO_FAIXAS}
     for d in scpo:
         scpo_hist[_faixa_sc_po(d)] += 1
@@ -245,11 +285,15 @@ def montar_visao_compras_mro(hoje=None):
         aging = _dias_entre(it["data_abertura"], hoje_iso)
         if (it.get("estoque_atual") or 0) <= (it.get("estoque_minimo") or 0):
             itens_criticos += 1
-        painel.append({
-            "aging": aging if aging is not None else -1,
-            "sc": it["numero_sc"], "item": it["nome_item"], "pn": it["part_number"],
-            "comprador": (it["comprador"] or "—"),
-        })
+        painel.append(
+            {
+                "aging": aging if aging is not None else -1,
+                "sc": it["numero_sc"],
+                "item": it["nome_item"],
+                "pn": it["part_number"],
+                "comprador": (it["comprador"] or "—"),
+            }
+        )
     painel.sort(key=lambda x: x["aging"], reverse=True)
 
     # Distribuição do aging — v3.7.0 (A1): base APROVAÇÃO → hoje (definição do Luis);
@@ -275,16 +319,27 @@ def montar_visao_compras_mro(hoje=None):
         if a is not None and a >= 0:
             d["agings"].append(a)
     por_comprador = sorted(
-        [{"comprador": c, "itens": v["itens"], "pos": len(v["pos"]),
-          "valor": round(v["valor"], 2),
-          "aging_medio": round(sum(v["agings"]) / len(v["agings"]), 1) if v["agings"] else None}
-         for c, v in comp.items()],
-        key=lambda x: x["valor"], reverse=True)
+        [
+            {
+                "comprador": c,
+                "itens": v["itens"],
+                "pos": len(v["pos"]),
+                "valor": round(v["valor"], 2),
+                "aging_medio": round(sum(v["agings"]) / len(v["agings"]), 1) if v["agings"] else None,
+            }
+            for c, v in comp.items()
+        ],
+        key=lambda x: x["valor"],
+        reverse=True,
+    )
 
     # Demanda "em aberto" (D3): só SCs em COTAÇÃO e AINDA sem PO (com saldo pendente).
     # Setor = setor DOMINANTE derivado do consumo real (não o setor_responsavel).
-    itens_d3 = [it for it in itens_abertos
-                if "Cota" in (it.get("status") or "") and not (it.get("numero_po") or "").strip()]
+    itens_d3 = [
+        it
+        for it in itens_abertos
+        if "Cota" in (it.get("status") or "") and not (it.get("numero_po") or "").strip()
+    ]
     setor_dom = setor_dominante_por_item([it["item_id"] for it in itens_d3])
     dep_cont, sol_cont = Counter(), Counter()
     for it in itens_d3:
@@ -311,9 +366,14 @@ def montar_visao_compras_mro(hoje=None):
         forn_agg[nome]["itens"] += 1
         forn_por_sc.setdefault(r["sc_id"], nome)
     fornecedores_top = sorted(
-        [{"fornecedor": k, "valor": round(v["valor"], 2), "itens": v["itens"]}
-         for k, v in forn_agg.items() if v["valor"] > 0],
-        key=lambda x: x["valor"], reverse=True)[:10]
+        [
+            {"fornecedor": k, "valor": round(v["valor"], 2), "itens": v["itens"]}
+            for k, v in forn_agg.items()
+            if v["valor"] > 0
+        ],
+        key=lambda x: x["valor"],
+        reverse=True,
+    )[:10]
 
     # Lead time por fornecedor (Emissão → PO), por SC (dedupe) — bom para negociação.
     lt = defaultdict(list)
@@ -324,7 +384,9 @@ def montar_visao_compras_mro(hoje=None):
             lt[nome].append(d)
     lead_time_fornecedor = sorted(
         [{"fornecedor": n, "dias": round(sum(v) / len(v), 1), "pos": len(v)} for n, v in lt.items()],
-        key=lambda x: x["dias"], reverse=True)[:12]
+        key=lambda x: x["dias"],
+        reverse=True,
+    )[:12]
 
     # Evolução semanal (WK): itens aprovados × POs emitidos — compras acompanha a demanda?
     aprov_wk, po_wk = Counter(), Counter()
@@ -377,7 +439,8 @@ def montar_visao_compras_mro(hoje=None):
     ano, wk, _ = hoje.isocalendar()
     return {
         "ultima_atualizacao": ultima_atualizacao,
-        "wk": wk, "ano": ano,
+        "wk": wk,
+        "ano": ano,
         "kpis": {
             "itens_abertos": len(em_cotacao),
             "itens_criticos": itens_criticos,
@@ -407,6 +470,7 @@ def montar_visao_compras_mro(hoje=None):
 # 📊 GESTÃO — "saúde da operação"
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def montar_visao_gestao():
     """View-model da Gestão: nível de serviço, cobertura, valor, giro, distribuição
     de status e padrões de demanda. Tudo derivado de `listar_inventario` (uma
@@ -414,8 +478,7 @@ def montar_visao_gestao():
     itens = listar_inventario()
     total = len(itens)
 
-    dist = {"ok": 0, "atencao": 0, "comprar": 0, "sem_mov": 0,
-            "zerados": 0, "inventariado": 0}
+    dist = {"ok": 0, "atencao": 0, "comprar": 0, "sem_mov": 0, "zerados": 0, "inventariado": 0}
     # Saúde FÍSICA do estoque — Ok/Atenção/Crítico/Zerado sobre TODOS os itens,
     # INCLUSIVE os "Sem Movimentação" (usa `status_estoque_fisico`, que existe em
     # todo item, em vez de `status_material`, que sobrepõe o status por "Sem Mov.").
@@ -439,13 +502,13 @@ def montar_visao_gestao():
 
         sf = i.get("status_estoque_fisico", "")
         if (i.get("estoque_atual") or 0) <= 0:
-            saude["zerado"] += 1           # = 0 (destacado do crítico)
+            saude["zerado"] += 1  # = 0 (destacado do crítico)
         elif "COMPRAR" in sf:
-            saude["critico"] += 1          # abaixo/no mínimo, mas > 0
+            saude["critico"] += 1  # abaixo/no mínimo, mas > 0
         elif "ATENÇÃO" in sf:
-            saude["atencao"] += 1          # perto de ficar abaixo do mínimo
+            saude["atencao"] += 1  # perto de ficar abaixo do mínimo
         else:
-            saude["ok"] += 1               # acima do confortável (Mín × 1,2)
+            saude["ok"] += 1  # acima do confortável (Mín × 1,2)
         if i.get("data_inventario"):
             dist["inventariado"] += 1
         if not i.get("sem_movimentacao"):
@@ -468,10 +531,10 @@ def montar_visao_gestao():
 
     return {
         "kpis": {
-            "nivel_servico": nivel_servico,        # % (ou None se sem itens com consumo)
-            "cobertura_media": cobertura_media,    # dias (ou None)
+            "nivel_servico": nivel_servico,  # % (ou None se sem itens com consumo)
+            "cobertura_media": cobertura_media,  # dias (ou None)
             "valor_imobilizado": valor["total_brl"],
-            "giro_medio": giro_medio,              # x/ano (ou None)
+            "giro_medio": giro_medio,  # x/ano (ou None)
         },
         "valor_detalhe": valor,
         "distribuicao": dist,
@@ -487,13 +550,20 @@ def montar_visao_gestao():
 # 🏬 ALMOXARIFADO (§2) — saúde do estoque, prioridades do dia, entradas/saídas
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def _faixa_cobertura(d):
-    if d <= 7:   return "≤7"
-    if d <= 15:  return "8-15"
-    if d <= 30:  return "16-30"
-    if d <= 60:  return "31-60"
-    if d <= 180: return "60-180"
-    if d <= 365: return "180-365"
+    if d <= 7:
+        return "≤7"
+    if d <= 15:
+        return "8-15"
+    if d <= 30:
+        return "16-30"
+    if d <= 60:
+        return "31-60"
+    if d <= 180:
+        return "60-180"
+    if d <= 365:
+        return "180-365"
     return "365+"
 
 
@@ -506,6 +576,7 @@ def montar_visao_almoxarifado(hoje=None):
     mensal. PURO (DT-3). Fora (dependem de dados que não existem): Mapa do Almoxarifado
     (exige modelo de localização/prateleira) e itens de requisição digital."""
     from datetime import timedelta
+
     hoje = hoje or date.today()
     hoje_iso = hoje.strftime("%Y-%m-%d")
     sem_ini = (hoje - timedelta(days=7)).strftime("%Y-%m-%d")
@@ -541,11 +612,16 @@ def montar_visao_almoxarifado(hoje=None):
             if urgente:
                 compra_urgente += 1
             if urgente or com_giro:
-                comprar_agora.append({
-                    "pn": i["part_number"], "item": i["nome_item"],
-                    "estoque": est, "minimo": mn, "urgente": urgente,
-                    "cobertura": i.get("dias_cobertura"),
-                })
+                comprar_agora.append(
+                    {
+                        "pn": i["part_number"],
+                        "item": i["nome_item"],
+                        "estoque": est,
+                        "minimo": mn,
+                        "urgente": urgente,
+                        "cobertura": i.get("dias_cobertura"),
+                    }
+                )
 
         cob = i.get("dias_cobertura")
         if cob is not None and cob != PREVISAO_RUPTURA_SEM_RISCO and not i.get("sem_movimentacao"):
@@ -561,50 +637,78 @@ def montar_visao_almoxarifado(hoje=None):
     valor = obter_valor_imobilizado()
 
     with transaction() as conn:
+
         def _periodo(where_tipo, ini, dia=False):
             campo = "= ?" if dia else ">= ?"
             r = conn.execute(
                 f"SELECT COUNT(*) n, COALESCE(SUM(quantidade),0) q FROM movimentacoes "
-                f"WHERE {where_tipo} AND substr(data_hora,1,10) {campo}", (ini,)).fetchone()
+                f"WHERE {where_tipo} AND substr(data_hora,1,10) {campo}",
+                (ini,),
+            ).fetchone()
             return {"n": r["n"], "q": round(r["q"], 1)}
 
-        entradas = {"hoje": _periodo("tipo='entrada'", hoje_iso, dia=True),
-                    "semana": _periodo("tipo='entrada'", sem_ini),
-                    "mes": _periodo("tipo='entrada'", mes_ini)}
-        saidas = {"hoje": _periodo(SAIDA_REAL_WHERE, hoje_iso, dia=True),
-                  "semana": _periodo(SAIDA_REAL_WHERE, sem_ini),
-                  "mes": _periodo(SAIDA_REAL_WHERE, mes_ini)}
+        entradas = {
+            "hoje": _periodo("tipo='entrada'", hoje_iso, dia=True),
+            "semana": _periodo("tipo='entrada'", sem_ini),
+            "mes": _periodo("tipo='entrada'", mes_ini),
+        }
+        saidas = {
+            "hoje": _periodo(SAIDA_REAL_WHERE, hoje_iso, dia=True),
+            "semana": _periodo(SAIDA_REAL_WHERE, sem_ini),
+            "mes": _periodo(SAIDA_REAL_WHERE, mes_ini),
+        }
         req_hoje = conn.execute(
-            "SELECT COUNT(*) FROM requisicoes WHERE substr(data_hora,1,10)=?", (hoje_iso,)).fetchone()[0]
+            "SELECT COUNT(*) FROM requisicoes WHERE substr(data_hora,1,10)=?", (hoje_iso,)
+        ).fetchone()[0]
 
-        top_recebidos = [dict(r) for r in conn.execute("""
+        top_recebidos = [
+            dict(r)
+            for r in conn.execute(
+                """
             SELECT inv.part_number pn, inv.nome_item item, SUM(m.quantidade) q
             FROM movimentacoes m JOIN inventario inv ON inv.id=m.item_id
             WHERE m.tipo='entrada' AND substr(m.data_hora,1,10) >= ?
             GROUP BY m.item_id ORDER BY q DESC LIMIT 10
-        """, (mes_ini,)).fetchall()]
-        mais_consumidos = [dict(r) for r in conn.execute(f"""
+        """,
+                (mes_ini,),
+            ).fetchall()
+        ]
+        mais_consumidos = [
+            dict(r)
+            for r in conn.execute(
+                f"""
             SELECT inv.part_number pn, inv.nome_item item, SUM(m.quantidade) q
             FROM movimentacoes m JOIN inventario inv ON inv.id=m.item_id
             WHERE {SAIDA_REAL_WHERE} AND substr(m.data_hora,1,10) >= ?
             GROUP BY m.item_id ORDER BY q DESC LIMIT 10
-        """, (mes_ini,)).fetchall()]
-        setores = [dict(r) for r in conn.execute(f"""
+        """,
+                (mes_ini,),
+            ).fetchall()
+        ]
+        setores = [
+            dict(r)
+            for r in conn.execute(f"""
             SELECT COALESCE(NULLIF(TRIM(setor),''),'—') setor, COUNT(*) n, ROUND(SUM(quantidade),1) q
             FROM movimentacoes WHERE {SAIDA_REAL_WHERE}
             GROUP BY 1 ORDER BY n DESC LIMIT 10
-        """).fetchall()]
-        hist = [dict(r) for r in conn.execute("""
+        """).fetchall()
+        ]
+        hist = [
+            dict(r)
+            for r in conn.execute("""
             SELECT substr(data_hora,1,7) ym,
                    ROUND(SUM(CASE WHEN tipo='entrada' THEN quantidade ELSE 0 END),1) ent,
                    ROUND(SUM(CASE WHEN tipo='saida' AND requisicao_id IS NOT NULL THEN quantidade ELSE 0 END),1) sai
             FROM movimentacoes GROUP BY ym ORDER BY ym
-        """).fetchall()]
+        """).fetchall()
+        ]
 
     abc_cont = Counter(r["classe"] for r in obter_abc_valor() if r.get("classe"))
     abc_tot = sum(abc_cont.values()) or 1
-    abc = {c: {"n": abc_cont.get(c, 0), "pct": round(abc_cont.get(c, 0) / abc_tot * 100, 1)}
-           for c in ("A", "B", "C")}
+    abc = {
+        c: {"n": abc_cont.get(c, 0), "pct": round(abc_cont.get(c, 0) / abc_tot * 100, 1)}
+        for c in ("A", "B", "C")
+    }
 
     historico_mensal = {
         "meses": [h["ym"] for h in hist],
@@ -660,29 +764,37 @@ def _consumo_ytd_por_item(ano, conn=None):
     composição por tipo de material."""
     itens = []
     with transaction(conn) as c:
-        rows = c.execute(f"""
+        rows = c.execute(
+            f"""
             SELECT i.id, i.part_number, i.nome_item, i.tipo_material, i.unidade,
                    COALESCE(SUM(m.quantidade),0) AS qtd
             FROM movimentacoes m JOIN inventario i ON i.id = m.item_id
             WHERE {SAIDA_REAL_WHERE} AND strftime('%Y', m.data_hora)=?
             GROUP BY i.id HAVING qtd > 0
-        """, (str(ano),)).fetchall()
+        """,
+            (str(ano),),
+        ).fetchall()
         for r in rows:
             preco, _origem, _moeda = _preco_valoracao(c, r["id"])
-            itens.append({
-                "item_id": r["id"], "part_number": r["part_number"],
-                "nome_item": r["nome_item"], "tipo_material": r["tipo_material"] or "—",
-                "unidade": r["unidade"], "qtd": round(float(r["qtd"]), 2),
-                "preco": preco, "valor": round(float(r["qtd"]) * preco, 2),
-            })
+            itens.append(
+                {
+                    "item_id": r["id"],
+                    "part_number": r["part_number"],
+                    "nome_item": r["nome_item"],
+                    "tipo_material": r["tipo_material"] or "—",
+                    "unidade": r["unidade"],
+                    "qtd": round(float(r["qtd"]), 2),
+                    "preco": preco,
+                    "valor": round(float(r["qtd"]) * preco, 2),
+                }
+            )
     return itens
 
 
 def _classificar_abc(itens_consumo):
     """Curva ABC (classe A/B/C por % acumulada do valor) sobre a lista de consumo YTD.
     Mesma convenção de `obter_abc_valor`. Devolve (lista ordenada desc, total)."""
-    itens = sorted([dict(x) for x in itens_consumo if x["valor"] > 0],
-                   key=lambda x: x["valor"], reverse=True)
+    itens = sorted([dict(x) for x in itens_consumo if x["valor"] > 0], key=lambda x: x["valor"], reverse=True)
     total = sum(x["valor"] for x in itens)
     acc = 0.0
     for x in itens:
@@ -712,38 +824,50 @@ def _consumo_mensal_ytd(ano, conn=None):
     """Valor consumido (R$) e quantidade por mês do ano corrente (evolução). Valor via
     preco_referencia direto no SQL (rápido); coerente com os rankings por valor."""
     with transaction(conn) as c:
-        rows = c.execute(f"""
+        rows = c.execute(
+            f"""
             SELECT strftime('%Y-%m', m.data_hora) AS mes,
                    COALESCE(SUM(m.quantidade * COALESCE(i.preco_referencia,0)),0) AS valor,
                    COALESCE(SUM(m.quantidade),0) AS qtd
             FROM movimentacoes m JOIN inventario i ON i.id = m.item_id
             WHERE {SAIDA_REAL_WHERE} AND strftime('%Y', m.data_hora)=?
             GROUP BY mes ORDER BY mes
-        """, (str(ano),)).fetchall()
-    return [{"mes": r["mes"], "valor": round(float(r["valor"] or 0), 2),
-             "qtd": round(float(r["qtd"] or 0), 2)} for r in rows if r["mes"]]
+        """,
+            (str(ano),),
+        ).fetchall()
+    return [
+        {"mes": r["mes"], "valor": round(float(r["valor"] or 0), 2), "qtd": round(float(r["qtd"] or 0), 2)}
+        for r in rows
+        if r["mes"]
+    ]
 
 
 def _scs_criadas_por_mes_ytd(ano, conn=None):
     """SCs criadas por mês no ano corrente (exclui canceladas)."""
     with transaction(conn) as c:
-        rows = c.execute("""
+        rows = c.execute(
+            """
             SELECT strftime('%Y-%m', data_abertura) AS mes, COUNT(*) AS n
             FROM solicitacoes_compra
             WHERE data_abertura IS NOT NULL AND status NOT IN ('Cancelado')
               AND strftime('%Y', data_abertura)=?
             GROUP BY mes ORDER BY mes
-        """, (str(ano),)).fetchall()
+        """,
+            (str(ano),),
+        ).fetchall()
     return [{"mes": r["mes"], "criadas": r["n"]} for r in rows if r["mes"]]
 
 
 def _n_requisicoes_ytd(ano, conn=None):
     """Nº de requisições distintas com consumo real no ano corrente."""
     with transaction(conn) as c:
-        r = c.execute(f"""
+        r = c.execute(
+            f"""
             SELECT COUNT(DISTINCT requisicao_id) AS n FROM movimentacoes
             WHERE {SAIDA_REAL_WHERE} AND strftime('%Y', data_hora)=?
-        """, (str(ano),)).fetchone()
+        """,
+            (str(ano),),
+        ).fetchone()
     return r["n"] or 0
 
 
@@ -752,62 +876,81 @@ def _ranking_cc_ytd(ano, limit=10, conn=None):
     genéricos/contábeis (99000/INVENTÁRIO/EDIÇÃO), que não indicam setor consumidor."""
     placeholders = ",".join("?" for _ in CC_GENERICOS)
     with transaction(conn) as c:
-        rows = c.execute(f"""
+        rows = c.execute(
+            f"""
             SELECT COALESCE(NULLIF(TRIM(m.centro_custo),''),'(sem CC)') AS rotulo,
                    COALESCE(SUM(m.quantidade * COALESCE(i.preco_referencia,0)),0) AS valor
             FROM movimentacoes m JOIN inventario i ON i.id = m.item_id
             WHERE {SAIDA_REAL_WHERE} AND strftime('%Y', m.data_hora)=?
               AND TRIM(COALESCE(m.centro_custo,'')) NOT IN ({placeholders})
             GROUP BY rotulo HAVING valor > 0 ORDER BY valor DESC LIMIT ?
-        """, (str(ano), *CC_GENERICOS, limit)).fetchall()
+        """,
+            (str(ano), *CC_GENERICOS, limit),
+        ).fetchall()
     return [{"rotulo": r["rotulo"], "valor": round(float(r["valor"] or 0), 2)} for r in rows]
 
 
 def _ranking_emitente_ytd(ano, limit=10, conn=None):
     """Top emitentes por nº de requisições reais no ano corrente."""
     with transaction(conn) as c:
-        rows = c.execute(f"""
+        rows = c.execute(
+            f"""
             SELECT COALESCE(NULLIF(TRIM(emitente),''),'(sem emitente)') AS rotulo,
                    COUNT(DISTINCT requisicao_id) AS n
             FROM movimentacoes
             WHERE {SAIDA_REAL_WHERE} AND strftime('%Y', data_hora)=?
             GROUP BY rotulo ORDER BY n DESC LIMIT ?
-        """, (str(ano), limit)).fetchall()
+        """,
+            (str(ano), limit),
+        ).fetchall()
     return [{"rotulo": r["rotulo"], "n": r["n"]} for r in rows]
 
 
 def _ranking_setor_ytd(ano, limit=10, conn=None):
     """Top setores por nº de requisições reais no ano corrente."""
     with transaction(conn) as c:
-        rows = c.execute(f"""
+        rows = c.execute(
+            f"""
             SELECT COALESCE(NULLIF(TRIM(setor),''),'(sem setor)') AS rotulo,
                    COUNT(DISTINCT requisicao_id) AS n
             FROM movimentacoes
             WHERE {SAIDA_REAL_WHERE} AND strftime('%Y', data_hora)=?
             GROUP BY rotulo ORDER BY n DESC LIMIT ?
-        """, (str(ano), limit)).fetchall()
+        """,
+            (str(ano), limit),
+        ).fetchall()
     return [{"rotulo": r["rotulo"], "n": r["n"]} for r in rows]
 
 
 def _top_valor_imobilizado(limit=10, conn=None):
     """Top itens por capital PARADO em estoque (estoque_atual × preço de referência)."""
     with transaction(conn) as c:
-        rows = c.execute("""
+        rows = c.execute(
+            """
             SELECT part_number, nome_item,
                    estoque_atual * COALESCE(preco_referencia,0) AS valor
             FROM inventario
             WHERE COALESCE(preco_referencia,0) > 0 AND COALESCE(estoque_atual,0) > 0
             ORDER BY valor DESC LIMIT ?
-        """, (limit,)).fetchall()
-    return [{"part_number": r["part_number"], "nome_item": r["nome_item"],
-             "valor": round(float(r["valor"] or 0), 2)} for r in rows]
+        """,
+            (limit,),
+        ).fetchall()
+    return [
+        {
+            "part_number": r["part_number"],
+            "nome_item": r["nome_item"],
+            "valor": round(float(r["valor"] or 0), 2),
+        }
+        for r in rows
+    ]
 
 
 def _top_dead_stock(ano, limit=10, conn=None):
     """Top itens SEM consumo real no ano corrente com maior valor parado — o 'dinheiro
     dormindo' (dead stock). História forte de melhoria p/ a apresentação."""
     with transaction(conn) as c:
-        rows = c.execute(f"""
+        rows = c.execute(
+            f"""
             SELECT i.part_number, i.nome_item,
                    i.estoque_atual * COALESCE(i.preco_referencia,0) AS valor
             FROM inventario i
@@ -817,9 +960,17 @@ def _top_dead_stock(ano, limit=10, conn=None):
                   WHERE m.item_id = i.id AND {SAIDA_REAL_WHERE}
                     AND strftime('%Y', m.data_hora)=?)
             ORDER BY valor DESC LIMIT ?
-        """, (str(ano), limit)).fetchall()
-    return [{"part_number": r["part_number"], "nome_item": r["nome_item"],
-             "valor": round(float(r["valor"] or 0), 2)} for r in rows]
+        """,
+            (str(ano), limit),
+        ).fetchall()
+    return [
+        {
+            "part_number": r["part_number"],
+            "nome_item": r["nome_item"],
+            "valor": round(float(r["valor"] or 0), 2),
+        }
+        for r in rows
+    ]
 
 
 def montar_visao_executiva(hoje=None):
@@ -853,13 +1004,15 @@ def montar_visao_executiva(hoje=None):
             "consumo_mensal": _consumo_mensal_ytd(ano),
             "scs_mensal": _scs_criadas_por_mes_ytd(ano),
         },
-        "abc": {"itens": abc[:12], "classes": dict(Counter(x["classe"] for x in abc)),
-                "total": total_consumido},
+        "abc": {
+            "itens": abc[:12],
+            "classes": dict(Counter(x["classe"] for x in abc)),
+            "total": total_consumido,
+        },
         "composicao_tipo": _composicao_por_tipo(consumo_itens),
         "rankings": {
-            "top_valor_consumido": abc[:10],                     # já ordenado por valor
-            "top_qtd_consumida": sorted(consumo_itens, key=lambda x: x["qtd"],
-                                        reverse=True)[:10],
+            "top_valor_consumido": abc[:10],  # já ordenado por valor
+            "top_qtd_consumida": sorted(consumo_itens, key=lambda x: x["qtd"], reverse=True)[:10],
             "top_valor_imobilizado": _top_valor_imobilizado(10),
             "top_dead_stock": _top_dead_stock(ano, 10),
             "top_centro_custo": _ranking_cc_ytd(ano, 10),

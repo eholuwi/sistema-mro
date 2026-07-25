@@ -4,6 +4,7 @@ Cobrem as 2 mudanças de código em database.py (DB_PATH sobrescrevível por env
 PRAGMA busy_timeout) e a sanidade do artefato de config de servidor. São puros e
 isolados — não sobem o Streamlit nem tocam o mro.db real.
 """
+
 import importlib
 import os
 import tomllib

@@ -4,6 +4,7 @@ Cobre: derivação automática do STATUS PO no sync (status da SC/PO, chaveado p
 STATUS PO como coluna TÉCNICA (sobrescrita pelo sync, não mais manual), limite de linhas
 do Monitor (com prioridade para as manuais) e o enriquecimento da Linha do Tempo.
 """
+
 import database
 from services import db_functions as F
 
@@ -50,21 +51,24 @@ def test_cap_mantem_linhas_manuais(db, make_item, make_sc, monkeypatch):
         make_sc(numero_sc=f"SC-MC{i}", item_id=item, quantidade_solicitada=3)
     F.sincronizar_monitor_sc(force=True)
     orig = F.listar_monitor_sc()
-    man = [{"numero_sc": "MAN-A", "part_number": "MA", "revisado": False, "linha_id": None},
-           {"numero_sc": "MAN-B", "part_number": "MB", "revisado": False, "linha_id": None}]
+    man = [
+        {"numero_sc": "MAN-A", "part_number": "MA", "revisado": False, "linha_id": None},
+        {"numero_sc": "MAN-B", "part_number": "MB", "revisado": False, "linha_id": None},
+    ]
     F.salvar_monitor_sc(orig + man, [l["linha_id"] for l in orig])
     linhas = F.listar_monitor_sc()
     assert len(linhas) == 3
     scs = {l["numero_sc"] for l in linhas}
-    assert "MAN-A" in scs and "MAN-B" in scs   # manuais sempre dentro do limite
+    assert "MAN-A" in scs and "MAN-B" in scs  # manuais sempre dentro do limite
 
 
 def test_linha_do_tempo_recebimentos_enriquecida(db, make_item, make_sc):
     item_id = make_item("PN-RCB", estoque=0, minimo=2, unidade="CX")
     sc_id = make_sc(numero_sc="SC-RCB", item_id=item_id, quantidade_solicitada=10)
     item_sc_id = F.listar_itens_sc(sc_id)[0]["id"]
-    ok, _ = F.registrar_recebimento_sc(sc_id, item_sc_id, 4, "21194 - ALMOXARIFADO",
-                                       "Alm", "Alm", "SKF", "2026-02-01", "NF-100")
+    ok, _ = F.registrar_recebimento_sc(
+        sc_id, item_sc_id, 4, "21194 - ALMOXARIFADO", "Alm", "Alm", "SKF", "2026-02-01", "NF-100"
+    )
     assert ok
     recs = F.listar_recebimentos_sc()
     assert recs, "deveria haver ao menos 1 recebimento"

@@ -4,6 +4,7 @@ Cobre banco vazio (DataFrame vazio sem excecao), presenca das colunas renomeadas
 o filtro por tipo que casa e o filtro que NAO casa nenhum registro (B-01,
 corrigido na Fase 5.1: deve retornar DataFrame vazio, nao lancar ValueError).
 """
+
 from services import db_functions as F
 
 CC = "21106 - MANUTENÇÃO"
@@ -34,8 +35,16 @@ def test_exportar_movimentacoes_com_dados(db, make_item):
     F.registrar_movimentacao(item_id, "entrada", 50, CC, "Joao", "Joao")
     df = F.exportar_movimentacoes_df()
     assert len(df) == 1
-    assert list(df.columns) == ["Data/Hora", "PN", "Item", "Tipo", "Qtd",
-                                "Saldo Pós", "Responsável", "Observação"]
+    assert list(df.columns) == [
+        "Data/Hora",
+        "PN",
+        "Item",
+        "Tipo",
+        "Qtd",
+        "Saldo Pós",
+        "Responsável",
+        "Observação",
+    ]
 
 
 def test_exportar_movimentacoes_filtro_que_casa(db, make_item):

@@ -14,6 +14,7 @@ Contrato:
     "multiselect": [(rótulo, coluna), ...]
 Estado por widget fica em `st.session_state` sob o prefixo `chave`.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -23,6 +24,7 @@ from services.db_functions import _normalizar_txt
 
 
 # ── Filtragem pura (sem Streamlit) ────────────────────────────────────────────
+
 
 def _filtrar_texto(df, campos_pesquisa, termo):
     """Mantém linhas em que o termo (normalizado) aparece em QUALQUER dos campos.
@@ -64,8 +66,7 @@ def _filtrar_periodo(df, coluna, ini, fim):
     qualquer limite."""
     if df.empty or coluna not in df.columns or (ini is None and fim is None):
         return df
-    datas = pd.to_datetime(df[coluna].astype(str).str.slice(0, 10),
-                           format="%Y-%m-%d", errors="coerce")
+    datas = pd.to_datetime(df[coluna].astype(str).str.slice(0, 10), format="%Y-%m-%d", errors="coerce")
     mask = pd.Series(True, index=df.index)
     if ini is not None:
         mask &= datas >= pd.Timestamp(ini)
@@ -84,6 +85,7 @@ def _filtrar_multiselect(df, coluna, valores):
 
 # ── Barra de filtros (Streamlit) ──────────────────────────────────────────────
 
+
 def barra_filtros(df, chave, campos_pesquisa, filtros_rapidos=None, avancados=None):
     """Desenha a barra e devolve o DataFrame filtrado. `chave` isola o estado dos
     widgets (prefixo em session_state)."""
@@ -92,15 +94,21 @@ def barra_filtros(df, chave, campos_pesquisa, filtros_rapidos=None, avancados=No
         return df
 
     termo = st.text_input(
-        "Pesquisar", key=f"{chave}__busca", placeholder="Digite parte do texto…",
-        label_visibility="collapsed")
+        "Pesquisar", key=f"{chave}__busca", placeholder="Digite parte do texto…", label_visibility="collapsed"
+    )
 
     selecionados = []
     if filtros_rapidos:
-        selecionados = st.pills(
-            "Filtros rápidos", options=list(filtros_rapidos.keys()),
-            selection_mode="multi", key=f"{chave}__pills",
-            label_visibility="collapsed") or []
+        selecionados = (
+            st.pills(
+                "Filtros rápidos",
+                options=list(filtros_rapidos.keys()),
+                selection_mode="multi",
+                key=f"{chave}__pills",
+                label_visibility="collapsed",
+            )
+            or []
+        )
 
     filtrado = _filtrar_texto(df, campos_pesquisa, termo)
     filtrado = _aplicar_pills(filtrado, filtros_rapidos, selecionados)
@@ -110,13 +118,11 @@ def barra_filtros(df, chave, campos_pesquisa, filtros_rapidos=None, avancados=No
             periodo = avancados.get("periodo")
             if periodo:
                 rotulo, coluna = periodo
-                intervalo = st.date_input(
-                    rotulo, value=(), key=f"{chave}__periodo",
-                    format="DD/MM/YYYY")
+                intervalo = st.date_input(rotulo, value=(), key=f"{chave}__periodo", format="DD/MM/YYYY")
                 if isinstance(intervalo, (tuple, list)) and len(intervalo) == 2:
                     filtrado = _filtrar_periodo(filtrado, coluna, intervalo[0], intervalo[1])
 
-            for rotulo, coluna in (avancados.get("multiselect") or []):
+            for rotulo, coluna in avancados.get("multiselect") or []:
                 if coluna not in df.columns:
                     continue
                 opcoes = sorted({str(v) for v in df[coluna].dropna().tolist() if str(v).strip()})

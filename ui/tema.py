@@ -9,6 +9,7 @@ juntamos "ler a escolha" + "montar a paleta".
 `paleta_atual()` pode ser chamada várias vezes por rerun sem custo relevante — a
 função só monta um dict de tokens a partir de constantes.
 """
+
 from __future__ import annotations
 
 import streamlit as st

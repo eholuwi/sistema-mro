@@ -4,21 +4,38 @@ O caminho feliz basico ja e exercitado implicitamente pela fixture make_item
 (que usa salvar_item). Aqui cobrimos as bordas: INSERT com part_number
 duplicado, caminho UPDATE (com item_id) e o recalculo de ruptura.
 """
+
 from services import db_functions as F
 from services.constants import PREVISAO_RUPTURA_SEM_RISCO
 
 
 def _salvar(part_number, nome="Item", estoque=100, minimo=10, lead=7, item_id=None):
-    return F.salvar_item(part_number, nome, "", "UN", "Importante", "Spare Parts",
-                         "Improdutivo", "ARM-01", "", estoque, minimo, lead, item_id)
+    return F.salvar_item(
+        part_number,
+        nome,
+        "",
+        "UN",
+        "Importante",
+        "Spare Parts",
+        "Improdutivo",
+        "ARM-01",
+        "",
+        estoque,
+        minimo,
+        lead,
+        item_id,
+    )
 
 
 def test_insert_cria_item(db):
     ok, msg = _salvar("PN-NEW")
     assert ok, msg
-    assert F.buscar_item_por_id(
-        next(i["id"] for i in F.listar_inventario() if i["part_number"] == "PN-NEW")
-    )["nome_item"] == "Item"
+    assert (
+        F.buscar_item_por_id(next(i["id"] for i in F.listar_inventario() if i["part_number"] == "PN-NEW"))[
+            "nome_item"
+        ]
+        == "Item"
+    )
 
 
 def test_part_number_duplicado_rejeita(db, make_item):

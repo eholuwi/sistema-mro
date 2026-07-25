@@ -75,6 +75,7 @@ e unidades (backup automático).
 # MANUAL DO SISTEMA (tela a tela)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def _item(nome, para_que, base, como, crianca):
     return {"nome": nome, "para_que": para_que, "base": base, "como": como, "crianca": crianca}
 
@@ -83,8 +84,8 @@ MANUAL = [
     {
         "tela": ":material/bar_chart: Dashboard",
         "intro": "A tela de abertura, agora com **abas por público** no topo (mesmo padrão de "
-                 "Controle de SC / Movimentação): cada perfil "
-                 "(:material/person: Comprador · :material/bar_chart: Gestão · :material/calendar_month: KPI Mensal) vê só o que importa para o seu trabalho.",
+        "Controle de SC / Movimentação): cada perfil "
+        "(:material/person: Comprador · :material/bar_chart: Gestão · :material/calendar_month: KPI Mensal) vê só o que importa para o seu trabalho.",
         "itens": [
             _item(
                 "Abas de visão (:material/person: Comprador · :material/bar_chart: Gestão · :material/calendar_month: KPI Mensal)",
@@ -289,7 +290,7 @@ MANUAL = [
     {
         "tela": ":material/receipt_long: Controle de SC",
         "intro": "O centro do comprador: solicitações, reposição, fornecedores e importação. "
-                 "(O **recebimento** mudou para a **Movimentação → Receber Material**.)",
+        "(O **recebimento** mudou para a **Movimentação → Receber Material**.)",
         "itens": [
             _item(
                 "Aba 'Assistente de Reposição' — fila e 'Comprar até'",
@@ -356,7 +357,7 @@ MANUAL = [
     {
         "tela": ":material/sync: Movimentação",
         "intro": "O centro do almoxarifado físico: **Analytics**, **Receber Material**, "
-                 "**Requisição**, **Ajuste Rápido** e **Histórico Completo** — tudo que entra e sai.",
+        "**Requisição**, **Ajuste Rápido** e **Histórico Completo** — tudo que entra e sai.",
         "itens": [
             _item(
                 "Analytics (volume, divergências, rupturas) + export",
@@ -420,40 +421,31 @@ MANUAL = [
 AJUDA_DADOS = {
     # Dashboard Comprador
     "itens_em_aberto": "**O que é:** Itens com SC/PO aberta e quantidade ainda pendente de recebimento. "
-                       "**Para que serve:** Monitorar o que está a caminho. "
-                       "**Como é feito:** Conta SCs e POs com status ≠ 'Finalizado' e qtd_pendente > 0.",
-
+    "**Para que serve:** Monitorar o que está a caminho. "
+    "**Como é feito:** Conta SCs e POs com status ≠ 'Finalizado' e qtd_pendente > 0.",
     "fornecedores_aberto": "**O que é:** Fornecedores com pedidos em aberto, ordenados por valor. "
-                           "**Para que serve:** Priorizar Follow-ups e negociações. "
-                           "**Como é feito:** Agrupa itens em aberto por fornecedor, soma valores das POs pendentes.",
-
+    "**Para que serve:** Priorizar Follow-ups e negociações. "
+    "**Como é feito:** Agrupa itens em aberto por fornecedor, soma valores das POs pendentes.",
     "setores_demanda_aberta": "**O que é:** Setores com mais requisições em aberto aguardando material. "
-                              "**Para que serve:** Identificar qual setor está com mais demanda represada. "
-                              "**Como é feito:** Conta requisições com status 'Aberta' ou 'Parcial' por setor.",
-
+    "**Para que serve:** Identificar qual setor está com mais demanda represada. "
+    "**Como é feito:** Conta requisições com status 'Aberta' ou 'Parcial' por setor.",
     # Dashboard Almoxarifado
     "dist_ok": "**O que é:** Itens com estoque adequado para cobrir a demanda prevista. "
-               "**Para que serve:** Confirmar que esses materiais podem ser usados livremente. "
-               "**Como é feito:** Estoque atual ≥ mínimo E dias de cobertura ≥ dias de segurança.",
-
+    "**Para que serve:** Confirmar que esses materiais podem ser usados livremente. "
+    "**Como é feito:** Estoque atual ≥ mínimo E dias de cobertura ≥ dias de segurança.",
     "dist_atencao": "**O que é:** Itens com estoque acima do mínimo, mas com cobertura curta (demanda alta ou lead time longo). "
-                    "**Para que serve:** Sinal de atenção — pode virar crítico se não houver reposição em tempo. "
-                    "**Como é feito:** Estoque ≥ mínimo, mas dias de cobertura < dias de segurança.",
-
+    "**Para que serve:** Sinal de atenção — pode virar crítico se não houver reposição em tempo. "
+    "**Como é feito:** Estoque ≥ mínimo, mas dias de cobertura < dias de segurança.",
     "dist_critico": "**O que é:** Itens com estoque abaixo do mínimo — risco iminente de ruptura. "
-                    "**Para que serve:** Ação imediata — conferir a demanda e acionar compras. "
-                    "**Como é feito:** Estoque atual < mínimo.",
-
+    "**Para que serve:** Ação imediata — conferir a demanda e acionar compras. "
+    "**Como é feito:** Estoque atual < mínimo.",
     "cobertura_dias": "**O que é:** Quantos dias o estoque atual cobre a demanda média (consumo/dia). "
-                      "**Para que serve:** Prever quando o material acaba e planejar reposição. "
-                      "**Como é feito:** Estoque atual ÷ consumo médio diário (últimos 30 dias).",
-
+    "**Para que serve:** Prever quando o material acaba e planejar reposição. "
+    "**Como é feito:** Estoque atual ÷ consumo médio diário (últimos 30 dias).",
     "top_consumo": "**O que é:** Itens com maior consumo (em quantidade ou valor) no período. "
-                   "**Para que serve:** Entender quais materiais movem a operação — foco em reposição e acompanhamento. "
-                   "**Como é feito:** Soma de saídas (requisições) no período, ordenado decrescente.",
-
+    "**Para que serve:** Entender quais materiais movem a operação — foco em reposição e acompanhamento. "
+    "**Como é feito:** Soma de saídas (requisições) no período, ordenado decrescente.",
     "entradas_saidas": "**O que é:** Volume de material que entrou (recebimentos) e saiu (requisições/ajustes) em um período. "
-                       "**Para que serve:** Monitorar fluxo operacional — giro, rupturas e divergências. "
-                       "**Como é feito:** Contagem de movimentações por tipo (entrada/saída) e período (dia/semana/mês).",
+    "**Para que serve:** Monitorar fluxo operacional — giro, rupturas e divergências. "
+    "**Como é feito:** Contagem de movimentações por tipo (entrada/saída) e período (dia/semana/mês).",
 }
-

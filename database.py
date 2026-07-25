@@ -24,6 +24,7 @@ def _normalizar_nome(valor):
     texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
     return re.sub(r"\s+", " ", texto).lower()
 
+
 def get_connection():
     conn = sqlite3.connect(DB_PATH, timeout=5.0)
     conn.row_factory = sqlite3.Row
@@ -33,6 +34,7 @@ def get_connection():
     # lock em vez de estourar "database is locked" imediatamente. Complementa o WAL.
     conn.execute("PRAGMA busy_timeout = 5000")
     return conn
+
 
 @contextmanager
 def transaction(conn=None):
@@ -78,64 +80,102 @@ def criar_banco():
     # ══════════════════════════════════════════════════════════════════════════════
     # PADRONIZAÇÃO DE LISTAS MESTRAS (v2.0.0)
     # ══════════════════════════════════════════════════════════════════════════════
-    
+
     # 1. CENTROS DE CUSTO (Padrão: CÓDIGO - NOME)
     centros_custo = [
-    "21101 - GERENCIA PRODUCAO", "21102 - WI-FI INFORMATICA", "21103 - BATERIA CELULAR", "21104 - BATERIA GPS", 
-    "21105 - PTH", "21106 - MANUTENÇÃO", "21107 - QUALIDADE", "21108 - BATERIA NOTEBOOK", 
-    "21109 - WI-FI AUDIO VIDEO", "21110 - EYELET", "21111 - SMD AUDIO VIDEO", "21112 - BATERIA PARA TABLET", 
-    "21115 - SMD", "21116 - ADAPTADORES", "21117 - ENGENHARIA DE MANUFATURA", "21119 - BATERIA PARA FONE DE OUVIDO", 
-    "21120 - ENGENHARIA MANUFATURA SMD", "21121 - MAO DE OBRA DIRETA", "21122 - ENGENHARIA MANUFATURA ADAPTADORES", "21123 - ADAPTADOR CELULAR", 
-    "21124 - TRANSFORMADOR", "21125 - MODEM (ASKEY)", "21126 - TAMPOGRAFIA DE BATERIA DE CELULAR", "21127 - TAMPOGRAFIA DE MODEM", 
-    "21128 - SUBPR ADAPTADOR DE CELULAR", "21129 - SUBPR MODEM", "21130 - FPCB BATERIA DE CELULAR", "21131 - FPCB BATERIA DE NOTEBOOK", 
-    "21132 - SUBP PCBA MODEM", "21133 - TAMPOGRAFIA DE BATERIA DE DE NOTE/TABLET", "21134 - BATERIA PARA SMART WATCH", "21191 - COMPRAS", 
-    "21192 - PCP", "21194 - ALMOXARIFADO", "21203 - EXPEDI.TDI", "21210 - BATERIA PARA CELULAR", 
-    "21211 - BATERIA PARA NOTEBOOK", "21212 - WI-FI WLAN", "21213 - WI-FI AUDIO/VIDEO", "21214 - ADAPTADOR", 
-    "21215 - ADAPTADOR PARA CELULAR", "21216 - MODEM", "21217 - CORREDOR DE IMPORTACAO", "21218 - BATERIA PARA TABLET", 
-    "21301 - ENGENHARIA PRODUTO", "90401 - FINANCEIRO", "90402 - DSI", "90501 - RECURSOS HUMANOS", 
-    "90502 - SERVICOS GERAIS", "90503 - APRENDIZES", "90604 - SERVICOS AO CLIENTE", "90701 - GERENCIA DA PLANTA", 
-    "90702 - MELHORIA CONTINUA", "99000 - ATIVO PASSIVO RES. F"
+        "21101 - GERENCIA PRODUCAO",
+        "21102 - WI-FI INFORMATICA",
+        "21103 - BATERIA CELULAR",
+        "21104 - BATERIA GPS",
+        "21105 - PTH",
+        "21106 - MANUTENÇÃO",
+        "21107 - QUALIDADE",
+        "21108 - BATERIA NOTEBOOK",
+        "21109 - WI-FI AUDIO VIDEO",
+        "21110 - EYELET",
+        "21111 - SMD AUDIO VIDEO",
+        "21112 - BATERIA PARA TABLET",
+        "21115 - SMD",
+        "21116 - ADAPTADORES",
+        "21117 - ENGENHARIA DE MANUFATURA",
+        "21119 - BATERIA PARA FONE DE OUVIDO",
+        "21120 - ENGENHARIA MANUFATURA SMD",
+        "21121 - MAO DE OBRA DIRETA",
+        "21122 - ENGENHARIA MANUFATURA ADAPTADORES",
+        "21123 - ADAPTADOR CELULAR",
+        "21124 - TRANSFORMADOR",
+        "21125 - MODEM (ASKEY)",
+        "21126 - TAMPOGRAFIA DE BATERIA DE CELULAR",
+        "21127 - TAMPOGRAFIA DE MODEM",
+        "21128 - SUBPR ADAPTADOR DE CELULAR",
+        "21129 - SUBPR MODEM",
+        "21130 - FPCB BATERIA DE CELULAR",
+        "21131 - FPCB BATERIA DE NOTEBOOK",
+        "21132 - SUBP PCBA MODEM",
+        "21133 - TAMPOGRAFIA DE BATERIA DE DE NOTE/TABLET",
+        "21134 - BATERIA PARA SMART WATCH",
+        "21191 - COMPRAS",
+        "21192 - PCP",
+        "21194 - ALMOXARIFADO",
+        "21203 - EXPEDI.TDI",
+        "21210 - BATERIA PARA CELULAR",
+        "21211 - BATERIA PARA NOTEBOOK",
+        "21212 - WI-FI WLAN",
+        "21213 - WI-FI AUDIO/VIDEO",
+        "21214 - ADAPTADOR",
+        "21215 - ADAPTADOR PARA CELULAR",
+        "21216 - MODEM",
+        "21217 - CORREDOR DE IMPORTACAO",
+        "21218 - BATERIA PARA TABLET",
+        "21301 - ENGENHARIA PRODUTO",
+        "90401 - FINANCEIRO",
+        "90402 - DSI",
+        "90501 - RECURSOS HUMANOS",
+        "90502 - SERVICOS GERAIS",
+        "90503 - APRENDIZES",
+        "90604 - SERVICOS AO CLIENTE",
+        "90701 - GERENCIA DA PLANTA",
+        "90702 - MELHORIA CONTINUA",
+        "99000 - ATIVO PASSIVO RES. F",
     ]
 
     # 2. LOCAIS DE ARMAZENAGEM (Padrão: TIPO-NÚMERO ou NOME ÚNICO)
     locais = []
-    
+
     # ARM-01 até ARM-30
     for i in range(1, 31):
         locais.append(f"ARM-{i:02d}")
-        
+
     # MRO-01 até MRO-35
     for i in range(1, 36):
         locais.append(f"MRO-{i:02d}")
-        
+
     # ARM-EXP-01 até ARM-EXP-10
     for i in range(1, 11):
         locais.append(f"ARM-EXP-{i:02d}")
-        
+
     # GAIOLA-01 até GAIOLA-03
     for i in range(1, 4):
         locais.append(f"GAIOLA-{i:02d}")
-        
+
     # Locais Especiais
     locais_especiais = [
         "TENDA",
         "SUPERMERCADO",
-        "SALA-ALMOXARIFADO" # Padronizado com hífen
+        "SALA-ALMOXARIFADO",  # Padronizado com hífen
     ]
     locais.extend(locais_especiais)
 
     # 3. AUTORIZADORES (Mantidos)
-    autorizadores = [
-        "Gestor", "Líder", "Reserva", "Técnico"
-    ]
+    autorizadores = ["Gestor", "Líder", "Reserva", "Técnico"]
 
     # Inserção no Banco (INSERT OR IGNORE evita duplicatas em migrações)
     for cc in centros_custo:
         c.execute("INSERT OR IGNORE INTO listas (tipo, valor) VALUES (?,?)", ("centro_custo", cc))
-        
+
     for loc in locais:
         c.execute("INSERT OR IGNORE INTO listas (tipo, valor) VALUES (?,?)", ("local", loc))
-        
+
     for aut in autorizadores:
         c.execute("INSERT OR IGNORE INTO listas (tipo, valor) VALUES (?,?)", ("autorizador", aut))
 
@@ -411,8 +451,12 @@ def criar_banco():
     """)
 
     # Seed dos solicitantes MRO atuais. v3.7.0: + Juan Tarco Pinheiro de Araujo (A5).
-    for _nome in ("Jasiva Lopes", "Luis Gabriel Arruda de Oliveira", "Sidinei Correa Alfon",
-                  "Juan Tarco Pinheiro de Araujo"):
+    for _nome in (
+        "Jasiva Lopes",
+        "Luis Gabriel Arruda de Oliveira",
+        "Sidinei Correa Alfon",
+        "Juan Tarco Pinheiro de Araujo",
+    ):
         _norm = _normalizar_nome(_nome)
         c.execute(
             "INSERT OR IGNORE INTO solicitantes_mro (nome, nome_norm, incluir_mro) VALUES (?,?,1)",
@@ -431,7 +475,8 @@ def criar_banco():
     # `ativo` esconde itens que saíram do pendente sem perder as anotações; `removido`
     # é o tombstone de linha de sistema apagada à mão. Backup antes de criar a tabela.
     _monitor_novo = "monitor_sc" not in {
-        r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
     if _monitor_novo:
         # Commit antes do backup: `_backup_db` abre uma SEGUNDA conexão para o
         # `wal_checkpoint(TRUNCATE)`. Com a transação desta conexão ainda aberta, o
@@ -810,14 +855,14 @@ def _migrar_inventario_tipo_livre(conn):
 
     Guarda: só executa se o CHECK em tipo_material ainda existir. Idempotente.
     """
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='inventario'"
-    ).fetchone()
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='inventario'").fetchone()
     if not row or not row[0]:
         return
     sql_atual = row[0]
     # Se o CHECK de tipo_material não está mais presente, a migração já rodou.
-    if "tipo_material" not in sql_atual or "CHECK(tipo_material" not in sql_atual.replace(" ", "").replace("CHECK (", "CHECK("):
+    if "tipo_material" not in sql_atual or "CHECK(tipo_material" not in sql_atual.replace(" ", "").replace(
+        "CHECK (", "CHECK("
+    ):
         # Garante apenas que estoque_maximo exista (caso de schema já sem CHECK).
         cols = {r[1] for r in conn.execute("PRAGMA table_info(inventario)")}
         if "estoque_maximo" not in cols:
@@ -831,17 +876,32 @@ def _migrar_inventario_tipo_livre(conn):
 
     # Colunas preservadas (mesma ordem do schema original), copiadas 1:1.
     cols_orig = [
-        "id", "part_number", "nome_item", "descricao", "unidade", "importancia",
-        "tipo_material", "setor_responsavel", "local_armazenagem", "caixa_identificacao",
-        "estoque_atual", "estoque_minimo", "estoque_seguranca", "consumo_medio_diario",
-        "lead_time_dias", "previsao_ruptura_dias", "ultima_sc_id", "data_inventario",
-        "data_criacao", "data_atualizacao",
+        "id",
+        "part_number",
+        "nome_item",
+        "descricao",
+        "unidade",
+        "importancia",
+        "tipo_material",
+        "setor_responsavel",
+        "local_armazenagem",
+        "caixa_identificacao",
+        "estoque_atual",
+        "estoque_minimo",
+        "estoque_seguranca",
+        "consumo_medio_diario",
+        "lead_time_dias",
+        "previsao_ruptura_dias",
+        "ultima_sc_id",
+        "data_inventario",
+        "data_criacao",
+        "data_atualizacao",
     ]
     lista_cols = ", ".join(cols_orig)
 
-    conn.commit()                       # garante que não há transação aberta
+    conn.commit()  # garante que não há transação aberta
     iso_anterior = conn.isolation_level
-    conn.isolation_level = None         # autocommit: permite toggle de foreign_keys
+    conn.isolation_level = None  # autocommit: permite toggle de foreign_keys
     try:
         conn.execute("PRAGMA foreign_keys=OFF")
         conn.execute("BEGIN")
@@ -871,9 +931,7 @@ def _migrar_inventario_tipo_livre(conn):
                 FOREIGN KEY (ultima_sc_id) REFERENCES solicitacoes_compra(id)
             )
         """)
-        conn.execute(
-            f"INSERT INTO inventario_new ({lista_cols}) SELECT {lista_cols} FROM inventario"
-        )
+        conn.execute(f"INSERT INTO inventario_new ({lista_cols}) SELECT {lista_cols} FROM inventario")
         conn.execute("DROP TABLE inventario")
         conn.execute("ALTER TABLE inventario_new RENAME TO inventario")
         problemas = conn.execute("PRAGMA foreign_key_check").fetchall()
@@ -896,5 +954,6 @@ def _migrar_inventario_tipo_livre(conn):
 
 if __name__ == "__main__":
     from services.logging_config import setup_logging
+
     setup_logging()
     criar_banco()

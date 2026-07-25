@@ -1,5 +1,6 @@
 """v2.2.0 — Ingestão do "Relatório de SCs" (multi-aba): SCM (com preço), SC7
 (histórico de preços), FORNECEDORES (e-mails) e SCM USERS (solicitantes)."""
+
 import pandas as pd
 from services import db_functions as F
 import database
@@ -8,38 +9,87 @@ import database
 def _linha_scm(solicitante="Luis Gabriel Arruda de Oliveira", produto="PN-ING "):
     # produto com espaço à direita de propósito (testa o .strip() no match do PN)
     return {
-        "SC": 5001, "Descrição da Solicitação": "Compra teste", "Status": "Pedido",
-        "Solicitante": solicitante, "Produto": produto, "Descrição": "Item ING", "Qty": 10,
-        "Justificativa/Projeto": "reposição", "Data Necessidade": "2026-06-01",
-        "Emissão": "2026-05-01", "Aprovação": "2026-05-02", "Pedido": "F900",
-        "Quantidade": 10, "Qtd.Entregue": 4, "Nome Fantasia": "FORN X",
-        "Previsão NFe": "2026-06-10", "Documento": "NF1", "Prc Unitario": 12.5,
-        "Vlr.Total": 125.0, "Moeda": 1, "Centro Custo": "21106", "Comprador": "Miguel",
+        "SC": 5001,
+        "Descrição da Solicitação": "Compra teste",
+        "Status": "Pedido",
+        "Solicitante": solicitante,
+        "Produto": produto,
+        "Descrição": "Item ING",
+        "Qty": 10,
+        "Justificativa/Projeto": "reposição",
+        "Data Necessidade": "2026-06-01",
+        "Emissão": "2026-05-01",
+        "Aprovação": "2026-05-02",
+        "Pedido": "F900",
+        "Quantidade": 10,
+        "Qtd.Entregue": 4,
+        "Nome Fantasia": "FORN X",
+        "Previsão NFe": "2026-06-10",
+        "Documento": "NF1",
+        "Prc Unitario": 12.5,
+        "Vlr.Total": 125.0,
+        "Moeda": 1,
+        "Centro Custo": "21106",
+        "Comprador": "Miguel",
         "Departamento": "ALMOX",
     }
 
 
 def _build_relatorio(path, scm_rows=None):
     scm = pd.DataFrame(scm_rows if scm_rows is not None else [_linha_scm()])
-    sc7 = pd.DataFrame([{
-        "Filial": 1, "Tipo": 1, "Item": 1, "Pedido": "F900", "DT Emissao": "2026-05-01",
-        "Produto": "PN-ING", "Descricao": "Item ING", "Unidade": "UN", "Moeda": 1,
-        "Quantidade": 10, "Prc Unitario": 12.5, "Vlr.Total": 125.0, "Qtd.Entregue": 4,
-        "Saldo": 6, "Observacoes": "SC: 5001", "OBS 1": "",
-    }])
-    forn = pd.DataFrame([{
-        "Filial": 1, "Codigo": "F900", "Loja": "1", "Razao Social": "FORN X LTDA",
-        "N Fantasia": "FORN X", "CNPJ/CPF": "11.111.111/0001-11",
-        "E-Mail": "vendas@fornx.com", "Telefone": "1133", "Contato": "Ana", "Cond. Pagto": "30",
-    }])
-    users = pd.DataFrame([{
-        "SOLICITANTE": "Fulano de Tal", "DEPARTAMENTO": "ENGENHARIA",
-        "GERENTE IME": "G", "APROVADOR SCM": "A", "STATUS": "ATIVO",
-    }])
+    sc7 = pd.DataFrame(
+        [
+            {
+                "Filial": 1,
+                "Tipo": 1,
+                "Item": 1,
+                "Pedido": "F900",
+                "DT Emissao": "2026-05-01",
+                "Produto": "PN-ING",
+                "Descricao": "Item ING",
+                "Unidade": "UN",
+                "Moeda": 1,
+                "Quantidade": 10,
+                "Prc Unitario": 12.5,
+                "Vlr.Total": 125.0,
+                "Qtd.Entregue": 4,
+                "Saldo": 6,
+                "Observacoes": "SC: 5001",
+                "OBS 1": "",
+            }
+        ]
+    )
+    forn = pd.DataFrame(
+        [
+            {
+                "Filial": 1,
+                "Codigo": "F900",
+                "Loja": "1",
+                "Razao Social": "FORN X LTDA",
+                "N Fantasia": "FORN X",
+                "CNPJ/CPF": "11.111.111/0001-11",
+                "E-Mail": "vendas@fornx.com",
+                "Telefone": "1133",
+                "Contato": "Ana",
+                "Cond. Pagto": "30",
+            }
+        ]
+    )
+    users = pd.DataFrame(
+        [
+            {
+                "SOLICITANTE": "Fulano de Tal",
+                "DEPARTAMENTO": "ENGENHARIA",
+                "GERENTE IME": "G",
+                "APROVADOR SCM": "A",
+                "STATUS": "ATIVO",
+            }
+        ]
+    )
     with pd.ExcelWriter(path, engine="openpyxl") as w:
-        scm.to_excel(w, sheet_name="SCM", index=False)                # header na linha 0
-        sc7.to_excel(w, sheet_name="SC7", index=False, startrow=3)     # header na linha 3
-        forn.to_excel(w, sheet_name="FORNECEDORES", index=False)       # header na linha 0
+        scm.to_excel(w, sheet_name="SCM", index=False)  # header na linha 0
+        sc7.to_excel(w, sheet_name="SC7", index=False, startrow=3)  # header na linha 3
+        forn.to_excel(w, sheet_name="FORNECEDORES", index=False)  # header na linha 0
         users.to_excel(w, sheet_name="SCM USERS", index=False, startrow=1)  # header na linha 1
     return path
 
@@ -66,8 +116,9 @@ def test_importar_relatorio_end_to_end(db, make_item, tmp_path):
     # SCM USERS: solicitante upsertado (sem marcar incluir_mro)
     assert res["SCM USERS"]["upserted"] == 1
     with database.transaction() as c:
-        r = c.execute("SELECT incluir_mro FROM solicitantes_mro WHERE nome_norm=?",
-                      ("fulano de tal",)).fetchone()
+        r = c.execute(
+            "SELECT incluir_mro FROM solicitantes_mro WHERE nome_norm=?", ("fulano de tal",)
+        ).fetchone()
     assert r["incluir_mro"] == 0
     # snapshot do dia
     assert res["_snapshot_criados"] >= 1

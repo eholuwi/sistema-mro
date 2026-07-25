@@ -27,12 +27,19 @@ from services.dashboards import montar_visao_compras_mro, _faixa_cobertura
 # tabela aberta ao clicar componha o mesmo número do card.
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def _df_itens(itens):
     """Lista de itens (dicts de listar_inventario) -> DataFrame de exibição."""
-    cols = [("part_number", "PN"), ("nome_item", "Material"),
-            ("estoque_atual", "Estoque"), ("estoque_minimo", "Mínimo"),
-            ("dias_cobertura", "Cobertura (d)"), ("status_material", "Status"),
-            ("importancia", "Criticidade"), ("local_armazenagem", "Local")]
+    cols = [
+        ("part_number", "PN"),
+        ("nome_item", "Material"),
+        ("estoque_atual", "Estoque"),
+        ("estoque_minimo", "Mínimo"),
+        ("dias_cobertura", "Cobertura (d)"),
+        ("status_material", "Status"),
+        ("importancia", "Criticidade"),
+        ("local_armazenagem", "Local"),
+    ]
     rows = [{lbl: i.get(k) for k, lbl in cols} for i in itens]
     return pd.DataFrame(rows, columns=[lbl for _, lbl in cols])
 
@@ -54,26 +61,38 @@ def _tem(campo, i, termo):
 
 # Predicados por chave — espelham o if/elif dos view-models (gestão + almoxarifado).
 _PRED_INV = {
-    "todos":          lambda i: True,
+    "todos": lambda i: True,
     # Distribuição "base de compra" (só itens com consumo) — status_material
-    "ok":             lambda i: not i.get("sem_movimentacao") and _tem("status_material", i, "OK"),
-    "atencao":        lambda i: not i.get("sem_movimentacao") and _tem("status_material", i, "ATENÇÃO"),
-    "comprar":        lambda i: not i.get("sem_movimentacao") and _tem("status_material", i, "COMPRAR"),
-    "sem_mov":        lambda i: bool(i.get("sem_movimentacao")),
-    "zerados":        lambda i: (i.get("estoque_atual") or 0) <= 0,
-    "inventariado":   lambda i: bool(i.get("data_inventario")),
+    "ok": lambda i: not i.get("sem_movimentacao") and _tem("status_material", i, "OK"),
+    "atencao": lambda i: not i.get("sem_movimentacao") and _tem("status_material", i, "ATENÇÃO"),
+    "comprar": lambda i: not i.get("sem_movimentacao") and _tem("status_material", i, "COMPRAR"),
+    "sem_mov": lambda i: bool(i.get("sem_movimentacao")),
+    "zerados": lambda i: (i.get("estoque_atual") or 0) <= 0,
+    "inventariado": lambda i: bool(i.get("data_inventario")),
     # Saúde física (TODO material) — status_estoque_fisico
-    "fis_ok":         lambda i: (i.get("estoque_atual") or 0) > 0 and not _tem("status_estoque_fisico", i, "COMPRAR") and not _tem("status_estoque_fisico", i, "ATENÇÃO"),
-    "fis_atencao":    lambda i: (i.get("estoque_atual") or 0) > 0 and _tem("status_estoque_fisico", i, "ATENÇÃO"),
-    "fis_critico":    lambda i: (i.get("estoque_atual") or 0) > 0 and _tem("status_estoque_fisico", i, "COMPRAR"),
-    "fis_zerado":     lambda i: (i.get("estoque_atual") or 0) <= 0,
+    "fis_ok": lambda i: (
+        (i.get("estoque_atual") or 0) > 0
+        and not _tem("status_estoque_fisico", i, "COMPRAR")
+        and not _tem("status_estoque_fisico", i, "ATENÇÃO")
+    ),
+    "fis_atencao": lambda i: (
+        (i.get("estoque_atual") or 0) > 0 and _tem("status_estoque_fisico", i, "ATENÇÃO")
+    ),
+    "fis_critico": lambda i: (
+        (i.get("estoque_atual") or 0) > 0 and _tem("status_estoque_fisico", i, "COMPRAR")
+    ),
+    "fis_zerado": lambda i: (i.get("estoque_atual") or 0) <= 0,
     # KPIs
     "compra_urgente": _urgente,
-    "com_valor":      lambda i: (i.get("estoque_atual") or 0) > 0,
-    "cobertura":      lambda i: (not i.get("sem_movimentacao")) and i.get("dias_cobertura") is not None and i.get("dias_cobertura") != PREVISAO_RUPTURA_SEM_RISCO,
+    "com_valor": lambda i: (i.get("estoque_atual") or 0) > 0,
+    "cobertura": lambda i: (
+        (not i.get("sem_movimentacao"))
+        and i.get("dias_cobertura") is not None
+        and i.get("dias_cobertura") != PREVISAO_RUPTURA_SEM_RISCO
+    ),
     # KPI Mensal (executivo)
-    "ruptura":        lambda i: (not i.get("sem_movimentacao")) and (i.get("estoque_atual") or 0) <= 0,
-    "com_consumo":    lambda i: not i.get("sem_movimentacao"),
+    "ruptura": lambda i: (not i.get("sem_movimentacao")) and (i.get("estoque_atual") or 0) <= 0,
+    "com_consumo": lambda i: not i.get("sem_movimentacao"),
 }
 
 
@@ -96,14 +115,19 @@ def rows_mov_periodo(tipo="entrada", periodo="hoje"):
     where_tipo = "m.tipo='entrada'" if tipo == "entrada" else SAIDA_REAL_WHERE
 
     with transaction() as conn:
-        rows = conn.execute(f"""
+        rows = conn.execute(
+            f"""
             SELECT DATE(m.data_hora) AS Data, inv.part_number AS PN, inv.nome_item AS Material,
                    m.quantidade AS Qtd, m.emitente AS Responsável, m.observacao AS Obs
             FROM movimentacoes m JOIN inventario inv ON inv.id = m.item_id
             WHERE {where_tipo} AND {cond}
             ORDER BY m.data_hora DESC
-        """, (arg,)).fetchall()
-    return pd.DataFrame([dict(r) for r in rows], columns=["Data", "PN", "Material", "Qtd", "Responsável", "Obs"])
+        """,
+            (arg,),
+        ).fetchall()
+    return pd.DataFrame(
+        [dict(r) for r in rows], columns=["Data", "PN", "Material", "Qtd", "Responsável", "Obs"]
+    )
 
 
 def rows_padrao_demanda(padrao):
@@ -116,12 +140,18 @@ def rows_abc_classe(classe="A"):
     """Itens de uma classe da Curva ABC por valor consumido. Espelha o Counter(classe)
     de obter_abc_valor que alimenta o vm['abc']."""
     from services.db_functions import obter_abc_valor
+
     itens = [x for x in obter_abc_valor() if x.get("classe") == classe]
     df = pd.DataFrame(itens)
     if df.empty:
         return df
-    ren = {"part_number": "PN", "nome_item": "Material", "qtd": "Qtd consumida",
-           "valor": "Valor (R$)", "pct_acumulado": "% acum."}
+    ren = {
+        "part_number": "PN",
+        "nome_item": "Material",
+        "qtd": "Qtd consumida",
+        "valor": "Valor (R$)",
+        "pct_acumulado": "% acum.",
+    }
     keep = [c for c in ren if c in df.columns]
     return df[keep].rename(columns=ren)
 
@@ -130,36 +160,43 @@ def rows_mov_mes(ym):
     """Todas as movimentações de um mês (ym = 'YYYY-MM') — compõe as barras do
     Histórico mensal (Entradas × Saídas)."""
     with transaction() as conn:
-        rows = conn.execute("""
+        rows = conn.execute(
+            """
             SELECT DATE(m.data_hora) AS Data, m.tipo AS Tipo, m.quantidade AS Qtd,
                    inv.part_number AS PN, inv.nome_item AS Material, m.emitente AS Responsável
             FROM movimentacoes m JOIN inventario inv ON inv.id = m.item_id
             WHERE substr(m.data_hora,1,7) = ?
             ORDER BY m.data_hora DESC
-        """, (ym,)).fetchall()
-    return pd.DataFrame([dict(r) for r in rows],
-                        columns=["Data", "Tipo", "Qtd", "PN", "Material", "Responsável"])
+        """,
+            (ym,),
+        ).fetchall()
+    return pd.DataFrame(
+        [dict(r) for r in rows], columns=["Data", "Tipo", "Qtd", "PN", "Material", "Responsável"]
+    )
 
 
 def rows_saidas_item(pn, dias=30):
     """Saídas reais (requisições) de um item (por PN) nos últimos `dias`."""
     ini = (date.today() - timedelta(days=dias)).strftime("%Y-%m-%d")
     with transaction() as conn:
-        rows = conn.execute(f"""
+        rows = conn.execute(
+            f"""
             SELECT DATE(m.data_hora) AS Data, m.quantidade AS Qtd, m.setor AS Setor,
                    m.emitente AS Responsável, m.observacao AS Obs
             FROM movimentacoes m JOIN inventario inv ON inv.id = m.item_id
             WHERE inv.part_number = ? AND {SAIDA_REAL_WHERE} AND m.data_hora >= ?
             ORDER BY m.data_hora DESC
-        """, (pn, ini)).fetchall()
-    return pd.DataFrame([dict(r) for r in rows],
-                        columns=["Data", "Qtd", "Setor", "Responsável", "Obs"])
+        """,
+            (pn, ini),
+        ).fetchall()
+    return pd.DataFrame([dict(r) for r in rows], columns=["Data", "Qtd", "Setor", "Responsável", "Obs"])
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # v4.5.4 — Provedores do Dashboard KPI Mensal (executivo, YTD). Reaproveitam os
 # MESMOS cálculos do view-model (services/dashboards.py) para garantir acuracidade.
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def _df_consumo(itens):
     """Lista de consumo YTD (dicts com qtd/valor) -> DataFrame de exibição."""
@@ -168,9 +205,16 @@ def _df_consumo(itens):
         return df
     if "valor" in df.columns:
         df = df.sort_values("valor", ascending=False)
-    ren = {"part_number": "PN", "nome_item": "Material", "tipo_material": "Tipo",
-           "unidade": "UN", "qtd": "Qtd consumida", "valor": "Valor (R$)",
-           "pct_acumulado": "% acum.", "classe": "Classe"}
+    ren = {
+        "part_number": "PN",
+        "nome_item": "Material",
+        "tipo_material": "Tipo",
+        "unidade": "UN",
+        "qtd": "Qtd consumida",
+        "valor": "Valor (R$)",
+        "pct_acumulado": "% acum.",
+        "classe": "Classe",
+    }
     return df[[c for c in ren if c in df.columns]].rename(columns=ren)
 
 
@@ -178,12 +222,14 @@ def rows_consumo_ytd(ano=None):
     """Itens com consumo real no ano (YTD). len == 'Itens movimentados (YTD)' e a soma
     de Valor == 'Consumido no ano'."""
     from services.dashboards import _consumo_ytd_por_item
+
     return _df_consumo(_consumo_ytd_por_item(ano or date.today().year))
 
 
 def rows_abc_ytd_classe(classe="A", ano=None):
     """Itens de uma classe da Curva ABC do KPI Mensal (YTD). Espelha _classificar_abc."""
     from services.dashboards import _consumo_ytd_por_item, _classificar_abc
+
     itens, _tot = _classificar_abc(_consumo_ytd_por_item(ano or date.today().year))
     return _df_consumo([x for x in itens if x.get("classe") == classe])
 
@@ -191,6 +237,7 @@ def rows_abc_ytd_classe(classe="A", ano=None):
 def rows_consumo_ytd_tipo(tipo, ano=None):
     """Itens consumidos YTD de um tipo de material — compõe o donut 'Consumo por tipo'."""
     from services.dashboards import _consumo_ytd_por_item
+
     itens = _consumo_ytd_por_item(ano or date.today().year)
     return _df_consumo([x for x in itens if (x.get("tipo_material") or "—") == tipo])
 
@@ -199,29 +246,37 @@ def rows_requisicoes_ano(ano=None):
     """Requisições com consumo real no ano (distintas) — compõe 'Requisições (YTD)'."""
     ano = ano or date.today().year
     with transaction() as conn:
-        rows = conn.execute(f"""
+        rows = conn.execute(
+            f"""
             SELECT DISTINCT r.numero_requisicao AS "Nº Req", r.data_hora AS "Data/Hora",
                    r.setor AS Setor, r.emitente AS Emitente, r.autorizador_nome AS Autorizador
             FROM requisicoes r JOIN movimentacoes m ON m.requisicao_id = r.id
             WHERE {SAIDA_REAL_WHERE} AND strftime('%Y', m.data_hora) = ?
             ORDER BY r.data_hora DESC
-        """, (str(ano),)).fetchall()
-    return pd.DataFrame([dict(r) for r in rows],
-                        columns=["Nº Req", "Data/Hora", "Setor", "Emitente", "Autorizador"])
+        """,
+            (str(ano),),
+        ).fetchall()
+    return pd.DataFrame(
+        [dict(r) for r in rows], columns=["Nº Req", "Data/Hora", "Setor", "Emitente", "Autorizador"]
+    )
 
 
 def rows_saidas_mes(ym):
     """Saídas reais (requisições) de um mês (YYYY-MM) — compõe o 'Consumo mês a mês'."""
     with transaction() as conn:
-        rows = conn.execute(f"""
+        rows = conn.execute(
+            f"""
             SELECT DATE(m.data_hora) AS Data, m.quantidade AS Qtd, inv.part_number AS PN,
                    inv.nome_item AS Material, m.setor AS Setor, m.emitente AS Responsável
             FROM movimentacoes m JOIN inventario inv ON inv.id = m.item_id
             WHERE {SAIDA_REAL_WHERE} AND substr(m.data_hora,1,7) = ?
             ORDER BY m.data_hora DESC
-        """, (ym,)).fetchall()
-    return pd.DataFrame([dict(r) for r in rows],
-                        columns=["Data", "Qtd", "PN", "Material", "Setor", "Responsável"])
+        """,
+            (ym,),
+        ).fetchall()
+    return pd.DataFrame(
+        [dict(r) for r in rows], columns=["Data", "Qtd", "PN", "Material", "Setor", "Responsável"]
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -229,18 +284,22 @@ def rows_saidas_mes(ym):
 # base de SCs do ano do view-model (montar_visao_compras_mro).
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def _scs_ano(ano=None):
     """SCs do ano corrente (uma linha por SC) — mesma base do view-model do Comprador."""
     ano = ano or date.today().year
     with transaction() as conn:
-        rows = conn.execute("""
+        rows = conn.execute(
+            """
             SELECT sc.numero_sc, sc.status, sc.data_abertura, sc.numero_po, sc.fornecedor,
                    sc.comprador, sc.departamento, COUNT(i.id) AS n_itens,
                    COALESCE(SUM(i.valor_total), 0) AS valor
             FROM solicitacoes_compra sc LEFT JOIN itens_sc i ON i.sc_id = sc.id
             WHERE substr(sc.data_abertura, 1, 4) = ?
             GROUP BY sc.id ORDER BY sc.data_abertura DESC
-        """, (str(ano),)).fetchall()
+        """,
+            (str(ano),),
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -248,9 +307,17 @@ def _df_scs(scs):
     df = pd.DataFrame(scs)
     if df.empty:
         return df
-    ren = {"numero_sc": "SC", "status": "Status", "data_abertura": "Abertura",
-           "numero_po": "PO", "fornecedor": "Fornecedor", "comprador": "Comprador",
-           "departamento": "Depto", "n_itens": "Itens", "valor": "Valor (R$)"}
+    ren = {
+        "numero_sc": "SC",
+        "status": "Status",
+        "data_abertura": "Abertura",
+        "numero_po": "PO",
+        "fornecedor": "Fornecedor",
+        "comprador": "Comprador",
+        "departamento": "Depto",
+        "n_itens": "Itens",
+        "valor": "Valor (R$)",
+    }
     keep = [c for c in ren if c in df.columns]
     return df[keep].rename(columns=ren)
 
@@ -272,9 +339,15 @@ def rows_scs_mes(ym):
 
 def rows_scs_itens_faixa(faixa):
     """SCs por faixa de nº de itens (compõe 'Itens por Pedido')."""
+
     def _fx(n):
         n = int(n or 0)
-        return None if n <= 0 else ("1 item" if n == 1 else ("2-5" if n <= 5 else ("6-10" if n <= 10 else "11+")))
+        return (
+            None
+            if n <= 0
+            else ("1 item" if n == 1 else ("2-5" if n <= 5 else ("6-10" if n <= 10 else "11+")))
+        )
+
     return _df_scs([s for s in _scs_ano() if _fx(s.get("n_itens")) == faixa])
 
 
@@ -282,15 +355,21 @@ def rows_criticos_reposicao():
     """Itens críticos do KPI Mensal = sugestões de reposição de prioridade máxima
     (tier 0). Espelha comprador['kpis']['criticos']."""
     from services.planejamento import gerar_sugestoes_reposicao
+
     sug = [s for s in gerar_sugestoes_reposicao() if s.get("prioridade_tier") == 0]
     df = pd.DataFrame(sug)
     if df.empty:
         return df
-    pref = ["part_number", "nome_item", "estoque_atual", "estoque_minimo",
-            "qtd_sugerida", "dias_cobertura"]
+    pref = ["part_number", "nome_item", "estoque_atual", "estoque_minimo", "qtd_sugerida", "dias_cobertura"]
     cols = [c for c in pref if c in df.columns] or list(df.columns)[:8]
-    ren = {"part_number": "PN", "nome_item": "Material", "estoque_atual": "Estoque",
-           "estoque_minimo": "Mínimo", "qtd_sugerida": "Sugerido", "dias_cobertura": "Cobertura (d)"}
+    ren = {
+        "part_number": "PN",
+        "nome_item": "Material",
+        "estoque_atual": "Estoque",
+        "estoque_minimo": "Mínimo",
+        "qtd_sugerida": "Sugerido",
+        "dias_cobertura": "Cobertura (d)",
+    }
     return df[cols].rename(columns={k: v for k, v in ren.items() if k in cols})
 
 
@@ -298,14 +377,18 @@ def rows_requisicoes_dia():
     """Requisições emitidas hoje (cada linha = 1 requisição)."""
     hoje = date.today().strftime("%Y-%m-%d")
     with transaction() as conn:
-        rows = conn.execute("""
+        rows = conn.execute(
+            """
             SELECT numero_requisicao AS "Nº Req", data_hora AS "Data/Hora",
                    setor AS Setor, emitente AS Emitente, autorizador_nome AS Autorizador
             FROM requisicoes WHERE substr(data_hora,1,10) = ?
             ORDER BY data_hora DESC
-        """, (hoje,)).fetchall()
-    return pd.DataFrame([dict(r) for r in rows],
-                        columns=["Nº Req", "Data/Hora", "Setor", "Emitente", "Autorizador"])
+        """,
+            (hoje,),
+        ).fetchall()
+    return pd.DataFrame(
+        [dict(r) for r in rows], columns=["Nº Req", "Data/Hora", "Setor", "Emitente", "Autorizador"]
+    )
 
 
 def rows_itens_em_aberto(filtro_fornecedor: str = None) -> pd.DataFrame:
@@ -374,10 +457,14 @@ def rows_dist_status(status_code: str = "ok") -> pd.DataFrame:
 
     # Mapeamento de status simples (OK, Atenção, Crítico)
     status_map = {
-        "ok": lambda r: (r.get("estoque_atual", 0) or 0) >= (r.get("estoque_minimo", 0) or 0)
-                        and (r.get("dias_cobertura", 0) or 0) >= 30,
-        "atenção": lambda r: (r.get("estoque_atual", 0) or 0) >= (r.get("estoque_minimo", 0) or 0)
-                             and (r.get("dias_cobertura", 0) or 0) < 30,
+        "ok": lambda r: (
+            (r.get("estoque_atual", 0) or 0) >= (r.get("estoque_minimo", 0) or 0)
+            and (r.get("dias_cobertura", 0) or 0) >= 30
+        ),
+        "atenção": lambda r: (
+            (r.get("estoque_atual", 0) or 0) >= (r.get("estoque_minimo", 0) or 0)
+            and (r.get("dias_cobertura", 0) or 0) < 30
+        ),
         "critico": lambda r: (r.get("estoque_atual", 0) or 0) < (r.get("estoque_minimo", 0) or 0),
     }
 
@@ -400,7 +487,8 @@ def rows_top_consumo(dias: int = 30, limite: int = 10) -> pd.DataFrame:
     data_inicio_str = (hoje - timedelta(days=dias)).strftime("%Y-%m-%d")
 
     with transaction() as conn:
-        rows = conn.execute(f"""
+        rows = conn.execute(
+            f"""
             SELECT inv.part_number, inv.nome_item,
                    SUM(m.quantidade) AS quantidade_consumida,
                    COUNT(*)          AS n_saidas
@@ -411,7 +499,9 @@ def rows_top_consumo(dias: int = 30, limite: int = 10) -> pd.DataFrame:
             GROUP BY inv.id, inv.part_number, inv.nome_item
             ORDER BY quantidade_consumida DESC
             LIMIT ?
-        """, (data_inicio_str, limite)).fetchall()
+        """,
+            (data_inicio_str, limite),
+        ).fetchall()
 
     df = pd.DataFrame([dict(r) for r in rows])
     if df.empty:
@@ -439,14 +529,17 @@ def rows_entradas_saidas(periodo: str = "hoje") -> pd.DataFrame:
     data_fim_str = (data_fim + timedelta(days=1)).strftime("%Y-%m-%d")
 
     with transaction() as conn:
-        rows = conn.execute("""
+        rows = conn.execute(
+            """
             SELECT m.tipo, DATE(m.data_hora) AS data, m.quantidade,
                    inv.part_number, inv.nome_item
             FROM movimentacoes m
             JOIN inventario inv ON inv.id = m.item_id
             WHERE m.data_hora >= ? AND m.data_hora < ?
             ORDER BY m.data_hora DESC
-        """, (data_inicio_str, data_fim_str)).fetchall()
+        """,
+            (data_inicio_str, data_fim_str),
+        ).fetchall()
 
     df = pd.DataFrame([dict(r) for r in rows])
     if df.empty:

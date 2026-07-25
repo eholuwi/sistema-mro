@@ -5,6 +5,7 @@ Cobre: tabela/migração, sync diário (upsert técnico por linha_id estável, r
 manuais no re-sync, e persistência das edições (update / insert manual / delete →
 tombstone de sistema e delete de manual).
 """
+
 import database
 from services import db_functions as F
 
@@ -25,19 +26,37 @@ def _raw(linha_id):
 
 # ── C1: tabela ─────────────────────────────────────────────────────────────────
 
+
 def test_tabela_monitor_existe_com_colunas(db):
     conn = db.get_connection()
     cols = {r[1] for r in conn.execute("PRAGMA table_info(monitor_sc)")}
     conn.close()
-    assert {"linha_id", "numero_sc", "part_number", "status_calc", "tam_po", "saldo_po",
-            "faltando_dias", "po", "status_po", "fornecedor", "comentario", "responsavel",
-            "revisado", "revisado_data", "origem", "ativo", "removido"} <= cols
+    assert {
+        "linha_id",
+        "numero_sc",
+        "part_number",
+        "status_calc",
+        "tam_po",
+        "saldo_po",
+        "faltando_dias",
+        "po",
+        "status_po",
+        "fornecedor",
+        "comentario",
+        "responsavel",
+        "revisado",
+        "revisado_data",
+        "origem",
+        "ativo",
+        "removido",
+    } <= cols
 
 
 # ── C2: sync ───────────────────────────────────────────────────────────────────
 
+
 def test_sync_cria_linha_de_sistema(db, make_item, make_sc):
-    item_id = make_item("PN-MON", estoque=0, minimo=5)   # estoque 0 → STATUS "ESTOQUE Ø"
+    item_id = make_item("PN-MON", estoque=0, minimo=5)  # estoque 0 → STATUS "ESTOQUE Ø"
     make_sc(numero_sc="SC-MON", item_id=item_id, quantidade_solicitada=8)
     n = F.sincronizar_monitor_sc(force=True)
     assert n == 1
@@ -49,11 +68,11 @@ def test_sync_cria_linha_de_sistema(db, make_item, make_sc):
     assert l["part_number"] == "PN-MON"
     assert l["saldo_po"] == 8
     assert l["origem"] == "sistema" and l["ativo"] == 1 and l["removido"] == 0
-    assert "ESTOQUE" in (l["status_calc"] or "")   # estoque 0
+    assert "ESTOQUE" in (l["status_calc"] or "")  # estoque 0
 
 
 def test_status_critico_quando_abaixo_do_minimo(db, make_item, make_sc):
-    item_id = make_item("PN-CRT", estoque=3, minimo=10)   # 0 < 3 ≤ 10 → CRÍTICO
+    item_id = make_item("PN-CRT", estoque=3, minimo=10)  # 0 < 3 ≤ 10 → CRÍTICO
     make_sc(numero_sc="SC-CRT", item_id=item_id, quantidade_solicitada=5)
     F.sincronizar_monitor_sc(force=True)
     l = F.listar_monitor_sc()[0]
@@ -62,8 +81,8 @@ def test_status_critico_quando_abaixo_do_minimo(db, make_item, make_sc):
 
 def test_sync_gate_diario(db, make_item, make_sc):
     make_sc(numero_sc="SC-G", item_id=make_item("PN-G"), quantidade_solicitada=2)
-    assert F.sincronizar_monitor_sc() >= 1       # 1ª vez no dia: roda
-    assert F.sincronizar_monitor_sc() == -1      # 2ª vez no mesmo dia: gate (no-op)
+    assert F.sincronizar_monitor_sc() >= 1  # 1ª vez no dia: roda
+    assert F.sincronizar_monitor_sc() == -1  # 2ª vez no mesmo dia: gate (no-op)
     assert F.sincronizar_monitor_sc(force=True) >= 1  # force ignora o gate
 
 
@@ -73,23 +92,27 @@ def test_reset_revisado_no_virar_do_dia(db, make_item, make_sc):
     lid = F.listar_monitor_sc()[0]["linha_id"]
     with database.transaction() as c:
         c.execute("UPDATE monitor_sc SET revisado=1, revisado_data='2020-01-01' WHERE linha_id=?", (lid,))
-    F.sincronizar_monitor_sc(force=True)     # sync do "novo dia"
-    assert _raw(lid)["revisado"] == 0        # revisado antigo foi resetado
+    F.sincronizar_monitor_sc(force=True)  # sync do "novo dia"
+    assert _raw(lid)["revisado"] == 0  # revisado antigo foi resetado
 
 
 def test_revisado_de_hoje_nao_reseta(db, make_item, make_sc):
     from datetime import date
+
     make_sc(numero_sc="SC-RH", item_id=make_item("PN-RH"), quantidade_solicitada=2)
     F.sincronizar_monitor_sc(force=True)
     lid = F.listar_monitor_sc()[0]["linha_id"]
     with database.transaction() as c:
-        c.execute("UPDATE monitor_sc SET revisado=1, revisado_data=? WHERE linha_id=?",
-                  (date.today().strftime("%Y-%m-%d"), lid))
+        c.execute(
+            "UPDATE monitor_sc SET revisado=1, revisado_data=? WHERE linha_id=?",
+            (date.today().strftime("%Y-%m-%d"), lid),
+        )
     F.sincronizar_monitor_sc(force=True)
-    assert _raw(lid)["revisado"] == 1        # marcado hoje: permanece
+    assert _raw(lid)["revisado"] == 1  # marcado hoje: permanece
 
 
 # ── C3: persistência das edições ───────────────────────────────────────────────
+
 
 def test_salvar_preserva_manual_e_reflete_edicao(db, make_item, make_sc):
     make_sc(numero_sc="SC-E", item_id=make_item("PN-E"), quantidade_solicitada=4)
@@ -112,8 +135,14 @@ def test_salvar_insere_linha_manual(db, make_item, make_sc):
     make_sc(numero_sc="SC-M", item_id=make_item("PN-M"), quantidade_solicitada=1)
     F.sincronizar_monitor_sc(force=True)
     orig = F.listar_monitor_sc()
-    nova = {"numero_sc": "MANUAL-1", "part_number": "ZZZ", "nome_item": "Item avulso",
-            "fornecedor": "Fornecedor X", "revisado": False, "linha_id": None}
+    nova = {
+        "numero_sc": "MANUAL-1",
+        "part_number": "ZZZ",
+        "nome_item": "Item avulso",
+        "fornecedor": "Fornecedor X",
+        "revisado": False,
+        "linha_id": None,
+    }
     upd, ins, rem = F.salvar_monitor_sc(orig + [nova], [l["linha_id"] for l in orig])
     assert ins == 1 and rem == 0
     linhas = F.listar_monitor_sc()
@@ -131,7 +160,7 @@ def test_salvar_remove_linha_de_sistema_vira_tombstone(db, make_item, make_sc):
     upd, ins, rem = F.salvar_monitor_sc([], [lid])
     assert rem == 1
     assert _raw(lid)["removido"] == 1
-    assert F.listar_monitor_sc() == []           # não aparece mais na grade
+    assert F.listar_monitor_sc() == []  # não aparece mais na grade
 
 
 def test_salvar_remove_linha_manual_deleta(db, make_item, make_sc):
@@ -155,8 +184,9 @@ def test_item_recebido_fica_inativo_e_some_da_grade(db, make_item, make_sc):
     assert len(F.listar_monitor_sc()) == 1
     # Recebe tudo → item deixa de estar pendente.
     item_sc_id = F.listar_itens_sc(sc_id)[0]["id"]
-    ok, _ = F.registrar_recebimento_sc(sc_id, item_sc_id, 5, "21194 - ALMOXARIFADO",
-                                       "Alm", "Alm", "Forn", "2026-02-01", "NF-9")
+    ok, _ = F.registrar_recebimento_sc(
+        sc_id, item_sc_id, 5, "21194 - ALMOXARIFADO", "Alm", "Alm", "Forn", "2026-02-01", "NF-9"
+    )
     assert ok
     F.sincronizar_monitor_sc(force=True)
-    assert F.listar_monitor_sc() == []           # ativo=0 → escondido
+    assert F.listar_monitor_sc() == []  # ativo=0 → escondido

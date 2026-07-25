@@ -6,29 +6,44 @@ sugerida HÍBRIDA (alvo = max(EstMáx Neidson, consumo×60) − estoque − guar
 priorização, justificativa, agrupamento por fornecedor, geração da fila via
 listar_inventario, ponte para "Criar SC" (reusa criar_sc) e auditoria de desfecho.
 """
+
 import pytest
 
 import database
 from services import db_functions as F
 from services import planejamento as P
 from services.constants import (
-    HORIZONTE_REPOSICAO_DIAS, ANTECEDENCIA_REPOSICAO_DIAS, LEAD_TIME_DEFAULT_DIAS,
+    HORIZONTE_REPOSICAO_DIAS,
+    ANTECEDENCIA_REPOSICAO_DIAS,
+    LEAD_TIME_DEFAULT_DIAS,
 )
 
 
 # ── Fábrica de item sintético (mesmas chaves de listar_inventario) ──────────────
 
+
 def _item(**over):
     base = dict(
-        id=1, part_number="PN-1", nome_item="Item", unidade="UN",
-        setor_responsavel="Improdutivo", importancia="Importante",
-        estoque_atual=0.0, estoque_em_transito=0.0,
-        estoque_minimo=0.0, estoque_maximo=0.0,
-        estoque_seguranca=0.0, estoque_seguranca_calculado=0.0,
-        consumo_medio_diario=0.0, dias_cobertura=999,
-        tendencia_label=None, tendencia_pct=0.0,
-        lead_time_dias=0, lead_time_calculado=None,
-        lead_time_calculado_amostras=0, lead_time_calculado_origem=None,
+        id=1,
+        part_number="PN-1",
+        nome_item="Item",
+        unidade="UN",
+        setor_responsavel="Improdutivo",
+        importancia="Importante",
+        estoque_atual=0.0,
+        estoque_em_transito=0.0,
+        estoque_minimo=0.0,
+        estoque_maximo=0.0,
+        estoque_seguranca=0.0,
+        estoque_seguranca_calculado=0.0,
+        consumo_medio_diario=0.0,
+        dias_cobertura=999,
+        tendencia_label=None,
+        tendencia_pct=0.0,
+        lead_time_dias=0,
+        lead_time_calculado=None,
+        lead_time_calculado_amostras=0,
+        lead_time_calculado_origem=None,
     )
     base.update(over)
     return base
@@ -38,13 +53,13 @@ def _set_inv(item_id, **campos):
     """Seta campos do inventário direto (determinismo dos cálculos de série)."""
     sets = ", ".join(f"{k}=?" for k in campos)
     with database.transaction() as c:
-        c.execute(f"UPDATE inventario SET {sets} WHERE id=?",
-                  (*campos.values(), item_id))
+        c.execute(f"UPDATE inventario SET {sets} WHERE id=?", (*campos.values(), item_id))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PARÂMETROS EFETIVOS (não sobrescrevem a base)
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 def test_lead_time_cadastrado_tem_prioridade():
     lt, origem, mat = P.lead_time_efetivo(_item(lead_time_dias=20, lead_time_calculado=99))
@@ -55,8 +70,13 @@ def test_lead_time_cadastrado_tem_prioridade():
 
 def test_lead_time_fallback_calculado_rotulado():
     lt, origem, mat = P.lead_time_efetivo(
-        _item(lead_time_dias=0, lead_time_calculado=13,
-              lead_time_calculado_amostras=4, lead_time_calculado_origem="SC7"))
+        _item(
+            lead_time_dias=0,
+            lead_time_calculado=13,
+            lead_time_calculado_amostras=4,
+            lead_time_calculado_origem="SC7",
+        )
+    )
     assert lt == 13
     assert "calculado" in origem and "SC7" in origem
     assert mat == "sugestão"
@@ -72,7 +92,8 @@ def test_estoque_seguranca_desativado_v370():
     # v3.7.0: Estoque de Segurança desativado — sempre 0 (o buffer virou o Mínimo do
     # Neidson). A função é mantida como no-op; qualquer manual/calculado é ignorado.
     ss, origem = P.estoque_seguranca_efetivo(
-        _item(estoque_seguranca=25, estoque_seguranca_calculado=99, estoque_minimo=8))
+        _item(estoque_seguranca=25, estoque_seguranca_calculado=99, estoque_minimo=8)
+    )
     assert ss == 0
     assert origem == "não utilizado"
 
@@ -81,39 +102,37 @@ def test_estoque_seguranca_desativado_v370():
 # ROP + GATILHO
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def test_rop_formula():
     # v3.7.0: ROP = consumo × lead_time (sem estoque de segurança).
-    calc = P.calcular_ponto_reposicao(
-        _item(consumo_medio_diario=2.0, lead_time_dias=10, estoque_seguranca=5))
+    calc = P.calcular_ponto_reposicao(_item(consumo_medio_diario=2.0, lead_time_dias=10, estoque_seguranca=5))
     assert calc["rop"] == pytest.approx(2.0 * 10)  # 20
     assert "estoque_seguranca" not in calc
 
 
 def test_bem_estocado_nao_repor():
-    item = _item(consumo_medio_diario=1.0, lead_time_dias=10, estoque_atual=100,
-                 estoque_minimo=10)
+    item = _item(consumo_medio_diario=1.0, lead_time_dias=10, estoque_atual=100, estoque_minimo=10)
     assert P.precisa_repor(item) is False
 
 
 def test_dentro_da_antecedencia_repor():
     # rop=10, gatilho=10+1*15=25; disp=20 -> antecipar
-    item = _item(consumo_medio_diario=1.0, lead_time_dias=10, estoque_atual=20,
-                 estoque_minimo=5)
+    item = _item(consumo_medio_diario=1.0, lead_time_dias=10, estoque_atual=20, estoque_minimo=5)
     assert P.precisa_repor(item) is True
     assert P.classificar_prioridade(item)["tier"] == 1  # 🟠
 
 
 def test_abaixo_do_rop_e_critico():
-    item = _item(consumo_medio_diario=1.0, lead_time_dias=10, estoque_atual=8,
-                 estoque_minimo=5)
+    item = _item(consumo_medio_diario=1.0, lead_time_dias=10, estoque_atual=8, estoque_minimo=5)
     assert P.precisa_repor(item) is True
     assert P.classificar_prioridade(item)["tier"] == 0  # 🔴
 
 
 def test_guarda_chuva_conta_como_disponivel():
     # disp = estoque(8) + guarda-chuva(30) = 38 > gatilho(25) -> não repor
-    item = _item(consumo_medio_diario=1.0, lead_time_dias=10, estoque_atual=8,
-                 estoque_em_transito=30, estoque_minimo=5)
+    item = _item(
+        consumo_medio_diario=1.0, lead_time_dias=10, estoque_atual=8, estoque_em_transito=30, estoque_minimo=5
+    )
     assert P.precisa_repor(item) is False
 
 
@@ -123,8 +142,7 @@ def test_consumo_zero_acima_do_minimo_nao_gera_ruido():
 
 
 def test_consumo_zero_piso_do_neidson_furado_repor():
-    item = _item(consumo_medio_diario=0.0, estoque_atual=5, estoque_minimo=10,
-                 estoque_maximo=20)
+    item = _item(consumo_medio_diario=0.0, estoque_atual=5, estoque_minimo=10, estoque_maximo=20)
     assert P.precisa_repor(item) is True
     assert P.classificar_prioridade(item)["tier"] == 2  # 🟡
 
@@ -132,8 +150,13 @@ def test_consumo_zero_piso_do_neidson_furado_repor():
 def test_sem_consumo_nunca_e_critico():
     # Estoque 0, Parada de Linha, mas SEM consumo -> não há relógio de ruptura:
     # é 🟡 Atenção (tier 2), não 🔴 Crítico. Criticidade fica só no rótulo.
-    item = _item(consumo_medio_diario=0.0, estoque_atual=0, estoque_minimo=5,
-                 estoque_maximo=20, importancia="Parada de Linha")
+    item = _item(
+        consumo_medio_diario=0.0,
+        estoque_atual=0,
+        estoque_minimo=5,
+        estoque_maximo=20,
+        importancia="Parada de Linha",
+    )
     pr = P.classificar_prioridade(item)
     assert pr["tier"] == 2
     assert "🔴" not in pr["rotulo"]
@@ -144,10 +167,10 @@ def test_sem_consumo_nunca_e_critico():
 # QUANTIDADE SUGERIDA (alvo HÍBRIDO)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def test_qtd_horizonte_domina():
     # consumo alto: alvo = consumo*60 = 120 > EstMáx 40
-    q = P.calcular_qtd_sugerida(
-        _item(consumo_medio_diario=2.0, estoque_maximo=40, estoque_atual=10))
+    q = P.calcular_qtd_sugerida(_item(consumo_medio_diario=2.0, estoque_maximo=40, estoque_atual=10))
     assert q["alvo"] == pytest.approx(2.0 * HORIZONTE_REPOSICAO_DIAS)  # 120
     assert q["alvo_origem"].startswith("horizonte")
     assert q["qtd"] == 110  # 120 - 10 - 0
@@ -155,8 +178,7 @@ def test_qtd_horizonte_domina():
 
 def test_qtd_neidson_domina():
     # consumo baixo: EstMáx 100 > consumo*60 = 6
-    q = P.calcular_qtd_sugerida(
-        _item(consumo_medio_diario=0.1, estoque_maximo=100, estoque_atual=40))
+    q = P.calcular_qtd_sugerida(_item(consumo_medio_diario=0.1, estoque_maximo=100, estoque_atual=40))
     assert q["alvo"] == 100
     assert q["alvo_origem"] == "máx. Compras"
     assert q["qtd"] == 60  # 100 - 40
@@ -164,19 +186,17 @@ def test_qtd_neidson_domina():
 
 def test_qtd_desconta_guarda_chuva_e_nunca_negativa():
     q = P.calcular_qtd_sugerida(
-        _item(consumo_medio_diario=1.0, estoque_maximo=50, estoque_atual=40,
-              estoque_em_transito=30))
+        _item(consumo_medio_diario=1.0, estoque_maximo=50, estoque_atual=40, estoque_em_transito=30)
+    )
     # alvo = max(50, 60) = 60; 60 - 40 - 30 = -10 -> 0
     assert q["alvo"] == 60
     assert q["qtd"] == 0
 
 
 def test_qtd_arredonda_para_cima():
-    q = P.calcular_qtd_sugerida(
-        _item(consumo_medio_diario=0.5, estoque_maximo=0, estoque_atual=0))
+    q = P.calcular_qtd_sugerida(_item(consumo_medio_diario=0.5, estoque_maximo=0, estoque_atual=0))
     # alvo = 0.5*60 = 30.0 -> qtd 30 (exato). Testa fração:
-    q2 = P.calcular_qtd_sugerida(
-        _item(consumo_medio_diario=0.51, estoque_maximo=0, estoque_atual=0))
+    q2 = P.calcular_qtd_sugerida(_item(consumo_medio_diario=0.51, estoque_maximo=0, estoque_atual=0))
     assert q2["qtd"] == 31  # ceil(30.6)
 
 
@@ -184,18 +204,24 @@ def test_qtd_arredonda_para_cima():
 # PRIORIDADE / JUSTIFICATIVA / AGRUPAMENTO
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def test_parada_de_linha_eleva_rotulo():
-    item = _item(consumo_medio_diario=1.0, lead_time_dias=10, estoque_atual=8,
-                 importancia="Parada de Linha")
+    item = _item(consumo_medio_diario=1.0, lead_time_dias=10, estoque_atual=8, importancia="Parada de Linha")
     pr = P.classificar_prioridade(item)
     assert pr["parada_linha"] is True
     assert "Parada de Linha" in pr["rotulo"]
 
 
 def test_justificativa_mastigada_contem_numeros():
-    item = _item(consumo_medio_diario=3.0, lead_time_dias=20, estoque_atual=24,
-                 estoque_maximo=100, dias_cobertura=8, tendencia_label="Alta",
-                 tendencia_pct=22.0)
+    item = _item(
+        consumo_medio_diario=3.0,
+        lead_time_dias=20,
+        estoque_atual=24,
+        estoque_maximo=100,
+        dias_cobertura=8,
+        tendencia_label="Alta",
+        tendencia_pct=22.0,
+    )
     txt = P.montar_justificativa(item)
     assert "lead time 20 d" in txt
     assert "antecedência" in txt
@@ -220,6 +246,7 @@ def test_agrupar_por_fornecedor():
 # SCHEMA
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def test_schema_sugestoes_reposicao(db):
     with database.transaction() as c:
         cols = {r[1] for r in c.execute("PRAGMA table_info(sugestoes_reposicao)")}
@@ -230,9 +257,9 @@ def test_schema_sugestoes_reposicao(db):
 # GERAÇÃO DA FILA (integração via listar_inventario)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def test_gerar_fila_filtra_e_prioriza(db, make_item, registrar_consumo):
-    critico = make_item("PN-CRIT", estoque=8, minimo=5, lead=10,
-                        importancia="Parada de Linha")
+    critico = make_item("PN-CRIT", estoque=8, minimo=5, lead=10, importancia="Parada de Linha")
     ok_item = make_item("PN-OK", estoque=200, minimo=10, lead=10)
     _set_inv(critico, consumo_medio_diario=1.0)
     _set_inv(ok_item, consumo_medio_diario=1.0)
@@ -243,7 +270,7 @@ def test_gerar_fila_filtra_e_prioriza(db, make_item, registrar_consumo):
     fila = P.gerar_sugestoes_reposicao(incluir_fornecedor=False)
     pns = [s["part_number"] for s in fila]
     assert "PN-CRIT" in pns
-    assert "PN-OK" not in pns          # bem estocado -> fora da fila
+    assert "PN-OK" not in pns  # bem estocado -> fora da fila
     assert fila[0]["part_number"] == "PN-CRIT"
     assert fila[0]["qtd_sugerida"] > 0
 
@@ -267,6 +294,7 @@ def test_gerar_fila_desconta_guarda_chuva(db, make_item, make_sc, registrar_cons
 # PONTE PARA "CRIAR SC" (reusa criar_sc)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def test_criar_sc_a_partir_da_sugestao(db, make_item, registrar_consumo):
     item_id = make_item("PN-SC5", estoque=8, minimo=5, lead=10)
     _set_inv(item_id, consumo_medio_diario=1.0, estoque_maximo=60)
@@ -282,7 +310,8 @@ def test_criar_sc_a_partir_da_sugestao(db, make_item, registrar_consumo):
         row = c.execute(
             """SELECT isc.quantidade_solicitada, isc.observacao_item
                FROM itens_sc isc JOIN solicitacoes_compra s ON s.id = isc.sc_id
-               WHERE s.numero_sc='SC-REP-1' AND isc.item_id=?""", (item_id,)
+               WHERE s.numero_sc='SC-REP-1' AND isc.item_id=?""",
+            (item_id,),
         ).fetchone()
     assert row["quantidade_solicitada"] == sug["qtd_sugerida"]
     assert "sugerido" in (row["observacao_item"] or "")
@@ -291,6 +320,7 @@ def test_criar_sc_a_partir_da_sugestao(db, make_item, registrar_consumo):
 # ══════════════════════════════════════════════════════════════════════════════
 # AUDITORIA DE DESFECHO
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 def test_registrar_e_listar_desfecho(db, make_item, registrar_consumo):
     item_id = make_item("PN-DES", estoque=8, minimo=5, lead=10)

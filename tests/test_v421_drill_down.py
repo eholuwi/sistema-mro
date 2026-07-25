@@ -8,6 +8,7 @@ Regressão dos 3 provedores que quebravam em runtime na v4.2.0:
 
 Testa a camada de serviço com DB isolado (fixtures do conftest).
 """
+
 from datetime import date
 
 import pandas as pd
@@ -18,7 +19,7 @@ from services import db_functions as F
 
 def test_dist_status_retorna_dataframe(db, make_item):
     # Regressão: antes quebrava com AttributeError ('list' object has no attribute 'empty').
-    make_item("PN-CRIT", estoque=1, minimo=50)      # crítico: estoque_atual < estoque_minimo
+    make_item("PN-CRIT", estoque=1, minimo=50)  # crítico: estoque_atual < estoque_minimo
     df = D.rows_dist_status("critico")
     assert isinstance(df, pd.DataFrame)
     assert "PN-CRIT" in set(df["part_number"])
@@ -49,8 +50,12 @@ def test_top_consumo_ignora_saida_sem_requisicao(db, make_item):
     # Saída manual (ajuste/perda, sem requisicao_id) NÃO é consumo real → não entra no Top.
     item_id = make_item("PN-ADJ", estoque=100, minimo=10)
     F.registrar_movimentacao(
-        item_id=item_id, tipo="saida", quantidade=5,
-        centro_custo=None, solicitante="tester", emitente="tester",
+        item_id=item_id,
+        tipo="saida",
+        quantidade=5,
+        centro_custo=None,
+        solicitante="tester",
+        emitente="tester",
         observacao="AJUSTE: perda",
     )
     df = D.rows_top_consumo(dias=30, limite=10)

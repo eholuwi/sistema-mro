@@ -4,6 +4,7 @@ Foco no efeito deterministico sobre estoque_atual (entrada soma, saida/devolucao
 ajustam), na rejeicao por estoque insuficiente e no item inexistente. Recalculo
 de consumo/ruptura e tratado como efeito secundario (depende de janela temporal).
 """
+
 from services import db_functions as F
 
 CC = "21106 - MANUTENÇÃO"

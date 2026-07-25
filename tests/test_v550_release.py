@@ -87,7 +87,9 @@ def test_leva_todo_import_de_primeiro_nivel_do_app(pacote):
 
 def test_nao_leva_dado_operacional_nem_vault(pacote):
     _, nomes = pacote
-    proibidos = [n for n in nomes if n.endswith(".db") or n.startswith(("vault/", "tests/", "venv/", "docs/"))]
+    proibidos = [
+        n for n in nomes if n.endswith(".db") or n.startswith(("vault/", "tests/", "venv/", "docs/"))
+    ]
     assert not proibidos, f"o pacote nao pode conter estes itens: {proibidos}"
 
 

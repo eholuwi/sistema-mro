@@ -2,6 +2,7 @@
 (que fica em test_requisicao.py): adicionar item a um pedido aberto (o caso 'escreve
 no mesmo papel'), remover item, cancelar, a regra SESMT e a fila de separação.
 """
+
 import pytest
 from services import db_functions as F
 
@@ -23,11 +24,22 @@ def _status(db, rid):
 
 
 def _criar(item_id, qtd=10):
-    return F.criar_requisicao("Manut", "Joao", CC, "", "", False, [], False, "",
-                              [{"item_id": item_id, "quantidade_solicitada": qtd}])
+    return F.criar_requisicao(
+        "Manut",
+        "Joao",
+        CC,
+        "",
+        "",
+        False,
+        [],
+        False,
+        "",
+        [{"item_id": item_id, "quantidade_solicitada": qtd}],
+    )
 
 
 # ── Adicionar itens ao pedido aberto ('põe no mesmo papel') ──────────────────
+
 
 def test_adicionar_item_a_requisicao_aberta(db, make_item):
     a = make_item("PN-ADD-A", estoque=50)
@@ -67,12 +79,22 @@ def test_nao_adiciona_item_em_requisicao_entregue(db, make_item):
 
 # ── Remover item ─────────────────────────────────────────────────────────────
 
+
 def test_remover_item_nao_atendido(db, make_item):
     a = make_item("PN-RM-A", estoque=50)
     b = make_item("PN-RM-B", estoque=50)
-    ok, num = F.criar_requisicao("Manut", "Joao", CC, "", "", False, [], False, "",
-        [{"item_id": a, "quantidade_solicitada": 5},
-         {"item_id": b, "quantidade_solicitada": 3}])
+    ok, num = F.criar_requisicao(
+        "Manut",
+        "Joao",
+        CC,
+        "",
+        "",
+        False,
+        [],
+        False,
+        "",
+        [{"item_id": a, "quantidade_solicitada": 5}, {"item_id": b, "quantidade_solicitada": 3}],
+    )
     rid = _req_id(db, num)
     it0 = F.listar_itens_requisicao(rid)[0]["id"]
     ok, msg = F.remover_item_requisicao(it0)
@@ -91,6 +113,7 @@ def test_nao_remove_item_ja_entregue(db, make_item):
 
 
 # ── Cancelar ─────────────────────────────────────────────────────────────────
+
 
 def test_cancelar_requisicao_aberta(db, make_item):
     a = make_item("PN-CAN-A", estoque=50)
@@ -115,6 +138,7 @@ def test_nao_cancela_apos_entrega_parcial(db, make_item):
 
 # ── Regra SESMT ──────────────────────────────────────────────────────────────
 
+
 def test_sesmt_exige_responsavel_e_grava_autorizacao(db, make_item):
     a = make_item("PN-SES-A", estoque=50)
     ok, num = _criar(a, 5)
@@ -122,18 +146,26 @@ def test_sesmt_exige_responsavel_e_grava_autorizacao(db, make_item):
     it_id = F.listar_itens_requisicao(rid)[0]["id"]
 
     # SESMT marcado sem responsável -> rejeita, nada baixado
-    ok, msg = F.entregar_requisicao(rid, [{"item_req_id": it_id, "quantidade": 5}],
-                                    "Gestor", "Chefe", sesmt=True, sesmt_responsavel="")
+    ok, msg = F.entregar_requisicao(
+        rid, [{"item_req_id": it_id, "quantidade": 5}], "Gestor", "Chefe", sesmt=True, sesmt_responsavel=""
+    )
     assert ok is False
     assert F.buscar_item_por_id(a)["estoque_atual"] == 50
 
     # com responsável -> ok e grava autorização na requisição
-    ok, status = F.entregar_requisicao(rid, [{"item_req_id": it_id, "quantidade": 5}],
-                                       "Gestor", "Chefe", sesmt=True, sesmt_responsavel="Tec SESMT")
+    ok, status = F.entregar_requisicao(
+        rid,
+        [{"item_req_id": it_id, "quantidade": 5}],
+        "Gestor",
+        "Chefe",
+        sesmt=True,
+        sesmt_responsavel="Tec SESMT",
+    )
     assert ok, status
     conn = db.get_connection()
-    row = conn.execute("SELECT sesmt, sesmt_responsavel, autorizador_nome FROM requisicoes WHERE id=?",
-                       (rid,)).fetchone()
+    row = conn.execute(
+        "SELECT sesmt, sesmt_responsavel, autorizador_nome FROM requisicoes WHERE id=?", (rid,)
+    ).fetchone()
     conn.close()
     assert row["sesmt"] == 1
     assert row["sesmt_responsavel"] == "Tec SESMT"
@@ -142,15 +174,16 @@ def test_sesmt_exige_responsavel_e_grava_autorizacao(db, make_item):
 
 # ── Fila de separação ────────────────────────────────────────────────────────
 
+
 def test_fila_mostra_abertas_e_parciais_esconde_entregue(db, make_item):
     a = make_item("PN-FILA-A", estoque=50)
     b = make_item("PN-FILA-B", estoque=50)
-    _, n1 = _criar(a, 5)              # fica Aberta
+    _, n1 = _criar(a, 5)  # fica Aberta
     _, n2 = _criar(b, 5)
     r2 = _req_id(db, n2)
     it_id = F.listar_itens_requisicao(r2)[0]["id"]
     F.entregar_requisicao(r2, [{"item_req_id": it_id, "quantidade": 5}], "Gestor", "Chefe")  # -> Entregue
 
     numeros = {r["numero_requisicao"] for r in F.listar_requisicoes_abertas()}
-    assert n1 in numeros        # Aberta permanece na fila
-    assert n2 not in numeros    # Entregue saiu da fila
+    assert n1 in numeros  # Aberta permanece na fila
+    assert n2 not in numeros  # Entregue saiu da fila

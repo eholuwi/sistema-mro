@@ -3,13 +3,16 @@
 Cobre a lógica pura extraída do bloco inline: `acaba_em` (data estimada de ruptura)
 e os predicados dos filtros rápidos. O render da página é coberto pelo smoke
 parametrizado `test_v500_router` (Saldo em Estoque entrou em ROTAS_MIGRADAS)."""
+
 from datetime import date
 
 import pandas as pd
 
 from services.constants import PREVISAO_RUPTURA_SEM_RISCO
 from ui.paginas.saldo_estoque import (
-    acaba_em, _pill_status_contem, _pill_nao_inventariado,
+    acaba_em,
+    _pill_status_contem,
+    _pill_nao_inventariado,
 )
 
 
@@ -35,11 +38,13 @@ class TestAcabaEm:
 
 
 def _df():
-    return pd.DataFrame([
-        {"part_number": "A", "status_material": "🔴 COMPRAR", "data_inventario": ""},
-        {"part_number": "B", "status_material": "🟢 OK", "data_inventario": "2026-01-10"},
-        {"part_number": "C", "status_material": "🟡 ATENÇÃO", "data_inventario": None},
-    ])
+    return pd.DataFrame(
+        [
+            {"part_number": "A", "status_material": "🔴 COMPRAR", "data_inventario": ""},
+            {"part_number": "B", "status_material": "🟢 OK", "data_inventario": "2026-01-10"},
+            {"part_number": "C", "status_material": "🟡 ATENÇÃO", "data_inventario": None},
+        ]
+    )
 
 
 class TestPredicadosFiltros:

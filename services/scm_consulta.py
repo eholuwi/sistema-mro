@@ -10,6 +10,7 @@ Reusa o que já existe (regra anti-duplicação): `listar_itens_sc` para os iten
 banco na aba Detalhes, `scm_sync.normalizar_itens_api` para os itens vindos da
 Timeline, e o cliente `scm_client` para os endpoints de leitura.
 """
+
 from __future__ import annotations
 
 from database import transaction
@@ -22,6 +23,7 @@ _FILIAL_PADRAO = "01"
 
 
 # ── Aba 1 — Solicitações de Compra ────────────────────────────────────────────
+
 
 def listar_scs_consulta(conn=None):
     """Uma linha por SC (todas, não só as abertas), com POs consolidados de `itens_sc`
@@ -65,6 +67,7 @@ def listar_scs_consulta(conn=None):
 
 # ── Aba 2 — Itens das SCs ─────────────────────────────────────────────────────
 
+
 def listar_itens_consulta(conn=None):
     """Um registro por item de SC: `itens_sc` (PN no inventário MRO) UNION
     `itens_sc_externos` (PN fora do inventário). Coluna `fora_do_inventario` (bool) e
@@ -103,6 +106,7 @@ def listar_itens_consulta(conn=None):
 
 # ── Aba 3 — Detalhes da SC (banco) ────────────────────────────────────────────
 
+
 def detalhes_sc_banco(numero_sc, conn=None, precos_por_item=5):
     """Consolidação de uma SC a partir do BANCO: cabeçalho, itens (reusa
     `listar_itens_sc`), itens externos e preços históricos por item. Retorna None se a
@@ -110,29 +114,37 @@ def detalhes_sc_banco(numero_sc, conn=None, precos_por_item=5):
     if conn is None:
         with transaction() as c:
             return detalhes_sc_banco(numero_sc, c, precos_por_item)
-    cab = conn.execute(
-        "SELECT * FROM solicitacoes_compra WHERE numero_sc=?", (numero_sc,)).fetchone()
+    cab = conn.execute("SELECT * FROM solicitacoes_compra WHERE numero_sc=?", (numero_sc,)).fetchone()
     if not cab:
         return None
     cab = dict(cab)
     sc_id = cab["id"]
     itens = listar_itens_sc(sc_id)
-    externos = [dict(r) for r in conn.execute(
-        "SELECT * FROM itens_sc_externos WHERE sc_id=? ORDER BY part_number",
-        (sc_id,)).fetchall()]
+    externos = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT * FROM itens_sc_externos WHERE sc_id=? ORDER BY part_number", (sc_id,)
+        ).fetchall()
+    ]
     # Preços históricos dos itens desta SC (últimos N por item), para leitura rápida.
     item_ids = [it["item_id"] for it in itens if it.get("item_id")]
     precos = []
     if item_ids:
         marcadores = ",".join("?" * len(item_ids))
-        precos = [dict(r) for r in conn.execute(f"""
+        precos = [
+            dict(r)
+            for r in conn.execute(
+                f"""
             SELECT ph.item_id, i.part_number, i.nome_item, ph.data, ph.preco_unitario,
                    ph.moeda, ph.fornecedor, ph.numero_sc, ph.numero_po, ph.lead_time_dias
             FROM precos_historico ph
             JOIN inventario i ON i.id = ph.item_id
             WHERE ph.item_id IN ({marcadores})
             ORDER BY ph.item_id, ph.data DESC, ph.id DESC
-        """, item_ids).fetchall()]
+        """,
+                item_ids,
+            ).fetchall()
+        ]
         # Mantém só os `precos_por_item` mais recentes por item.
         vistos = {}
         filtrados = []
@@ -147,6 +159,7 @@ def detalhes_sc_banco(numero_sc, conn=None, precos_por_item=5):
 
 # ── Aba 3 — Detalhes da SC ("ao vivo" da API, sob demanda) ────────────────────
 
+
 def detalhes_sc_api(sc_id_scm, numero_po=None, cotacao_codigo=None, filial=_FILIAL_PADRAO):
     """Enriquecimento AO VIVO de uma SC pela API do SCM. Cada bloco é independente e
     isolado em try/except: uma falha (rede, serviço reciclando, filial errada) degrada
@@ -156,8 +169,15 @@ def detalhes_sc_api(sc_id_scm, numero_po=None, cotacao_codigo=None, filial=_FILI
     `eventos` (Timelinev2), `cotacao` (GetByCodigo, só se `cotacao_codigo`),
     `pedido`/`aprovadores` (só se `numero_po`), `erros` (list de avisos por bloco).
     Blocos ausentes/indisponíveis vêm como None."""
-    out = {"disponivel": False, "itens": None, "eventos": None, "cotacao": None,
-           "pedido": None, "aprovadores": None, "erros": []}
+    out = {
+        "disponivel": False,
+        "itens": None,
+        "eventos": None,
+        "cotacao": None,
+        "pedido": None,
+        "aprovadores": None,
+        "erros": [],
+    }
     if not scm_client.esta_disponivel():
         return out
     out["disponivel"] = True

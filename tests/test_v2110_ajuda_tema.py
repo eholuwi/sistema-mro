@@ -4,6 +4,7 @@ A Central de Ajuda reusa o Feedback já existente (coberto por test_feedback.py)
 o foco é o núcleo NOVO e testável: a paleta de tema pura (`services.tema.paleta`), que é
 o ponto único de verdade de cores para claro/escuro (CSS global, option_menu e gráficos).
 """
+
 from services.tema import paleta, ACCENT
 
 
@@ -31,9 +32,20 @@ def test_accent_constante_nos_dois_temas():
 
 
 def test_paleta_tem_chaves_esperadas():
-    chaves = {"tipo", "accent", "plotly_template", "paper_bg", "plot_bg", "texto",
-              "texto_suave", "accent_borda", "painel_bg", "painel_borda", "css",
-              "option_menu_styles"}
+    chaves = {
+        "tipo",
+        "accent",
+        "plotly_template",
+        "paper_bg",
+        "plot_bg",
+        "texto",
+        "texto_suave",
+        "accent_borda",
+        "painel_bg",
+        "painel_borda",
+        "css",
+        "option_menu_styles",
+    }
     assert chaves <= set(paleta("dark").keys())
 
 
@@ -47,9 +59,21 @@ def test_option_menu_styles_bem_formado():
 def test_css_tokens_presentes_para_styles():
     # services.styles depende destes tokens no :root.
     css = paleta("dark")["css"]
-    for k in ("accent", "accent_hover", "bg_sidebar", "bg_main", "bg_card", "bg_metric",
-              "bg_grid", "bg_th", "bg_expander", "bg_input_foco", "borda", "texto",
-              "texto_suave"):
+    for k in (
+        "accent",
+        "accent_hover",
+        "bg_sidebar",
+        "bg_main",
+        "bg_card",
+        "bg_metric",
+        "bg_grid",
+        "bg_th",
+        "bg_expander",
+        "bg_input_foco",
+        "borda",
+        "texto",
+        "texto_suave",
+    ):
         assert k in css, k
 
 
@@ -83,12 +107,20 @@ def test_manual_todo_item_tem_explicacao_e_eli5():
     for sec in MANUAL:
         for it in sec["itens"]:
             for campo in ("nome", "para_que", "base", "como", "crianca"):
-                assert it.get(campo) and it[campo].strip(), \
+                assert it.get(campo) and it[campo].strip(), (
                     f"[{sec['tela']}] item '{it.get('nome')}' sem '{campo}'"
+                )
 
 
 def test_manual_cobre_telas_essenciais():
     telas = " ".join(s["tela"] for s in MANUAL)
-    for chave in ("Dashboard", "Saldo em Estoque", "Ficha 360", "Requisição",
-                  "Controle de SC", "Gerenciar Itens", "Configurações"):
+    for chave in (
+        "Dashboard",
+        "Saldo em Estoque",
+        "Ficha 360",
+        "Requisição",
+        "Controle de SC",
+        "Gerenciar Itens",
+        "Configurações",
+    ):
         assert chave in telas, f"Manual não cobre: {chave}"

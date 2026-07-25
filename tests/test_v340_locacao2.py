@@ -4,6 +4,7 @@ A coluna `local_armazenagem_2` é adicionada APÓS o rebuild v2.1.0 (que só pre
 conjunto fixo de colunas), garantindo que sobreviva em bancos novos. O Ajuste Rápido de
 Movimentações permanece intacto — a 2ª locação é um 2º ponto de armazenagem do item.
 """
+
 import database
 from services import db_functions as F
 
@@ -16,8 +17,8 @@ def _cols():
 
 
 def test_coluna_local_2_existe_e_idempotente(db):
-    assert "local_armazenagem_2" in _cols()          # sobreviveu ao rebuild v2.1.0
-    database.criar_banco()                            # 2ª execução — não deve falhar
+    assert "local_armazenagem_2" in _cols()  # sobreviveu ao rebuild v2.1.0
+    database.criar_banco()  # 2ª execução — não deve falhar
     assert "local_armazenagem_2" in _cols()
 
 

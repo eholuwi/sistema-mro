@@ -5,6 +5,7 @@ com default vazio, reorganização de dashboards) e é coberta pelo smoke E2E
 (AppTest sobre uma cópia do mro.db). Aqui ficam as mudanças testáveis na camada de
 serviço.
 """
+
 from services import db_functions as F
 
 

@@ -8,14 +8,22 @@ e seguem no if/elif do app.py durante a refatoração faseada — ver `ROTAS_MIG
 Adicionar/mover um item de menu é uma edição só aqui (não mais em dois pontos do
 app.py). Os ícones são os nomes do streamlit-option-menu (Bootstrap Icons).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 from ui.paginas import (
-    ajuda, configuracoes, controle_sc, dashboard, ficha_360, gerenciar_itens,
-    movimentacao, saldo_estoque, scm_integrado,
+    ajuda,
+    configuracoes,
+    controle_sc,
+    dashboard,
+    ficha_360,
+    gerenciar_itens,
+    movimentacao,
+    saldo_estoque,
+    scm_integrado,
 )
 
 
@@ -27,15 +35,15 @@ class Rota:
 
 # Ordem = ordem do menu lateral. NÃO reordenar sem intenção (muda a navegação).
 ROTAS: dict[str, Rota] = {
-    "Dashboard":        Rota("bar-chart-fill", dashboard.render),     # F4a
-    "Saldo em Estoque": Rota("box-seam", saldo_estoque.render),      # F4a
-    "Ficha 360":        Rota("card-image", ficha_360.render),          # F4b
-    "Gerenciar Itens":  Rota("plus-circle", gerenciar_itens.render),  # F4a
-    "Movimentação":     Rota("arrow-repeat", movimentacao.render),     # F4b
-    "Controle de SC":   Rota("receipt", controle_sc.render),         # F4a
-    "SCM Integrado":    Rota("cloud-check", scm_integrado.render),   # F3 — consulta unificada
-    "Ajuda":            Rota("question-circle", ajuda.render),
-    "Configurações":    Rota("gear", configuracoes.render),
+    "Dashboard": Rota("bar-chart-fill", dashboard.render),  # F4a
+    "Saldo em Estoque": Rota("box-seam", saldo_estoque.render),  # F4a
+    "Ficha 360": Rota("card-image", ficha_360.render),  # F4b
+    "Gerenciar Itens": Rota("plus-circle", gerenciar_itens.render),  # F4a
+    "Movimentação": Rota("arrow-repeat", movimentacao.render),  # F4b
+    "Controle de SC": Rota("receipt", controle_sc.render),  # F4a
+    "SCM Integrado": Rota("cloud-check", scm_integrado.render),  # F3 — consulta unificada
+    "Ajuda": Rota("question-circle", ajuda.render),
+    "Configurações": Rota("gear", configuracoes.render),
 }
 
 # Páginas cujo render já vive em ui/paginas/ (as demais seguem no if/elif do app.py).

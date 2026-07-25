@@ -4,6 +4,7 @@ Pequenos helpers visuais da página SCM Integrado: um "badge" da fonte do dado
 (API do SCM × Relatório Excel) e o ponto de status da API (health-check com cache
 curto, para não bater na rede a cada rerun).
 """
+
 from __future__ import annotations
 
 import streamlit as st
@@ -41,6 +42,7 @@ def ponto_status_api(mostrar=True):
         if ok:
             st.markdown(":green[:material/sensors: **API do SCM online**]")
         else:
-            st.markdown(":red[:material/sensors_off: **API do SCM offline**] "
-                        "— exibindo apenas dados do banco.")
+            st.markdown(
+                ":red[:material/sensors_off: **API do SCM offline**] — exibindo apenas dados do banco."
+            )
     return ok

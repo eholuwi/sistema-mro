@@ -2,14 +2,14 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
 required = [
-    'CLAUDE.md',
-    'docs',
-    'prompts',
-    'skills',
-    'hooks',
-    'templates',
-    'config',
-    'tests',
+    "CLAUDE.md",
+    "docs",
+    "prompts",
+    "skills",
+    "hooks",
+    "templates",
+    "config",
+    "tests",
 ]
 
 missing = [item for item in required if not (root / item).exists()]

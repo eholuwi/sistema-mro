@@ -3,6 +3,7 @@
 A UI (aba Guarda-Chuva/kanban e grade livre "colar do Excel") é coberta pelo smoke
 E2E. Aqui ficam as funções de serviço testáveis: persistência JSON da grade livre.
 """
+
 from services import db_functions as F
 
 

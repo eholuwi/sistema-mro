@@ -16,37 +16,41 @@ Achados que guiam o design (verificados nos arquivos reais):
 - SC7 não tem Status (dado puro de PO); o Status vem do SCM.
 - Um PO tem várias linhas/itens no SC7 → agrega por ``(PO, PN)``.
 """
+
 from __future__ import annotations
 
 import pandas as pd
 
 from services.db_functions import (
-    _coluna, _valor, _to_float, _to_date_str, _normalizar_txt,
+    _coluna,
+    _valor,
+    _to_float,
+    _to_date_str,
+    _normalizar_txt,
 )
 
 # ── Mapas de nomes de coluna aceitos (tolerantes a acento/pontuação via _coluna) ──
 _SCM_COLS = {
-    "sc":               ["Numero da Solicitacao", "Número da Solicitação", "SC"],
-    "solicitante":      ["Solicitante"],
-    "status":           ["Status"],
-    "produto":          ["Produto", "Partnumber", "Part Number"],
-    "descricao":        ["Descricao Detalhada", "Descrição Detalhada", "Descrição",
-                         "Descricao", "Nome do item"],
-    "quantidade":       ["Quantidade", "Qty"],
+    "sc": ["Numero da Solicitacao", "Número da Solicitação", "SC"],
+    "solicitante": ["Solicitante"],
+    "status": ["Status"],
+    "produto": ["Produto", "Partnumber", "Part Number"],
+    "descricao": ["Descricao Detalhada", "Descrição Detalhada", "Descrição", "Descricao", "Nome do item"],
+    "quantidade": ["Quantidade", "Qty"],
     "data_necessidade": ["Data Necessidade"],
-    "justificativa":    ["Justificativa/Projeto", "Justificativa", "Projeto"],
-    "pedido":           ["Pedido", "Numero PC", "Número PC"],
-    "documento":        ["Documento"],
+    "justificativa": ["Justificativa/Projeto", "Justificativa", "Projeto"],
+    "pedido": ["Pedido", "Numero PC", "Número PC"],
+    "documento": ["Documento"],
 }
 _SC7_COLS = {
-    "pedido":       ["Numero PC", "Pedido"],
-    "produto":      ["Produto"],
-    "descricao":    ["Descricao", "Descrição"],
+    "pedido": ["Numero PC", "Pedido"],
+    "produto": ["Produto"],
+    "descricao": ["Descricao", "Descrição"],
     "qtd_entregue": ["Qtd.Entregue", "Qtd Entregue"],
-    "saldo":        ["Saldo"],
-    "dt_entrega":   ["Dt. Entrega", "Dt Entrega", "Data Entrega", "Entrega"],
-    "fornecedor":   ["Nome Fantasia", "Razão Social", "Razao Social", "Fornecedor"],
-    "comprador":    ["Comprador"],
+    "saldo": ["Saldo"],
+    "dt_entrega": ["Dt. Entrega", "Dt Entrega", "Data Entrega", "Entrega"],
+    "fornecedor": ["Nome Fantasia", "Razão Social", "Razao Social", "Fornecedor"],
+    "comprador": ["Comprador"],
 }
 
 # Colunas mínimas para o cruzamento fazer sentido.
@@ -55,9 +59,22 @@ _SC7_OBRIGATORIAS = ("pedido", "produto", "saldo")
 
 # Ordem das colunas de saída (espelha a aba "SCM" manual dos compradores).
 COLUNAS_SAIDA = [
-    "SC", "Solicitante", "Departamento", "Status", "Produto", "Descrição",
-    "Qty (SC)", "Data Necessidade", "Justificativa", "PO", "Fornecedor",
-    "Comprador", "Qtd Entregue", "Saldo", "Dt. Entrega", "Situação",
+    "SC",
+    "Solicitante",
+    "Departamento",
+    "Status",
+    "Produto",
+    "Descrição",
+    "Qty (SC)",
+    "Data Necessidade",
+    "Justificativa",
+    "PO",
+    "Fornecedor",
+    "Comprador",
+    "Qtd Entregue",
+    "Saldo",
+    "Dt. Entrega",
+    "Situação",
 ]
 
 
@@ -116,7 +133,9 @@ def preparar_df(arquivo, tipo):
     df, aba, _h = detectar_header(xls, aba_pref, chaves, mapa)
     if df is None:
         alvo = ", ".join(mapa[k][0] for k in chaves)
-        return None, {"erro": f"Não encontrei as colunas-chave ({alvo}) em nenhuma aba/linha do arquivo {tipo}."}
+        return None, {
+            "erro": f"Não encontrei as colunas-chave ({alvo}) em nenhuma aba/linha do arquivo {tipo}."
+        }
     return df, {"aba": aba, "header": _h}
 
 
@@ -135,10 +154,16 @@ def _agregar_sc7(df_sc7, cols, pns_set):
         chave = (_key(po_raw), _key(pn_raw))
         g = grupos.get(chave)
         if g is None:
-            g = {"po": po_raw, "pn": pn_raw,
-                 "descricao": _txt(_valor(row, cols["descricao"], "")),
-                 "qtd_entregue": 0.0, "saldo": 0.0, "dt_entrega": None,
-                 "fornecedor": "", "comprador": ""}
+            g = {
+                "po": po_raw,
+                "pn": pn_raw,
+                "descricao": _txt(_valor(row, cols["descricao"], "")),
+                "qtd_entregue": 0.0,
+                "saldo": 0.0,
+                "dt_entrega": None,
+                "fornecedor": "",
+                "comprador": "",
+            }
             grupos[chave] = g
         g["qtd_entregue"] += _to_float(_valor(row, cols["qtd_entregue"], 0))
         g["saldo"] += _to_float(_valor(row, cols["saldo"], 0))
@@ -154,8 +179,7 @@ def _agregar_sc7(df_sc7, cols, pns_set):
     return grupos, pos
 
 
-def cruzar_scm_sc7(df_scm, df_sc7, *, solicitantes_mro=None, pns_mro=None,
-                   dep_por_solic=None):
+def cruzar_scm_sc7(df_scm, df_sc7, *, solicitantes_mro=None, pns_mro=None, dep_por_solic=None):
     """Cruza os dois exports crus e devolve a tabela do Monitor 2.0.
 
     - **SCM dirige** (demanda); o SC7 anexa entrega/saldo por ``(PO, PN)``.
@@ -202,9 +226,16 @@ def cruzar_scm_sc7(df_scm, df_sc7, *, solicitantes_mro=None, pns_mro=None,
     # 2) SCM dirige a tabela.
     linhas = []
     deptos = set()
-    stats = {"n_scm": int(len(df_scm)), "n_sc7": int(len(df_sc7)),
-             "casadas": 0, "sem_pedido": 0, "po_sem_sc7": 0,
-             "orfaos": 0, "fora_escopo": 0, "saldo_pendente_total": 0.0}
+    stats = {
+        "n_scm": int(len(df_scm)),
+        "n_sc7": int(len(df_sc7)),
+        "casadas": 0,
+        "sem_pedido": 0,
+        "po_sem_sc7": 0,
+        "orfaos": 0,
+        "fora_escopo": 0,
+        "saldo_pendente_total": 0.0,
+    }
 
     for _, row in df_scm.iterrows():
         pn_raw = _txt(_valor(row, scm_cols["produto"], ""))
@@ -242,11 +273,16 @@ def cruzar_scm_sc7(df_scm, df_sc7, *, solicitantes_mro=None, pns_mro=None,
         else:
             g = sc7_grupos.get((_key(po_raw), _key(pn_raw)))
             if g is not None:
-                linha.update({
-                    "Fornecedor": g["fornecedor"], "Comprador": g["comprador"],
-                    "Qtd Entregue": g["qtd_entregue"], "Saldo": g["saldo"],
-                    "Dt. Entrega": g["dt_entrega"], "Situação": "✅ Casada",
-                })
+                linha.update(
+                    {
+                        "Fornecedor": g["fornecedor"],
+                        "Comprador": g["comprador"],
+                        "Qtd Entregue": g["qtd_entregue"],
+                        "Saldo": g["saldo"],
+                        "Dt. Entrega": g["dt_entrega"],
+                        "Situação": "✅ Casada",
+                    }
+                )
                 stats["casadas"] += 1
                 stats["saldo_pendente_total"] += g["saldo"]
             else:
@@ -259,13 +295,19 @@ def cruzar_scm_sc7(df_scm, df_sc7, *, solicitantes_mro=None, pns_mro=None,
     for (po_key, _pn_key), g in sc7_grupos.items():
         if po_key and po_key in scm_pos:
             continue
-        orfaos.append({
-            "PO": g["po"], "Produto": g["pn"], "Descrição": g["descricao"],
-            "Fornecedor": g["fornecedor"], "Comprador": g["comprador"],
-            "Qtd Entregue": g["qtd_entregue"], "Saldo": g["saldo"],
-            "Dt. Entrega": g["dt_entrega"],
-        })
-    orfaos.sort(key=lambda o: (o["Saldo"] or 0), reverse=True)
+        orfaos.append(
+            {
+                "PO": g["po"],
+                "Produto": g["pn"],
+                "Descrição": g["descricao"],
+                "Fornecedor": g["fornecedor"],
+                "Comprador": g["comprador"],
+                "Qtd Entregue": g["qtd_entregue"],
+                "Saldo": g["saldo"],
+                "Dt. Entrega": g["dt_entrega"],
+            }
+        )
+    orfaos.sort(key=lambda o: o["Saldo"] or 0, reverse=True)
     stats["orfaos"] = len(orfaos)
 
     return {

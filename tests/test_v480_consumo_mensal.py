@@ -5,6 +5,7 @@ Cobre a matemática PURA do consumo mensal ponderado (`_ponderado_from_serie` e
 (recente pesa mais), meses sem saída contando 0, exclusão do mês corrente, virada de
 ano e decaimento quando o item para de sair. Sem banco — funções determinísticas.
 """
+
 from datetime import date
 
 from services.classificacao import (
@@ -20,6 +21,7 @@ def _serie(**meses):
 
 # ── Janela: últimos N meses completos (exclui o mês corrente) ──────────────────
 
+
 def test_ultimos_3_meses_completos_exclui_mes_corrente():
     # Em 15/abr, os 3 meses completos são jan, fev, mar (abr está em andamento).
     assert _ultimos_n_meses_completos(date(2026, 4, 15)) == ["2026-01", "2026-02", "2026-03"]
@@ -31,6 +33,7 @@ def test_ultimos_meses_viram_o_ano():
 
 
 # ── Ponderação 3/2/1 ──────────────────────────────────────────────────────────
+
 
 def test_exemplo_do_luis_jan50_fev20_mar40():
     # (mar×3 + fev×2 + jan×1) / 6 = (120 + 40 + 50) / 6 = 35.
@@ -57,6 +60,7 @@ def test_dois_meses_de_dados_no_periodo():
 
 
 # ── Decaimento / sem dados → None (UI mostra "—") ─────────────────────────────
+
 
 def test_item_que_parou_de_sair_decai_para_none():
     # Só teve saída em jan; em mai os 3 meses-alvo (fev/mar/abr) estão zerados → None.

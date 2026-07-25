@@ -8,6 +8,7 @@ denominador zero, giro/cobertura sem dado, exclusão da sentinela de cobertura,
 aging por faixa e o roteador `montar_dashboard`. Sem tocar o mro.db real (fixtures
 de banco temporário isolado).
 """
+
 from datetime import date
 
 import pytest
@@ -28,6 +29,7 @@ def _set_inv(item_id, **campos):
 # Helper puro: _dias_desde
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def test_dias_desde_parseia_data_e_datahora():
     assert D._dias_desde("2026-06-01", hoje=date(2026, 6, 11)) == 10
     assert D._dias_desde("2026-06-01 08:00:00", hoje=date(2026, 6, 1)) == 0
@@ -43,21 +45,22 @@ def test_dias_desde_invalido_retorna_none():
 # 📊 GESTÃO
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def test_gestao_distribuicao_e_nivel_servico(db, make_item, registrar_consumo):
-    a = make_item(part_number="A", estoque=100, minimo=10)   # OK, com consumo, fora ruptura
-    b = make_item(part_number="B", estoque=0, minimo=10)     # COMPRAR, zerado, ruptura
-    make_item(part_number="C", estoque=50, minimo=5)         # sem movimentação
+    a = make_item(part_number="A", estoque=100, minimo=10)  # OK, com consumo, fora ruptura
+    b = make_item(part_number="B", estoque=0, minimo=10)  # COMPRAR, zerado, ruptura
+    make_item(part_number="C", estoque=50, minimo=5)  # sem movimentação
     registrar_consumo(a)
     registrar_consumo(b)
 
     vm = D.montar_visao_gestao()
     d = vm["distribuicao"]
     assert vm["total"] == 3
-    assert vm["com_consumo"] == 2            # A e B
-    assert d["sem_mov"] == 1                 # C
-    assert d["zerados"] == 1                 # B
-    assert d["ok"] == 1                      # A
-    assert d["comprar"] == 1                 # B
+    assert vm["com_consumo"] == 2  # A e B
+    assert d["sem_mov"] == 1  # C
+    assert d["zerados"] == 1  # B
+    assert d["ok"] == 1  # A
+    assert d["comprar"] == 1  # B
     # Saúde física conta TODOS os itens (inclusive Sem Movimentação): A e C físicamente
     # OK (100>10×1,2 e 50>5×1,2), B zerado. C entra em "ok" apesar de Sem Movimentação.
     sf = vm["saude_fisica"]
@@ -69,7 +72,7 @@ def test_gestao_distribuicao_e_nivel_servico(db, make_item, registrar_consumo):
 
 
 def test_gestao_nivel_servico_none_quando_ninguem_tem_consumo(db, make_item):
-    make_item(part_number="X", estoque=5, minimo=1)          # sem consumo real
+    make_item(part_number="X", estoque=5, minimo=1)  # sem consumo real
     vm = D.montar_visao_gestao()
     assert vm["com_consumo"] == 0
     assert vm["kpis"]["nivel_servico"] is None
@@ -96,23 +99,23 @@ def test_gestao_cobertura_media_exclui_sentinela(db, make_item, registrar_consum
 # 👤 COMPRADOR
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def test_comprador_kpis_fila_e_ruptura(db, make_item, registrar_consumo):
     crit = make_item(part_number="CRIT", estoque=0, minimo=50)
     registrar_consumo(crit)
-    _set_inv(crit, consumo_medio_diario=5)   # dá "relógio" de consumo → entra na fila
+    _set_inv(crit, consumo_medio_diario=5)  # dá "relógio" de consumo → entra na fila
 
     vm = D.montar_visao_comprador()
     kpis = vm["kpis"]
     assert set(kpis) == {"criticos", "comprar_atrasados", "scs_abertas", "rupturas"}
-    assert kpis["rupturas"] >= 1             # estoque 0 + consumo real
-    assert vm["total_fila"] >= 1             # item precisa de reposição
+    assert kpis["rupturas"] >= 1  # estoque 0 + consumo real
+    assert vm["total_fila"] >= 1  # item precisa de reposição
     assert isinstance(vm["fila"], list) and isinstance(vm["scs_sugeridas"], list)
 
 
 def test_comprador_aging_por_faixa(db, make_item, make_sc):
     # SC muito antiga (2020) cai em "15+"; sem itens abertos recentes.
-    make_sc(numero_sc="SC-OLD", data_abertura="2020-01-01",
-            part_number="P1", quantidade_solicitada=10)
+    make_sc(numero_sc="SC-OLD", data_abertura="2020-01-01", part_number="P1", quantidade_solicitada=10)
     vm = D.montar_visao_comprador()
     ag = vm["aging"]
     assert set(ag) == {"0-7", "8-15", "15+", "sem_data"}
@@ -123,6 +126,7 @@ def test_comprador_aging_por_faixa(db, make_item, make_sc):
 # ══════════════════════════════════════════════════════════════════════════════
 # Roteador + _giro_medio
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 def test_montar_dashboard_roteia_por_publico(db, make_item):
     make_item(part_number="R1", estoque=10, minimo=1)

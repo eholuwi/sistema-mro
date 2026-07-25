@@ -11,6 +11,7 @@ As funções de cálculo são PURAS: recebem um `item` (dict de
 (`estoque_em_transito`), cobertura (`dias_cobertura`), consumo, tendência e os
 lead times) e devolvem números/rótulos — fáceis de testar e de explicar.
 """
+
 from __future__ import annotations
 
 import math
@@ -40,6 +41,7 @@ from services.db_functions import (
 # ══════════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 def _num(valor):
     """Converte para float de forma tolerante (None/erro → 0.0)."""
@@ -95,6 +97,7 @@ def calcular_comprar_ate(cobertura_dias, lead_time, hoje=None):
 # PARÂMETROS EFETIVOS (não sobrescrevem a base — apenas escolhem o valor a usar)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def lead_time_efetivo(item):
     """Lead time (dias) a usar no cálculo, com origem e rótulo de maturidade.
 
@@ -127,6 +130,7 @@ def estoque_seguranca_efetivo(item):
 # ══════════════════════════════════════════════════════════════════════════════
 # CÁLCULOS DE REPOSIÇÃO (puros)
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 def calcular_ponto_reposicao(item):
     """Ponto de pedido (ROP) = consumo_diário × lead_time (v3.7.0 — sem estoque de
@@ -180,8 +184,7 @@ def calcular_qtd_sugerida(item):
         "alvo_neidson": round(est_max, 2),
         "alvo_horizonte": round(base_horizonte, 2),
         "alvo_origem": (
-            "máx. Compras" if est_max >= base_horizonte
-            else f"horizonte {HORIZONTE_REPOSICAO_DIAS}d"
+            "máx. Compras" if est_max >= base_horizonte else f"horizonte {HORIZONTE_REPOSICAO_DIAS}d"
         ),
         "horizonte_dias": HORIZONTE_REPOSICAO_DIAS,
     }
@@ -189,9 +192,9 @@ def calcular_qtd_sugerida(item):
 
 def classificar_prioridade(item):
     """Urgência + rótulo. 'Parada de Linha' eleva o item dentro do mesmo tier.
-      🔴 Crítico   — disponível ≤ ROP (já no/abaixo do ponto de pedido);
-      🟠 Antecipar — ROP < disponível ≤ ROP + consumo × ANTECEDENCIA;
-      🟡 Atenção   — demais (ex.: piso do Neidson furado, sem consumo)."""
+    🔴 Crítico   — disponível ≤ ROP (já no/abaixo do ponto de pedido);
+    🟠 Antecipar — ROP < disponível ≤ ROP + consumo × ANTECEDENCIA;
+    🟡 Atenção   — demais (ex.: piso do Neidson furado, sem consumo)."""
     calc = calcular_ponto_reposicao(item)
     rop = calc["rop"]
     consumo = calc["consumo_diario"]
@@ -245,8 +248,7 @@ def montar_justificativa(item, calc=None, qtd=None, fornecedor=None):
         partes.append(f"guarda-chuva {_fmt_num(gc)} {unidade}")
 
     partes.append(
-        f"sugerido {qtd['qtd']} {unidade} p/ alvo de {_fmt_num(qtd['alvo'])} "
-        f"({qtd['alvo_origem']})"
+        f"sugerido {qtd['qtd']} {unidade} p/ alvo de {_fmt_num(qtd['alvo'])} ({qtd['alvo_origem']})"
     )
     if fornecedor and fornecedor.get("fornecedor"):
         partes.append(f"fornecedor sugerido: {fornecedor['fornecedor']}")
@@ -256,6 +258,7 @@ def montar_justificativa(item, calc=None, qtd=None, fornecedor=None):
 # ══════════════════════════════════════════════════════════════════════════════
 # GERAÇÃO DA FILA
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 def melhor_fornecedor_item(item_id):
     """Melhor fornecedor do item (menor último preço) via v2.4.0, ou None."""
@@ -335,13 +338,14 @@ def montar_sugestao(item, incluir_fornecedor=True):
 # NATUREZA (categoria da SC) + CENTRO DE CUSTO — derivados do HISTÓRICO (v2.8.0)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def _natureza_curta(natureza):
     """Remove o prefixo 'SOLICITAÇÃO DE COMPRA - ' para exibição curta."""
     if not natureza:
         return natureza
     for pref in ("SOLICITAÇÃO DE COMPRA - ", "SOLICITAÇÃO DE COMPRA – "):
         if natureza.startswith(pref):
-            return natureza[len(pref):]
+            return natureza[len(pref) :]
     return natureza
 
 
@@ -424,12 +428,14 @@ def gerar_sugestoes_reposicao(incluir_fornecedor=True, incluir_sem_movimentacao=
             # Já coberto pelo estoque + guarda-chuva; nada a comprar agora.
             continue
         sugestoes.append(montar_sugestao(item, incluir_fornecedor=incluir_fornecedor))
-    sugestoes.sort(key=lambda s: (
-        s["prioridade_tier"],
-        0 if s["parada_linha"] else 1,
-        s["cobertura_dias"],
-        s["part_number"] or "",
-    ))
+    sugestoes.sort(
+        key=lambda s: (
+            s["prioridade_tier"],
+            0 if s["parada_linha"] else 1,
+            s["cobertura_dias"],
+            s["part_number"] or "",
+        )
+    )
     # v2.8.0: enriquece com a natureza da SC (do histórico) e o CC sugerido (do
     # consumo real) — base das "SCs de mão beijada" agrupadas por natureza.
     if sugestoes:
@@ -438,7 +444,7 @@ def gerar_sugestoes_reposicao(incluir_fornecedor=True, incluir_sem_movimentacao=
         ccs = mapear_cc_por_item(ids)
         for s in sugestoes:
             s["categoria_sc"] = categorias.get(s["item_id"]) or CATEGORIA_SC_PADRAO
-            s["cc_sugerido"] = ccs.get(s["item_id"])   # None = sem CC significativo
+            s["cc_sugerido"] = ccs.get(s["item_id"])  # None = sem CC significativo
     return sugestoes
 
 
@@ -450,10 +456,12 @@ def agrupar_por_fornecedor(sugestoes):
     for s in sugestoes:
         chave = s.get("fornecedor_sugerido") or "Sem fornecedor sugerido"
         grupos.setdefault(chave, []).append(s)
-    return dict(sorted(
-        grupos.items(),
-        key=lambda kv: min(x["prioridade_tier"] for x in kv[1]),
-    ))
+    return dict(
+        sorted(
+            grupos.items(),
+            key=lambda kv: min(x["prioridade_tier"] for x in kv[1]),
+        )
+    )
 
 
 def agrupar_por_natureza(sugestoes):
@@ -469,10 +477,12 @@ def agrupar_por_natureza(sugestoes):
     for s in sugestoes:
         chave = s.get("categoria_sc") or CATEGORIA_SC_PADRAO
         grupos.setdefault(chave, []).append(s)
-    return dict(sorted(
-        grupos.items(),
-        key=lambda kv: min(x["prioridade_tier"] for x in kv[1]),
-    ))
+    return dict(
+        sorted(
+            grupos.items(),
+            key=lambda kv: min(x["prioridade_tier"] for x in kv[1]),
+        )
+    )
 
 
 def agrupar_por_tipo_material(sugestoes):
@@ -485,10 +495,12 @@ def agrupar_por_tipo_material(sugestoes):
     for s in sugestoes:
         chave = s.get("tipo_material") or TIPO_MATERIAL_PADRAO
         grupos.setdefault(chave, []).append(s)
-    return dict(sorted(
-        grupos.items(),
-        key=lambda kv: min(x["prioridade_tier"] for x in kv[1]),
-    ))
+    return dict(
+        sorted(
+            grupos.items(),
+            key=lambda kv: min(x["prioridade_tier"] for x in kv[1]),
+        )
+    )
 
 
 def _cc_sugerido_grupo(sugs):
@@ -509,23 +521,29 @@ def resumir_grupo_sc(label, sugs, criterio="natureza"):
     continua genérica para reaproveitar com `agrupar_por_natureza` se necessário."""
     if not sugs:
         return {
-            "label": label, "titulo": label, "justificativa": "", "n_itens": 0,
-            "qtd_total": 0, "valor_estimado": 0.0, "comprar_ate_min": None,
-            "cc_sugerido": CC_SUGERIDO_PADRAO, "prioridade_tier": 2,
-            "prioridade": "—", "itens": [],
+            "label": label,
+            "titulo": label,
+            "justificativa": "",
+            "n_itens": 0,
+            "qtd_total": 0,
+            "valor_estimado": 0.0,
+            "comprar_ate_min": None,
+            "cc_sugerido": CC_SUGERIDO_PADRAO,
+            "prioridade_tier": 2,
+            "prioridade": "—",
+            "itens": [],
         }
     n = len(sugs)
     rotulo_curto = _natureza_curta(label)
     n_criticos = sum(1 for s in sugs if s.get("prioridade_tier") == 0)
     tier_min = min(s.get("prioridade_tier", 2) for s in sugs)
-    prio_max = next(
-        (s["prioridade"] for s in sugs if s.get("prioridade_tier") == tier_min), "—"
-    )
+    prio_max = next((s["prioridade"] for s in sugs if s.get("prioridade_tier") == tier_min), "—")
     soma_consumo = sum(_num(s.get("consumo_diario")) for s in sugs)
     qtd_total = sum(int(_num(s.get("qtd_sugerida"))) for s in sugs)
     valor_estimado = sum(
         _num(s.get("qtd_sugerida")) * _num(s.get("fornecedor_ultimo_preco"))
-        for s in sugs if s.get("fornecedor_ultimo_preco")
+        for s in sugs
+        if s.get("fornecedor_ultimo_preco")
     )
     cc_sugerido = _cc_sugerido_grupo(sugs)
     # menor "comprar até" do grupo (item mais urgente); ignora None (sem consumo).
@@ -551,7 +569,7 @@ def resumir_grupo_sc(label, sugs, criterio="natureza"):
     linhas.append(f"Centro de custo sugerido: {cc_sugerido}.")
     return {
         "label": label,
-        "titulo": label,                       # o rótulo do grupo É o título
+        "titulo": label,  # o rótulo do grupo É o título
         "justificativa": " ".join(linhas),
         "n_itens": n,
         "qtd_total": qtd_total,
@@ -582,6 +600,7 @@ def gerar_scs_sugeridas(incluir_fornecedor=True, incluir_sem_movimentacao=False)
 # PERSISTÊNCIA / AUDITORIA (desfecho da decisão do comprador)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def registrar_desfecho_sugestao(sugestao, desfecho, sc_id=None, observacao=None, conn=None):
     """Grava a FOTO do cálculo + o desfecho (gerada|criou_sc|adiada|ignorada) em
     `sugestoes_reposicao`. É o registro de auditoria da decisão do comprador; não
@@ -590,19 +609,31 @@ def registrar_desfecho_sugestao(sugestao, desfecho, sc_id=None, observacao=None,
         raise ValueError(f"Desfecho inválido: {desfecho!r} (válidos: {REPOSICAO_DESFECHOS})")
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with transaction(conn) as c:
-        cur = c.execute("""
+        cur = c.execute(
+            """
             INSERT INTO sugestoes_reposicao
                 (item_id, data_geracao, cobertura_dias, rop, alvo, horizonte_dias,
                  qtd_sugerida, fornecedor_sugerido, prioridade, justificativa,
                  desfecho, sc_id, data_desfecho, observacao)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (
-            sugestao["item_id"], agora, sugestao.get("cobertura_dias"),
-            sugestao.get("rop"), sugestao.get("alvo"), sugestao.get("horizonte_dias"),
-            sugestao.get("qtd_sugerida"), sugestao.get("fornecedor_sugerido"),
-            sugestao.get("prioridade"), sugestao.get("justificativa"),
-            desfecho, sc_id, (None if desfecho == "gerada" else agora), observacao,
-        ))
+        """,
+            (
+                sugestao["item_id"],
+                agora,
+                sugestao.get("cobertura_dias"),
+                sugestao.get("rop"),
+                sugestao.get("alvo"),
+                sugestao.get("horizonte_dias"),
+                sugestao.get("qtd_sugerida"),
+                sugestao.get("fornecedor_sugerido"),
+                sugestao.get("prioridade"),
+                sugestao.get("justificativa"),
+                desfecho,
+                sc_id,
+                (None if desfecho == "gerada" else agora),
+                observacao,
+            ),
+        )
         return cur.lastrowid
 
 
@@ -618,14 +649,17 @@ def listar_sugestoes(desfecho=None, item_id=None, limit=200, conn=None):
     where = ("WHERE " + " AND ".join(clausulas)) if clausulas else ""
     params.append(limit)
     with transaction(conn) as c:
-        rows = c.execute(f"""
+        rows = c.execute(
+            f"""
             SELECT s.*, i.part_number, i.nome_item
             FROM sugestoes_reposicao s
             JOIN inventario i ON i.id = s.item_id
             {where}
             ORDER BY s.data_geracao DESC, s.id DESC
             LIMIT ?
-        """, params).fetchall()
+        """,
+            params,
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -633,12 +667,11 @@ def listar_sugestoes(desfecho=None, item_id=None, limit=200, conn=None):
 # PONTE PARA "CRIAR SC" (reaproveita criar_sc — não duplica o fluxo Nova SC)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def buscar_sc_id_por_numero(numero_sc, conn=None):
     """id da SC a partir do número (para amarrar o desfecho 'criou_sc' à SC)."""
     with transaction(conn) as c:
-        r = c.execute(
-            "SELECT id FROM solicitacoes_compra WHERE numero_sc=?", (numero_sc,)
-        ).fetchone()
+        r = c.execute("SELECT id FROM solicitacoes_compra WHERE numero_sc=?", (numero_sc,)).fetchone()
     return r["id"] if r else None
 
 

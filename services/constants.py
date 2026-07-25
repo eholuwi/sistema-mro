@@ -7,8 +7,8 @@ identicos aos que ja existiam; somente foram extraidos para um unico lugar."""
 import re
 
 # --- Status de estoque ---
-MARGEM_ATENCAO = 1.2           # limite da zona ATENCAO = estoque_minimo * 1.2
-FATOR_ESTOQUE_MAXIMO = 2       # estoque_maximo = estoque_minimo * 2
+MARGEM_ATENCAO = 1.2  # limite da zona ATENCAO = estoque_minimo * 1.2
+FATOR_ESTOQUE_MAXIMO = 2  # estoque_maximo = estoque_minimo * 2
 FATOR_ESTOQUE_SEGURANCA = 1.5  # estoque_seguranca = consumo * lead_time * 1.5
 
 # --- Consumo real / "Sem Movimentação" (v2.7.0) ---
@@ -25,23 +25,23 @@ SAIDA_REAL_WHERE = "tipo='saida' AND requisicao_id IS NOT NULL"
 STATUS_SEM_MOVIMENTACAO = "⚪ Sem Movimentação"
 
 # --- Consumo / ruptura ---
-JANELA_CONSUMO_DIAS = 30            # janela do consumo medio diario (dias)
-PREVISAO_RUPTURA_SEM_RISCO = 999   # dias; sentinela "sem ruptura prevista"
+JANELA_CONSUMO_DIAS = 30  # janela do consumo medio diario (dias)
+PREVISAO_RUPTURA_SEM_RISCO = 999  # dias; sentinela "sem ruptura prevista"
 ORDENACAO_RUPTURA_INFINITO = 9999  # sentinela de ordenacao (ruptura "infinita")
-RUPTURA_CRISE_DIAS = 15            # limite do filtro "focar em ruptura < N dias"
+RUPTURA_CRISE_DIAS = 15  # limite do filtro "focar em ruptura < N dias"
 
 # --- Aging de SC (dias desde a abertura) ---
-AGING_ALERTA_DIAS = 7    # > 7 dias  -> alerta  (amarelo)
+AGING_ALERTA_DIAS = 7  # > 7 dias  -> alerta  (amarelo)
 AGING_CRITICO_DIAS = 15  # > 15 dias -> critico (vermelho)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # v2.2.1 — Cálculos & Transparência
 # ══════════════════════════════════════════════════════════════════════════════
 
-JANELAS_CONSUMO = (30, 60, 90)   # janelas (dias) do consumo médio diário
-TENDENCIA_LIMIAR_PCT = 15        # |Δ%| > 15 -> "Alta"/"Queda"; senão "Estável"
-GIRO_JANELA_DIAS = 90            # janela padrão do giro / estoque médio
-LEAD_TIME_MAX_DIAS = 365         # cap de outlier no cálculo de Lead Time (SC7/recebimento)
+JANELAS_CONSUMO = (30, 60, 90)  # janelas (dias) do consumo médio diário
+TENDENCIA_LIMIAR_PCT = 15  # |Δ%| > 15 -> "Alta"/"Queda"; senão "Estável"
+GIRO_JANELA_DIAS = 90  # janela padrão do giro / estoque médio
+LEAD_TIME_MAX_DIAS = 365  # cap de outlier no cálculo de Lead Time (SC7/recebimento)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # v2.3.0 — Pilar Financeiro / Valoração
@@ -51,7 +51,7 @@ LEAD_TIME_MAX_DIAS = 365         # cap de outlier no cálculo de Lead Time (SC7/
 # Curva clássica 80/15/5 → A até 80%, B até 95%, C o restante.
 ABC_LIMIAR_A = 80
 ABC_LIMIAR_B = 95
-VALOR_CONSUMIDO_JANELA_DIAS = 90   # janela padrão de valor consumido / ABC-valor
+VALOR_CONSUMIDO_JANELA_DIAS = 90  # janela padrão de valor consumido / ABC-valor
 
 # ══════════════════════════════════════════════════════════════════════════════
 # v2.2.0 — Ingestão do Relatório de SCs / Pilar Financeiro / Snapshots
@@ -66,6 +66,7 @@ MOEDA_MAP = {
     2: "USD",
     3: "EUR",
 }
+
 
 def decodificar_moeda(codigo):
     """Converte o código de moeda (numérico ou texto) para sigla legível."""
@@ -85,6 +86,7 @@ def decodificar_moeda(codigo):
     except (ValueError, TypeError):
         return MOEDA_PADRAO
     return MOEDA_MAP.get(n, f"COD:{n}")
+
 
 # Retenção de fotos diárias de estoque (estoque_snapshots), em dias.
 SNAPSHOT_RETENCAO_DIAS = 730  # ~24 meses
@@ -137,9 +139,14 @@ TIPO_MATERIAL_PADRAO = "Não Classificado"
 # Centros de custo genéricos/contábeis que NÃO indicam o setor consumidor real
 # (dominam as saídas por serem conta residual/rótulos de ajuste). São ignorados ao
 # sugerir o CC de uma SC, para não sugerir "99000" em tudo.
-CC_GENERICOS = frozenset({
-    "99000 - ATIVO PASSIVO RES. F", "INVENTÁRIO", "EDIÇÃO", "",
-})
+CC_GENERICOS = frozenset(
+    {
+        "99000 - ATIVO PASSIVO RES. F",
+        "INVENTÁRIO",
+        "EDIÇÃO",
+        "",
+    }
+)
 
 # Rótulo quando não há CC significativo (todos os consumos do grupo são genéricos).
 CC_SUGERIDO_PADRAO = "(a definir)"
@@ -160,8 +167,25 @@ FATOR_CONVERSAO_PADRAO = 1.0
 # estoque com as unidades de fornecedor observadas nos dados reais (solventes em
 # L/KG/BB/BD, luvas em P=par, papel em PT…). Não entram em nenhum CHECK.
 UNIDADES_COMPRA_SUGERIDAS = (
-    "UN", "L", "LT", "KG", "G", "ML", "M", "P", "PAR", "PCS", "PT",
-    "BB", "BD", "BOMBONA", "CX", "RL", "PCT", "RM", "GL",
+    "UN",
+    "L",
+    "LT",
+    "KG",
+    "G",
+    "ML",
+    "M",
+    "P",
+    "PAR",
+    "PCS",
+    "PT",
+    "BB",
+    "BD",
+    "BOMBONA",
+    "CX",
+    "RL",
+    "PCT",
+    "RM",
+    "GL",
 )
 
 # Regex que extrai o fator de embalagem da DESCRIÇÃO do item (curadoria assistida).
@@ -207,6 +231,7 @@ def extrair_fator_embalagem(descricao):
         return None
     return valor if valor > 0 else None
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # v2.10.0 — Classificação de Demanda (Syntetos-Boylan), XYZ & Sazonalidade
 # ══════════════════════════════════════════════════════════════════════════════
@@ -231,19 +256,23 @@ SBC_BUCKET = "semana"
 # todo indicador explicável em 1 frase). Chave = (adi_alto, cv2_alto).
 PADROES_DEMANDA = {
     (False, False): {
-        "label": "Suave", "emoji": "🟢",
+        "label": "Suave",
+        "emoji": "🟢",
         "explicacao": "Sai com regularidade e em quantidades parecidas — o mais previsível de repor.",
     },
     (True, False): {
-        "label": "Intermitente", "emoji": "🔵",
+        "label": "Intermitente",
+        "emoji": "🔵",
         "explicacao": "Sai de vez em quando, mas em quantidades parecidas — previsível no tamanho, não no tempo.",
     },
     (False, True): {
-        "label": "Errático", "emoji": "🟠",
+        "label": "Errático",
+        "emoji": "🟠",
         "explicacao": "Sai com regularidade, porém em quantidades bem diferentes a cada vez.",
     },
     (True, True): {
-        "label": "Irregular", "emoji": "🔴",
+        "label": "Irregular",
+        "emoji": "🔴",
         "explicacao": "Sai raramente e em quantidades imprevisíveis — o mais difícil de planejar (lumpy).",
     },
 }
@@ -251,10 +280,16 @@ PADROES_DEMANDA = {
 # Rótulos/estruturas quando não há saída real suficiente para classificar o PADRÃO.
 # Distingue "nunca consumiu" de "consumiu pouquíssimo" (honestidade — 1 evento é dado,
 # mas não dá para medir intervalo nem variabilidade).
-PADRAO_DEMANDA_SEM_DADOS = {"label": "Sem dados", "emoji": "⚪",
-                            "explicacao": "Ainda não há consumo real registrado para classificar a demanda."}
-PADRAO_DEMANDA_POUCOS = {"label": "Poucos dados", "emoji": "⚪",
-                         "explicacao": "Só houve consumo real em 1 semana — poucos dados para classificar o padrão."}
+PADRAO_DEMANDA_SEM_DADOS = {
+    "label": "Sem dados",
+    "emoji": "⚪",
+    "explicacao": "Ainda não há consumo real registrado para classificar a demanda.",
+}
+PADRAO_DEMANDA_POUCOS = {
+    "label": "Poucos dados",
+    "emoji": "⚪",
+    "explicacao": "Só houve consumo real em 1 semana — poucos dados para classificar o padrão.",
+}
 
 # Classificação XYZ pela variabilidade do consumo MENSAL (coef. de variação = desvio
 # ÷ média). Rotulada "baixa confiança" enquanto houver poucos meses (ver abaixo):
@@ -265,8 +300,8 @@ XYZ_LIMIAR_Y = 1.0
 # Maturidade de dados: nº de meses distintos de consumo a partir do qual cada
 # indicador de série é considerado confiável. Abaixo disso, a UI mostra o rótulo de
 # maturidade ("baseado em N meses"). Sazonalidade exige o ciclo anual completo.
-XYZ_MIN_MESES_CONFIAVEL = 6         # abaixo → "baixa confiança"
-SAZONALIDADE_MIN_MESES = 12         # perfil sazonal só a partir de 1 ciclo anual
+XYZ_MIN_MESES_CONFIAVEL = 6  # abaixo → "baixa confiança"
+SAZONALIDADE_MIN_MESES = 12  # perfil sazonal só a partir de 1 ciclo anual
 
 # ══════════════════════════════════════════════════════════════════════════════
 # v5.3.0 (F4a) — Vocabulário de cadastro / filtros (centralizado da UI)
@@ -278,14 +313,42 @@ SAZONALIDADE_MIN_MESES = 12         # perfil sazonal só a partir de 1 ciclo anu
 
 IMPORTANCIAS = ["Parada de Linha", "Importante", "Admin"]
 
-TIPOS = ["Spare Parts", "Consumivel", "Expediente", "Uniforme", "Improdutivo",
-         "Químico", "ESD", "Vestimenta ESD", "Corte", "Ponta", "Limpeza Stencil",
-         "Impressão", "Embalagem"]
+TIPOS = [
+    "Spare Parts",
+    "Consumivel",
+    "Expediente",
+    "Uniforme",
+    "Improdutivo",
+    "Químico",
+    "ESD",
+    "Vestimenta ESD",
+    "Corte",
+    "Ponta",
+    "Limpeza Stencil",
+    "Impressão",
+    "Embalagem",
+]
 
-SETORES = ["Improdutivo", "Engenharia de SMT", "LED DRIVER", "MANUTENÇÃO",
-           "PRODUÇÃO", "QUALIDADE", "ALMOXARIFADO", "ADMINISTRATIVO", "SESMT"]
+SETORES = [
+    "Improdutivo",
+    "Engenharia de SMT",
+    "LED DRIVER",
+    "MANUTENÇÃO",
+    "PRODUÇÃO",
+    "QUALIDADE",
+    "ALMOXARIFADO",
+    "ADMINISTRATIVO",
+    "SESMT",
+]
 
 UNIDADES = ["UN", "CX", "GL", "RL", "PCT", "LT", "RM"]
 
-STATUS_SC = ["Aguardando Aprovação", "Em Cotação", "Pedido Emitido",
-             "Aguardando Entrega", "Parcial", "Recebido", "Cancelado"]
+STATUS_SC = [
+    "Aguardando Aprovação",
+    "Em Cotação",
+    "Pedido Emitido",
+    "Aguardando Entrega",
+    "Parcial",
+    "Recebido",
+    "Cancelado",
+]

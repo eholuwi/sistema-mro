@@ -1,11 +1,12 @@
 """Item 3 (v2.1.0): formulário de sugestões/feedback (registrar, listar, atualizar)."""
+
 from services import db_functions as F
 
 
 def test_registrar_feedback_status_novo(db):
-    ok, msg = F.registrar_feedback("Relato de bug", "Erro ao salvar",
-                                   "passos para reproduzir", autor="luis",
-                                   pagina_origem="Inventário")
+    ok, msg = F.registrar_feedback(
+        "Relato de bug", "Erro ao salvar", "passos para reproduzir", autor="luis", pagina_origem="Inventário"
+    )
     assert ok, msg
     fbs = F.listar_feedbacks()
     assert len(fbs) == 1

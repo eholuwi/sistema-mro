@@ -16,6 +16,7 @@ até lá a UI mostra o rótulo de maturidade, sem inventar perfil.
 As funções `_*_from_*` são PURAS (operam sobre listas de eventos/valores) para permitir
 testes determinísticos sem banco; as funções públicas apenas leem o banco e delegam.
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -24,16 +25,22 @@ from datetime import date, datetime
 from database import transaction
 from services.constants import (
     SAIDA_REAL_WHERE,
-    SBC_ADI_LIMIAR, SBC_CV2_LIMIAR,
-    XYZ_LIMIAR_X, XYZ_LIMIAR_Y, XYZ_MIN_MESES_CONFIAVEL,
+    SBC_ADI_LIMIAR,
+    SBC_CV2_LIMIAR,
+    XYZ_LIMIAR_X,
+    XYZ_LIMIAR_Y,
+    XYZ_MIN_MESES_CONFIAVEL,
     SAZONALIDADE_MIN_MESES,
-    PADROES_DEMANDA, PADRAO_DEMANDA_SEM_DADOS, PADRAO_DEMANDA_POUCOS,
+    PADROES_DEMANDA,
+    PADRAO_DEMANDA_SEM_DADOS,
+    PADRAO_DEMANDA_POUCOS,
 )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NÚCLEO PURO — matemática SBC/XYZ sobre listas (sem banco; testável isoladamente)
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 def _std_pop(valores):
     """Desvio-padrão populacional (÷n). Média 0 ou lista vazia → 0.0."""
@@ -42,7 +49,7 @@ def _std_pop(valores):
         return 0.0
     media = sum(valores) / n
     var = sum((v - media) ** 2 for v in valores) / n
-    return var ** 0.5
+    return var**0.5
 
 
 def _confianca_por_eventos(n):
@@ -61,10 +68,16 @@ def _demanda_from_eventos(eventos):
     do intervalo ÷ semanas com demanda; CV² = (desvio/média das qtds semanais)².
     Retorna dict uniforme (padrao/emoji/explicacao/adi/cv2/n_eventos/n_semanas/confianca).
     """
-    base = dict(padrao=PADRAO_DEMANDA_SEM_DADOS["label"],
-                emoji=PADRAO_DEMANDA_SEM_DADOS["emoji"],
-                explicacao=PADRAO_DEMANDA_SEM_DADOS["explicacao"],
-                adi=None, cv2=None, n_eventos=0, n_semanas=0, confianca="sem_dados")
+    base = dict(
+        padrao=PADRAO_DEMANDA_SEM_DADOS["label"],
+        emoji=PADRAO_DEMANDA_SEM_DADOS["emoji"],
+        explicacao=PADRAO_DEMANDA_SEM_DADOS["explicacao"],
+        adi=None,
+        cv2=None,
+        n_eventos=0,
+        n_semanas=0,
+        confianca="sem_dados",
+    )
     if not eventos:
         return base
 
@@ -76,25 +89,36 @@ def _demanda_from_eventos(eventos):
         baldes[semana] += float(qtd)
 
     tamanhos = [q for q in baldes.values() if q > 0]
-    n_eventos = len(tamanhos)                     # semanas COM demanda
-    n_semanas = max(baldes.keys()) + 1            # semanas no intervalo (inclusive)
+    n_eventos = len(tamanhos)  # semanas COM demanda
+    n_semanas = max(baldes.keys()) + 1  # semanas no intervalo (inclusive)
 
     if n_eventos <= 1:
         # 0 ou 1 ocorrência: não dá para medir variabilidade nem intervalo.
         rot = PADRAO_DEMANDA_SEM_DADOS if n_eventos == 0 else PADRAO_DEMANDA_POUCOS
-        base.update(padrao=rot["label"], emoji=rot["emoji"], explicacao=rot["explicacao"],
-                    n_eventos=n_eventos, n_semanas=n_semanas,
-                    confianca=("sem_dados" if n_eventos == 0 else "muito baixa"))
+        base.update(
+            padrao=rot["label"],
+            emoji=rot["emoji"],
+            explicacao=rot["explicacao"],
+            n_eventos=n_eventos,
+            n_semanas=n_semanas,
+            confianca=("sem_dados" if n_eventos == 0 else "muito baixa"),
+        )
         return base
 
     adi = n_semanas / n_eventos
     media = sum(tamanhos) / n_eventos
     cv2 = (_std_pop(tamanhos) / media) ** 2 if media > 0 else 0.0
     info = PADROES_DEMANDA[(adi >= SBC_ADI_LIMIAR, cv2 >= SBC_CV2_LIMIAR)]
-    return dict(padrao=info["label"], emoji=info["emoji"], explicacao=info["explicacao"],
-                adi=round(adi, 2), cv2=round(cv2, 2),
-                n_eventos=n_eventos, n_semanas=n_semanas,
-                confianca=_confianca_por_eventos(n_eventos))
+    return dict(
+        padrao=info["label"],
+        emoji=info["emoji"],
+        explicacao=info["explicacao"],
+        adi=round(adi, 2),
+        cv2=round(cv2, 2),
+        n_eventos=n_eventos,
+        n_semanas=n_semanas,
+        confianca=_confianca_por_eventos(n_eventos),
+    )
 
 
 def _xyz_from_meses(valores_mensais):
@@ -146,17 +170,18 @@ def _ponderado_from_serie(serie, hoje, n=3, pesos=None):
     Retorna float (un/mês) arredondado, ou None se NENHUM dos meses-alvo teve saída
     (item sem consumo recente = 'sem dados', para a UI mostrar '—')."""
     qtd_por_mes = {x["mes"]: float(x["qtd"]) for x in (serie or [])}
-    alvo = _ultimos_n_meses_completos(hoje, n)                 # antigo -> recente
+    alvo = _ultimos_n_meses_completos(hoje, n)  # antigo -> recente
     valores = [qtd_por_mes.get(mes, 0.0) for mes in alvo]
     if not any(v > 0 for v in valores):
         return None
-    pesos = pesos or list(range(1, n + 1))                     # [1..n] antigo->recente
+    pesos = pesos or list(range(1, n + 1))  # [1..n] antigo->recente
     return round(sum(v * p for v, p in zip(valores, pesos)) / sum(pesos), 2)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LEITURA DO BANCO — busca as saídas reais e delega ao núcleo puro
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 def _parse_dt(s):
     """'YYYY-MM-DD HH:MM:SS' → datetime (tolerante; None se não parsear)."""
@@ -219,15 +244,13 @@ def _sazonalidade_from_serie(serie):
     LIBERADO só com ≥12 meses (1 ciclo anual); abaixo disso `disponivel=False` +
     progresso, para a UI mostrar 'amadurecendo (N/12)' sem forjar um perfil."""
     n = len(serie)
-    base = {"disponivel": False, "meses_atuais": n,
-            "meses_necessarios": SAZONALIDADE_MIN_MESES, "perfil": []}
+    base = {"disponivel": False, "meses_atuais": n, "meses_necessarios": SAZONALIDADE_MIN_MESES, "perfil": []}
     if n < SAZONALIDADE_MIN_MESES:
         return base
     por_mes_ano = defaultdict(list)
     for x in serie:
         por_mes_ano[x["mes"].split("-")[1]].append(x["qtd"])  # '01'..'12'
-    perfil = [{"mes": mm, "media": round(sum(v) / len(v), 2)}
-              for mm, v in sorted(por_mes_ano.items())]
+    perfil = [{"mes": mm, "media": round(sum(v) / len(v), 2)} for mm, v in sorted(por_mes_ano.items())]
     return {**base, "disponivel": True, "perfil": perfil}
 
 

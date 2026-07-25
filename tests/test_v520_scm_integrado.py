@@ -7,6 +7,7 @@ Cobre as três camadas novas sem depender de rede nem de Streamlit em execução
 - os 3 endpoints novos de `services/scm_client.py` (sessão FALSA, sem rede);
 - persistência de `cotacao_codigo` no upsert do sync (F3 aditivo).
 """
+
 import pandas as pd
 import pytest
 
@@ -18,13 +19,16 @@ from ui.componentes import tabela as TB
 
 # ── Helpers de seed ───────────────────────────────────────────────────────────
 
+
 def _externo(db, sc_id, pn, desc="Externo", qtd=3.0, preco=9.9, origem="excel"):
     with db.transaction() as conn:
-        _upsert_item_sc_externo(conn, sc_id, pn, desc, qtd, "UN", preco, preco * qtd,
-                                "POEXT", "2026-07-20", origem)
+        _upsert_item_sc_externo(
+            conn, sc_id, pn, desc, qtd, "UN", preco, preco * qtd, "POEXT", "2026-07-20", origem
+        )
 
 
 # ── scm_consulta.listar_scs_consulta ──────────────────────────────────────────
+
 
 def test_listar_scs_consulta_consolida_pos_e_externos(db, make_sc):
     sc_id = make_sc(numero_sc="SC-900", part_number="PN-A", quantidade_solicitada=5)
@@ -47,6 +51,7 @@ def test_listar_scs_consulta_vazio(db):
 
 # ── scm_consulta.listar_itens_consulta ────────────────────────────────────────
 
+
 def test_listar_itens_consulta_marca_externos(db, make_sc):
     sc_id = make_sc(numero_sc="SC-901", part_number="PN-B", quantidade_solicitada=7)
     _externo(db, sc_id, "PN-EXT-2", origem="api_scm")
@@ -62,6 +67,7 @@ def test_listar_itens_consulta_marca_externos(db, make_sc):
 
 
 # ── scm_consulta.detalhes_sc_banco ────────────────────────────────────────────
+
 
 def test_detalhes_sc_banco_estrutura(db, make_sc):
     sc_id = make_sc(numero_sc="SC-902", part_number="PN-C", quantidade_solicitada=4)
@@ -81,8 +87,10 @@ def test_detalhes_sc_banco_inexistente(db):
 
 # ── scm_consulta.detalhes_sc_api (cliente FALSO; nunca lança) ─────────────────
 
+
 def test_detalhes_sc_api_offline(db, monkeypatch):
     from services import scm_client
+
     monkeypatch.setattr(scm_client, "esta_disponivel", lambda *a, **k: False)
     out = scm_consulta.detalhes_sc_api(41468, numero_po="F1", cotacao_codigo="CT1")
     assert out["disponivel"] is False
@@ -91,10 +99,24 @@ def test_detalhes_sc_api_offline(db, monkeypatch):
 
 def test_detalhes_sc_api_online_agrega_blocos(db, monkeypatch):
     from services import scm_client
+
     monkeypatch.setattr(scm_client, "esta_disponivel", lambda *a, **k: True)
-    monkeypatch.setattr(scm_client, "sc_timeline", lambda sid: {"items": [
-        {"produto": "PN-X", "quantidade": 2, "um": "UN", "valorUnitaro": 1.5,
-         "valorTotal": 3.0, "dataNecessidade": "2026-07-16"}]})
+    monkeypatch.setattr(
+        scm_client,
+        "sc_timeline",
+        lambda sid: {
+            "items": [
+                {
+                    "produto": "PN-X",
+                    "quantidade": 2,
+                    "um": "UN",
+                    "valorUnitaro": 1.5,
+                    "valorTotal": 3.0,
+                    "dataNecessidade": "2026-07-16",
+                }
+            ]
+        },
+    )
     monkeypatch.setattr(scm_client, "sc_timeline_v2", lambda sid: [{"title": "Criada"}])
     monkeypatch.setattr(scm_client, "cotacao_por_codigo", lambda c: {"codigo": c})
     monkeypatch.setattr(scm_client, "pedido", lambda f, n: [{"C7_NUM": n}])
@@ -112,51 +134,82 @@ def test_detalhes_sc_api_online_agrega_blocos(db, monkeypatch):
 
 def test_detalhes_sc_api_bloco_falho_nao_derruba(db, monkeypatch):
     from services import scm_client
+
     monkeypatch.setattr(scm_client, "esta_disponivel", lambda *a, **k: True)
     monkeypatch.setattr(scm_client, "sc_timeline", lambda sid: {"items": []})
     monkeypatch.setattr(scm_client, "sc_timeline_v2", lambda sid: [])
 
     def _boom(*a, **k):
         raise RuntimeError("API reciclando")
+
     monkeypatch.setattr(scm_client, "pedido", _boom)
     monkeypatch.setattr(scm_client, "aprovadores_pedido", _boom)
 
     out = scm_consulta.detalhes_sc_api(41468, numero_po="F64899")
     assert out["disponivel"] is True
     assert out["pedido"] is None and out["aprovadores"] is None
-    assert len(out["erros"]) == 2   # um aviso por bloco que falhou
+    assert len(out["erros"]) == 2  # um aviso por bloco que falhou
 
 
 # ── cotacao_codigo persistido no sync (F3) ────────────────────────────────────
 
+
 def test_upsert_sc_api_persiste_cotacao_codigo(db):
     cab = {
-        "sc_id_scm": 41468, "numero_sc": "41468", "solicitante": "Julyo",
-        "solicitante_codigo": "001053", "centro_custo": "DSI",
-        "descricao_sc": "SC de teste", "status_code": "03",
-        "data_abertura": "2026-07-16", "data_aprovacao": "2026-07-16",
-        "justificativa": "urgente", "prioridade_critica": True,
+        "sc_id_scm": 41468,
+        "numero_sc": "41468",
+        "solicitante": "Julyo",
+        "solicitante_codigo": "001053",
+        "centro_custo": "DSI",
+        "descricao_sc": "SC de teste",
+        "status_code": "03",
+        "data_abertura": "2026-07-16",
+        "data_aprovacao": "2026-07-16",
+        "justificativa": "urgente",
+        "prioridade_critica": True,
         "cotacao_codigo": "CT41468",
     }
     resumo = scm_sync._resumo_zerado()
     with db.transaction() as conn:
         scm_sync._upsert_sc_api(conn, cab, [], resumo, [])
         row = conn.execute(
-            "SELECT cotacao_codigo FROM solicitacoes_compra WHERE numero_sc='41468'").fetchone()
+            "SELECT cotacao_codigo FROM solicitacoes_compra WHERE numero_sc='41468'"
+        ).fetchone()
     assert row["cotacao_codigo"] == "CT41468"
 
 
 # ── ui/componentes/filtros.py (puro) ─────────────────────────────────────────
 
+
 def _df_scs():
-    return pd.DataFrame([
-        {"numero_sc": "SC-1", "solicitante": "João", "status": "Em Cotação",
-         "comprador": "Miguel", "data_abertura": "2026-07-01", "pos": ""},
-        {"numero_sc": "SC-2", "solicitante": "Maria", "status": "Recebido",
-         "comprador": "Davi", "data_abertura": "2026-06-01", "pos": "PO-9"},
-        {"numero_sc": "SC-3", "solicitante": "José", "status": "Em Cotação",
-         "comprador": "Miguel", "data_abertura": "2026-05-01", "pos": ""},
-    ])
+    return pd.DataFrame(
+        [
+            {
+                "numero_sc": "SC-1",
+                "solicitante": "João",
+                "status": "Em Cotação",
+                "comprador": "Miguel",
+                "data_abertura": "2026-07-01",
+                "pos": "",
+            },
+            {
+                "numero_sc": "SC-2",
+                "solicitante": "Maria",
+                "status": "Recebido",
+                "comprador": "Davi",
+                "data_abertura": "2026-06-01",
+                "pos": "PO-9",
+            },
+            {
+                "numero_sc": "SC-3",
+                "solicitante": "José",
+                "status": "Em Cotação",
+                "comprador": "Miguel",
+                "data_abertura": "2026-05-01",
+                "pos": "",
+            },
+        ]
+    )
 
 
 def test_filtrar_texto_acento_insensivel():
@@ -182,14 +235,14 @@ def test_aplicar_pills_and():
 
 def test_filtrar_periodo_e_multiselect():
     df = _df_scs()
-    dentro = FL._filtrar_periodo(df, "data_abertura",
-                                 pd.Timestamp("2026-05-15"), pd.Timestamp("2026-07-15"))
+    dentro = FL._filtrar_periodo(df, "data_abertura", pd.Timestamp("2026-05-15"), pd.Timestamp("2026-07-15"))
     assert set(dentro["numero_sc"]) == {"SC-1", "SC-2"}
     so_miguel = FL._filtrar_multiselect(df, "comprador", ["Miguel"])
     assert set(so_miguel["numero_sc"]) == {"SC-1", "SC-3"}
 
 
 # ── ui/componentes/tabela.py (puro) ──────────────────────────────────────────
+
 
 def test_paginar():
     df = pd.DataFrame({"x": range(0, 125)})
@@ -206,6 +259,7 @@ def test_paginar():
 
 
 # ── services/scm_client.py — 3 endpoints novos (sessão FALSA) ─────────────────
+
 
 class _FakeResp:
     def __init__(self, payload):
@@ -230,6 +284,7 @@ def _fake_session(monkeypatch, capturar):
 
 def test_sc_timeline_v2_endpoint(monkeypatch):
     from services import scm_client
+
     cap = {"payload": {"succeeded": True, "errors": [], "result": [{"title": "Criada"}]}}
     _fake_session(monkeypatch, cap)
     scm_client.sc_timeline_v2.clear()
@@ -240,6 +295,7 @@ def test_sc_timeline_v2_endpoint(monkeypatch):
 
 def test_cotacao_por_codigo_endpoint(monkeypatch):
     from services import scm_client
+
     cap = {"payload": {"succeeded": True, "errors": [], "result": {"codigo": "CT41468"}}}
     _fake_session(monkeypatch, cap)
     scm_client.cotacao_por_codigo.clear()
@@ -250,6 +306,7 @@ def test_cotacao_por_codigo_endpoint(monkeypatch):
 
 def test_aprovadores_pedido_endpoint(monkeypatch):
     from services import scm_client
+
     cap = {"payload": [{"CR_USER": "000719", "CR_STATUS": "02"}]}
     _fake_session(monkeypatch, cap)
     scm_client.aprovadores_pedido.clear()
