@@ -1,0 +1,43 @@
+name: verify
+
+# Mesmo gate do `.\verify.ps1` local, a cada push/PR. Fecha o loop "proativo": a quebra
+# aparece sem ninguem precisar lembrar de olhar — e pega divergencia entre maquinas, que
+# ja custou caro neste projeto (trabalho da v5.x ficou 9 dias so numa branch).
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  # Push novo na mesma branch cancela a execucao anterior — sem fila inutil.
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Mesma minor do ambiente de desenvolvimento validado. Se mudar aqui, mude
+          # tambem o runtime do servidor (docs/INSTALACAO_SERVIDOR.md).
+          python-version: "3.14"
+          cache: pip
+
+      - name: Instalar dependencias
+        # So e deterministico porque os requirements estao com versao fixada.
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: ruff format --check
+        run: ruff format --check .
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: pytest
+        # Roda em Linux de proposito: alem de ser mais rapido que runner Windows, pega
+        # suposicao de path especifica de Windows. As amostras da API SCM nao existem
+        # aqui (PII, fora do repo) — os testes que dependem delas pulam sozinhos.
+        run: pytest -q
