@@ -28,7 +28,11 @@ RAIZ = Path(__file__).resolve().parents[1]
 ARQUIVOS = ["app.py", "database.py", "inventus_logo.png"]
 
 # Pacotes Python + assets. `.streamlit/` entra com a config de PRODUCAO (ver abaixo).
-PASTAS = ["services", "ui", "migrations"]
+# NAO incluir `migrations/`: o schema e as migracoes vivem dentro de `database.py`
+# (`criar_banco()` + `_migrar()`), aplicadas em runtime. Aquele diretorio so tinha um
+# README descrevendo migracoes que nunca existiram — empacota-lo levava um arquivo
+# morto para o servidor.
+PASTAS = ["services", "ui"]
 
 # Nunca empacotar, mesmo dentro das pastas acima.
 IGNORAR = {"__pycache__", ".pytest_cache", ".ruff_cache"}
