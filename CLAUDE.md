@@ -15,7 +15,7 @@ contexto.
 | UI — páginas (`render()`) | `ui/paginas/` — as 9 rotas; `ROTAS_MIGRADAS == ROTAS` |
 | UI — componentes reusáveis | `ui/componentes/` (`filtros`, `tabela`, `selecao`, `status`, `graficos`) |
 | Lógica + acesso a dados | `services/db_functions.py` |
-| Banco / schema / migração | `database.py`, `migrations/` |
+| Banco / schema / migração | `database.py` — `criar_banco()` cria e `_migrar()` migra, em runtime |
 | Planejamento (min/máx, cobertura, lead time) | `services/planejamento.py` |
 | Curva ABC / classificação de demanda | `services/classificacao.py` |
 | Dashboards / KPIs / drill-down | `services/dashboards.py`, `services/drill_down.py` |
@@ -31,10 +31,10 @@ contexto.
 | Changelog | `changelog/*.md` |
 
 A camada de interface vive em **`ui/`** (regra de dependência: `ui/paginas/*` importa `ui/*` e
-`services/*`; `services/*` nunca importa `ui/`). As pastas `controllers/`, `repositories/`,
-`models/`, `core/`, `app/`, `pages/`, `dashboards/` são scaffolding **vazio** (só `__init__.py`/
-README) — não há lógica ali; serão removidas numa fase posterior (`pages/` é diretório mágico do
-Streamlit — evitar).
+`services/*`; `services/*` nunca importa `ui/`).
+
+⚠️ **Não recriar `pages/`** — é diretório mágico do Streamlit e conflita com o roteador próprio
+(`ui/router.py`). Foi eliminado na F1 de propósito.
 
 ## Comandos
 

@@ -9,20 +9,7 @@
 
 line-length = 110
 target-version = "py311"
-extend-exclude = [
-    "venv",
-    "graphify-out",
-    # Scaffolding vazio herdado do setup antigo (so __init__.py/README). Some numa
-    # fase posterior; nao vale gastar lint com ele.
-    "app",
-    "controllers",
-    "core",
-    "dashboards",
-    "models",
-    "pages",
-    "reports",
-    "repositories",
-]
+extend-exclude = ["venv", "graphify-out", "vault"]
 
 [lint]
 # RAMPA — fase 1: so erros reais, nada de estilo.
