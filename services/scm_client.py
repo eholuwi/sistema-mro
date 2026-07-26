@@ -1,11 +1,14 @@
 """v4.10.0 — Cliente de LEITURA da API do SCM (Solicitação de Compras).
 
-Consome a API REST do SCM (mapeada em `04_MRO System/openapi/`) para enriquecer o MRO
-com o que já está em processo de compra (SCs em cotação, pedidos, fornecedores). É o
-"esboço aprovado" da seção 4.3 do `RELATORIO_FINAL.md`: um ÚNICO módulo dentro de
-`services/`, uma função por endpoint GET, com cache do Streamlit.
+Consome a API REST do SCM para enriquecer o MRO com o que já está em processo de
+compra (SCs em cotação, pedidos, fornecedores). Um ÚNICO módulo dentro de `services/`,
+uma função por endpoint GET, com cache do Streamlit.
 
-Regras invioláveis (ver `openapi/RELATORIO_FINAL.md` §4.4 e §11):
+A documentação da API (`openapi/`, `RELATORIO_FINAL.md`) fica FORA deste repositório —
+contém dados reais de fornecedores e funcionários, e o repo é público. As regras abaixo
+são o resumo do que importa; a fonte está com o Luis, junto de `SCM_API_Docs/`.
+
+Regras invioláveis:
 - **API anônima na rede interna** — não há login/token; basta rota até `mansrvapp03:5715`.
 - **SOMENTE GET.** Nunca chamar endpoints de escrita (POST/PUT/DELETE) — eles alteram
   dados reais do SCM em produção (gerar pedido no Protheus, enviar e-mail…).

@@ -38,12 +38,7 @@ não iniciada.
 Fora do escopo da evolução v5.x (decisão do Luis na entrevista) — retomar depois, como trilha
 separada (ver estudo em `docs/REQUISICOES_DIGITAIS_ESTUDO.md`).
 
-Continuar o Sistema MRO (Inventus Power). Leia @docs/HANDOFF.md (seção "STATUS ATUAL" no topo) e
-@docs/PLANO_V5_EVOLUCAO.md — plano da grande evolução v5.x já aprovado (SCM Integrado com sync
-API→banco, refatoração faseada do app.py, distribuição via servidor). F1 (v5.0.0) a F4a (v5.3.0)
-estão COMMITADAS e PUSHADAS na branch feat/v5.0.0 — 7/7 páginas de produto já vivem em ui/paginas/;
-só Movimentação e Ficha 360 seguem inline no app.py (1.383 linhas). Trabalhe na branch feat/v5.0.0
-(git pull antes). Próximo passo: F4b (v5.4.0) — migrar Movimentação + Ficha 360 (as duas críticas,
-1 commit por página), extrair drill_down.py e padronizar o Monitor, + passada global de UX. Siga a
-skill atualizar-sistema-mro, valide cada fase (pytest + smoke + app real) e PARE para aprovação antes
-de cada commit.
+Continuar o Sistema MRO (Inventus Power). Leia @docs/HANDOFF.md — a seção "STATUS ATUAL" no topo é
+a autoridade sobre o que já foi feito e o que vem a seguir. Trabalhe na branch `feat/v5.0.0`
+(`git pull` antes). Siga a skill `atualizar-sistema-mro`, feche cada etapa com `.\verify.ps1` verde
+e PARE para aprovação antes de cada commit.

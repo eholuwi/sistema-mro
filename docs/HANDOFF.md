@@ -29,7 +29,9 @@
   (`753bf14`, + extrai `ui/componentes/graficos.py`) com **fix do import `fmt`** (`bbf3190` — o
   Dashboard referenciava `fmt` sem importar; só estourava com Relatório de SCs importado) e a nova
   **guarda estática `tests/test_v530_lint_imports.py`** (pyflakes sobre `app.py` + `ui/**`, falha só
-  em `UndefinedName`; `pyflakes` em `requirements-dev.txt`), **CP4 Controle de SC** (`db765cb` — a
+  em `UndefinedName`; `pyflakes` em `requirements-dev.txt`) — *aposentada em 25/07 pelo `ruff check`
+  com `F`, que cobre o mesmo `F821` no repo inteiro; cumpriu o papel: as ~4.500 linhas migradas
+  chegaram ao primeiro lint com zero nomes indefinidos*, **CP4 Controle de SC** (`db765cb` — a
   maior página, 8 abas + 6 helpers, migração FIEL; aba Monitor mantém o aviso p/ SCM Integrado; 9
   escritas chamam `invalidar_leituras()`; morto `_dialog_pedido_guarda_chuva`/`_clear_gc_edit`
   removido). No **fechamento** (commit de refactor): limpeza dos **83 imports órfãos** do `app.py`

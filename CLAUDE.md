@@ -9,7 +9,7 @@ contexto.
 
 | Domínio | Arquivo |
 |---|---|
-| UI — shell (só setup + sidebar + despacho) | `app.py` (44 linhas; a migração terminou na F4b) |
+| UI — shell (só setup + sidebar + despacho) | `app.py` (49 linhas; a migração terminou na F4b) |
 | UI — router (fonte única do menu) | `ui/router.py` (`ROTAS`, `ROTAS_MIGRADAS`, `render_pagina`) |
 | UI — sidebar / tema / formatos / cache | `ui/sidebar.py`, `ui/tema.py`, `ui/formatos.py`, `ui/cache.py` |
 | UI — páginas (`render()`) | `ui/paginas/` — as 9 rotas; `ROTAS_MIGRADAS == ROTAS` |
@@ -44,7 +44,7 @@ venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.t
 
 .\verify.ps1                                     # GATE: format + lint + testes → exit 0/1
 .\verify.ps1 -Rapido                             # pula o format check (loop apertado)
-venv\Scripts\python.exe -m pytest -q             # só os testes (~1 min, 517)
+venv\Scripts\python.exe -m pytest -q             # só os testes (~1 min, 491)
 venv\Scripts\python.exe -m streamlit run app.py  # sobe o app
 python scripts/release.py                        # empacota p/ o servidor → dist/
 ```
