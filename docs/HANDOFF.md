@@ -122,15 +122,41 @@
   **Backlog paralelo (ADIADO da F4b, decisão Luis):** passada global de UX — adotar
   `barra_filtros`/`tabela_paginada` nas tabelas de migração pura da F4a + estados vazios/cabeçalhos
   padronizados, **página a página com validação** (nunca em bloco).
-- **🎯 PRÓXIMO — harness de verificação (branch `chore/harness-v5`).** O projeto não tem lint,
-  formatador nem CI, e o `.claude/settings.json` usa chaves inventadas que o Claude Code ignora
-  (nenhuma instrução de sessão jamais chegou ao modelo). Plano: `ruff` (ruleset em rampa `E9`,`F`) +
-  `verify.ps1` (format + lint + testes → exit 0/1) como critério de parada objetivo, hooks reais
-  (formata ao editar; bloqueia o fim do turno com teste quebrado), CI no GitHub Actions, o subagente
-  `validador-mro` passando a rodar `verify.ps1`, e a remoção da governança legada das 9 personas
-  (`.claude/pre-session.md`, `MRO_QUICKSTART.md`, `skills/`, `prompts/`, `templates/`, `config/`,
-  `hooks/`) que ainda **contradiz** o `CLAUDE.md` atual — junto com os guardas
-  `tests/test_setup_definitivo.py` e `scripts/validate_project.py`, que exigem essas pastas.
+- **v5.5.1 — auditoria e limpeza do repositório. CONCLUÍDA.** 219 → 178 arquivos rastreados,
+  −2.121 linhas, **sem mudança de comportamento** (491 testes do início ao fim). Saíram: 9 pastas
+  de scaffolding vazio, 8 docs de governança que contradiziam o estado atual, o Blueprint rev.1
+  corrompido, o `LEIA-ME.md` (duplicata do README) e o `.claudeignore` (nome legado).
+  **Dado operacional destrackeado** (segue no disco): export do inventário e `vault/` — este
+  havia sido escrito sob a premissa documentada de ser gitignored, premissa revertida depois sem
+  reauditar o conteúdo (colegas nomeados com cargo, valores em R$ reais, material de outro setor);
+  o repo é público. ⚠️ O histórico antigo **não** foi reescrito — decisão consciente para não
+  quebrar o clone da outra máquina. README reescrito (474 → 76 linhas; o antigo nunca mencionava
+  `ui/`) e `docs/FUNCIONALIDADES.md` criado com o conteúdo que valia. Corrigido de quebra um
+  defeito do `scripts/release.py`, que empacotava `migrations/` para o servidor.
+  Ver `changelog/5.5.1.md`.
+- **Harness de verificação — CONCLUÍDO e MESCLADO na `feat/v5.0.0`.** O projeto não tinha lint,
+  formatador nem CI, e o `.claude/settings.json` usava chaves inventadas que o Claude Code ignora
+  (nenhuma instrução de sessão jamais chegou ao modelo). Entregue: `ruff` (ruleset em rampa
+  `E9`,`F`), **`.\verify.ps1` como critério de parada objetivo**, hooks reais (formata o `.py`
+  editado; bloqueia o fim do turno com a suíte quebrada), CI em `.github/workflows/verify.yml`
+  rodando em toda branch, e o subagente `validador-mro` usando o **exit code** do gate como
+  veredito. Removida a governança legada das 9 personas, que contradizia o `CLAUDE.md`, junto com
+  os dois guardas que exigiam aquelas pastas. Primeiro CI verde em 25/07.
+  **⚠️ Os hooks só carregam ao reiniciar o Claude Code** — `settings.json` é lido no início da sessão.
+
+- **🎯 PRÓXIMO — passada global de UX** (adiada da F4b, decisão do Luis): adotar
+  `barra_filtros`/`tabela_paginada` nas tabelas que a F4a migrou cruas, **página a página com
+  validação**, nunca em bloco. Levantamento feito: `saldo_estoque` e `scm_integrado` já adotaram;
+  `controle_sc` (11 tabelas cruas, a maior página) e `dashboard` são os alvos da F4a;
+  `movimentacao` fica por último (é a que mais escreve estoque). Atenção: dois casos são
+  `st.data_editor` (grade editável) e **não** convertem — `tabela_paginada` é somente-leitura.
+  O ganho maior não é paginar, é padronizar estado vazio e cabeçalhos (`page_size=0` desliga a
+  paginação e mantém o resto).
+
+  Também em aberto, dependendo de estar na empresa: validar os **códigos de status da API SCM**
+  (`01/03/05/09` são inferidos, nunca confirmados com dado real — o comprador pode estar vendo
+  status errado) e a **validação física da F5** (reboot-test, acesso de outra máquina,
+  backup/restore).
 - **Versão anterior: v4.7.0 — Requisição Digital (MVP).** Implementada e testada em
   `feat/v3.10.0-4.0.0-ux-redesign`; **aguardando commit** (o commit é feito só após o OK do Luis +
   validação no app real, regra do projeto). A **Requisição** ganhou **ciclo de vida**:

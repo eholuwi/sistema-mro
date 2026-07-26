@@ -21,7 +21,7 @@ from services.db_functions import listar_inventario, listar_scs
 from ui.router import opcoes_menu, icones_menu
 from ui.tema import paleta_atual
 
-VERSAO = "v5.5.0"
+VERSAO = "v5.5.1"
 
 # v5.5.0 (F5) — caminho ABSOLUTO do logo. Em dev o Streamlit roda com cwd = raiz do
 # projeto e o caminho relativo funcionava; no servidor o `iniciar_mro.bat` sobe a partir
