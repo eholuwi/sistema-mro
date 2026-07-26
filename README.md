@@ -45,16 +45,13 @@ Este repositório foi organizado para funcionar como uma base de desenvolvimento
 
 ## Documentação relevante
 
+- [CLAUDE.md](CLAUDE.md) — regras, convenções e mapa de módulos (fonte única)
 - [docs/HANDOFF.md](docs/HANDOFF.md) — estado atual e continuidade entre sessões/máquinas
 - [docs/INSTALACAO_SERVIDOR.md](docs/INSTALACAO_SERVIDOR.md) — instalação no PC-servidor
-- [docs/ARQUITETURA.md](docs/ARQUITETURA.md)
-- [docs/FLUXO_DESENVOLVIMENTO.md](docs/FLUXO_DESENVOLVIMENTO.md)
-- [docs/BANCO_DE_DADOS.md](docs/BANCO_DE_DADOS.md)
-- [docs/REGRAS_DE_NEGOCIO.md](docs/REGRAS_DE_NEGOCIO.md)
-- [docs/TESTES.md](docs/TESTES.md)
-- [docs/QUALIDADE.md](docs/QUALIDADE.md)
-- [docs/ROADMAP_12_MESES.md](docs/ROADMAP_12_MESES.md)
-- [docs/MCP.md](docs/MCP.md)
+- [docs/PLANO_V5_EVOLUCAO.md](docs/PLANO_V5_EVOLUCAO.md) — plano da refatoração v5.x
+- [docs/REGRAS_DE_NEGOCIO.md](docs/REGRAS_DE_NEGOCIO.md) — ciclo da Requisição Digital
+- [docs/REQUISICOES_DIGITAIS_ESTUDO.md](docs/REQUISICOES_DIGITAIS_ESTUDO.md) — estudo de lacunas
+- [docs/prompt.md](docs/prompt.md) — backlog vivo
 
 ---
 

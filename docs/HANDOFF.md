@@ -227,7 +227,7 @@ Também há tools MCP: `mcp__graphify__query_graph`, `get_node`, `get_neighbors`
   - `tests/` — **303 testes** (pytest). Fixtures em `conftest.py`: `db`, `make_item`, `registrar_consumo`, `make_sc`, `xlsx_factory`.
 - **Dados:** `mro.db` (produção real, ~360 itens). **Nunca rodar smoke contra o mro.db real** — copiar para tmp e apontar `database.DB_PATH`.
 - **Versionamento:** semver por branch `feat/vX.Y.Z` + `changelog/X.Y.Z.md`. Rótulo em `app.py` (page_config + sidebar) e log em `database.py`. **Agora: v3.3.0.**
-- **Docs de contexto** (na raiz `docs/`, adicionados pelo usuário): `Contexto do Sistema MRO e Principal Problemática.md`, `METODOLOGIA_SCs_Explicada.md`, `Blueprint Inteligência de Materiais.md`, `Relatório de SCs 30.06.xlsx`. O backlog vivo é **`prompt.md`** (na raiz).
+- **Docs de contexto** (na raiz `docs/`, adicionados pelo usuário): `Contexto do Sistema MRO e Principal Problemática.md`, `METODOLOGIA_SCs_Explicada.md`, `Blueprint - Plataforma de Inteligencia de Materiais.md` (rev. 3). O backlog vivo é **`docs/prompt.md`**. — *Nota (25/07): a rev. 1 do Blueprint (`Blueprint Inteligência de Materiais.md`) foi removida — era um despejo truncado, sem a primeira letra do arquivo e com as tabelas achatadas em prosa, integralmente contido na rev. 3. O `Relatório de SCs 30.06.xlsx` nunca esteve no repositório.*
 
 ---
 
