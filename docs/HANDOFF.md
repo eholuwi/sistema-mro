@@ -6,8 +6,25 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 25/07/2026 (leia isto, não a seção 1-7 abaixo para status)
+## STATUS ATUAL — atualizado em 26/07/2026 (leia isto, não a seção 1-7 abaixo para status)
 
+- **⚠️ A BRANCH DE TRABALHO É `feat/v5.0.0`, NÃO a `main`.** Decisão do Luis em 26/07/2026:
+  seguir na feature branch, **sem** abrir PR para a `main` por enquanto. A `main` está parada em
+  **v4.5.5** (`21fc73e`, 16/07) e já são 40+ commits de diferença — quem clonar o repositório cai
+  nela e vê um sistema três versões atrás (foi exatamente o que aconteceu com o outro PC do Luis).
+  **Primeiro comando de qualquer sessão: `git fetch --all --prune` e `git checkout feat/v5.0.0`.**
+  A promoção para a `main` fica pendente, para quando a v5.x fechar.
+- **Auditoria do repositório (v5.5.1) CONCLUÍDA, PUSHADA e com CI verde** (`a383c1c`). 7 commits,
+  **219 → 178 arquivos rastreados**, −2.121 linhas líquidas, **sem mudança de comportamento** (491
+  testes do início ao fim). Saíram: 9 diretórios de scaffolding vazio, 8 docs de governança
+  obsoletos, `LEIA-ME.md`, o Blueprint rev.1 corrompido e o `.claudeignore`; o export de inventário
+  e o `vault/` foram destrackeados (`--cached`, seguem no disco). README reescrito 474 → 76 linhas
+  e `docs/FUNCIONALIDADES.md` criado com o conteúdo de produto que valia. Corrigido de quebra o
+  `scripts/release.py`, que empacotava `migrations/` para o servidor. Ver `changelog/5.5.1.md`.
+- **Branches locais sobrando** (nenhuma apagada sem ordem): `chore/harness-v5` está **inteiramente
+  contida** na `feat/v5.0.0` (segura de apagar, local e remota); `chore/harness-engineering` (7
+  commits) e `fix/backup-wal-checkpoint` (2 commits) são o harness e o fix do WAL construídos sobre
+  a `main` obsoleta — **o conteúdo das duas já foi refeito na v5.x**, só existem localmente.
 - **Evolução v5.x — F4b (v5.4.0) CONCLUÍDA, COMMITADA e PUSHADA na `feat/v5.0.0`.**
   Migração das 2 páginas críticas (as últimas inline) para `ui/paginas/`, **1 commit por página**, cada
   um validado no app real (Luis): **CP1 Ficha 360** (`56a2c80` — read-only; removido o morto
