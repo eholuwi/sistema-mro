@@ -34,6 +34,7 @@ from services.db_functions import (
     listar_setores_conhecidos,
     sincronizar_setores_config,
     criar_requisicao,
+    criar_requisicao_com_baixa,
     listar_requisicoes,
     listar_itens_requisicao,
     mapa_pn_por_requisicao,
@@ -628,6 +629,323 @@ def _fila_visao_solicitante():
         st.success(f"Nome **{nome}** preenchido. Abra a aba **Nova Requisição** acima para montar o pedido.")
 
 
+def _req_bloco_identificacao():
+    """Bloco 1 — Identificação da Demanda. Comum aos dois fluxos (v5.7.0).
+
+    Sem `key` nos widgets, de propósito: a aba Nova renderiza antes da Fila e definir o
+    `session_state` de um widget já instanciado nesta mesma execução levantaria
+    `StreamlitAPIException` (o "Abrir nova requisição como…" da Visão do Solicitante
+    escreve `_req_emit_prefill`). Como só um dos fluxos renderiza por execução, os rótulos
+    iguais fazem o Streamlit reaproveitar o estado — trocar Padrão↔Digital preserva o que
+    já foi digitado, que é o comportamento desejado."""
+    st.markdown("##### 1. Identificação da Demanda")
+    c1, c2, c3 = st.columns(3)
+    req_setor = c1.selectbox(
+        "Setor Solicitante *",
+        options=[""] + listar_setores_conhecidos(),
+        index=0,
+        accept_new_options=True,
+        help="Escolha um setor já usado ou digite um novo para padronizar o cadastro.",
+    )
+    req_emit = c2.text_input("Nome do Emitente *", value=st.session_state.get("_req_emit_prefill", ""))
+    opcoes_cc = [""] + (listar_valores("centro_custo") or [])
+    req_cc = c3.selectbox("Centro de Custo *", options=opcoes_cc, index=0)
+    return req_setor, req_emit, req_cc
+
+
+def _req_bloco_materiais(PAL, ajuda_qtd):
+    """Bloco 2 — Adicionar Materiais + lista temporária. Comum aos dois fluxos (v5.7.0).
+
+    `ajuda_qtd` muda porque o significado de "Qtd Solicitada" muda: na Digital a entrega é
+    decidida depois, na Fila; na Padrão o material sai agora. A lista vive em
+    `st.session_state.itens_req` e é compartilhada pelos dois fluxos — trocar o seletor não
+    faz o usuário remontar o pedido."""
+    st.markdown("##### 2. Adicionar Materiais")
+    _, item_req_add, _ = sel_material("Pesquise o material para requisitar", "sel_req_add")
+
+    if item_req_add:
+        # Card de disponibilidade rápida (cores acompanham o tema via PAL)
+        st.markdown(
+            f"""
+            <div style="border: 1px solid {PAL["painel_borda"]}; padding: 10px; border-radius: 5px; background-color: {PAL["painel_bg"]}; margin-bottom: 10px;">
+                <span style="color: {PAL["accent"]}; font-weight: bold;">DISPONÍVEL:</span> {item_req_add.get("estoque_atual", 0)} {item_req_add.get("unidade", "UN")}
+            </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+    with st.form("form_add_item_req", clear_on_submit=True):
+        qtd_sol = st.number_input("Qtd Solicitada *", min_value=1.0, step=1.0, value=1.0, help=ajuda_qtd)
+        add_item = st.form_submit_button(":material/add: ADICIONAR À LISTA", width="stretch")
+
+    if add_item:
+        if not item_req_add:
+            st.warning(":material/warning: Selecione um material antes de adicionar.")
+        else:
+            st.session_state.itens_req.append(
+                {
+                    "item_id": item_req_add["id"],
+                    "part_number": item_req_add["part_number"],
+                    "nome_item": item_req_add["nome_item"],
+                    "unidade": item_req_add.get("unidade", "UN"),
+                    "estoque_disponivel": item_req_add.get("estoque_atual", 0),
+                    "quantidade_solicitada": qtd_sol,
+                }
+            )
+            st.rerun()
+
+    if st.session_state.itens_req:
+        st.markdown("###### :material/inventory_2: Itens na Requisição Atual:")
+        for idx, it in enumerate(st.session_state.itens_req):
+            with st.expander(f"{it['part_number']} — {it['nome_item']}", expanded=True):
+                c_info, c_del = st.columns([5, 1])
+                c_info.write(
+                    f"**Solicitado:** {it['quantidade_solicitada']:g} {it['unidade']} "
+                    f"· _saldo hoje:_ {it.get('estoque_disponivel', 0):g}"
+                )
+
+                if c_del.button("Remover", key=f"rm_req_{idx}", type="primary"):
+                    st.session_state.itens_req.pop(idx)
+                    st.rerun()
+    else:
+        st.info("Aguardando adição de materiais...")
+
+
+def _req_bloco_destinatarios():
+    """Entrega Individual (EPI/Uniforme) — só na Padrão (v5.7.0, decisão nº3 de 27/07/2026).
+
+    Vários destinatários, cada um com Matrícula e Nome em campos SEPARADOS. O fluxo antigo
+    pedia uma `text_area` livre no formato "MATRÍCULA — NOME (um por linha)" e adivinhava o
+    separador; digitar o travessão errado silenciosamente juntava tudo no campo matrícula.
+    A serialização gravada é a mesma de antes (`[{"matricula":…, "nome":…}]`), então o
+    conteúdo de `requisicoes.destinatarios` continua compatível com o histórico.
+
+    Devolve `(entrega_individual, destinatarios)`."""
+    entrega_ind = st.checkbox(":material/inventory_2: Entrega Individual (EPI/Uniforme)")
+    if not entrega_ind:
+        return False, []
+
+    st.caption("Quem vai receber o material. Adicione um por vez — EPI é entregue nominalmente.")
+    with st.form("form_add_destinatario", clear_on_submit=True):
+        d1, d2 = st.columns(2)
+        matricula = d1.text_input("Matrícula")
+        nome_dest = d2.text_input("Nome do destinatário")
+        add_dest = st.form_submit_button(":material/person_add: ADICIONAR DESTINATÁRIO", width="stretch")
+
+    if add_dest:
+        if not matricula.strip() and not nome_dest.strip():
+            st.warning(":material/warning: Informe ao menos a matrícula ou o nome.")
+        else:
+            st.session_state.req_destinatarios.append(
+                {"matricula": matricula.strip(), "nome": nome_dest.strip()}
+            )
+            st.rerun()
+
+    if st.session_state.req_destinatarios:
+        for idx, d in enumerate(st.session_state.req_destinatarios):
+            cd1, cd2 = st.columns([5, 1])
+            cd1.write(f":material/person: **{d['matricula'] or '—'}** · {d['nome'] or '—'}")
+            if cd2.button("Remover", key=f"rm_dest_{idx}"):
+                st.session_state.req_destinatarios.pop(idx)
+                st.rerun()
+    else:
+        st.info("Nenhum destinatário informado ainda.")
+
+    return True, list(st.session_state.req_destinatarios)
+
+
+def _req_nova_padrao(autorizadores_lista, PAL):
+    """Requisição **Padrão** — o fluxo real do balcão (v5.7.0, decisões nº1 e nº2).
+
+    O material sai na hora: autorização e SESMT são exigidos AQUI, e não na Fila, porque é
+    aqui que o estoque é baixado. Falta de saldo não recusa o pedido — baixa o que tem e o
+    resto vai para a Fila de Separação."""
+    st.caption(
+        "O material sai agora, no balcão: ao finalizar, o estoque é baixado na hora. "
+        "O que não tiver saldo fica pendente e vai para a Fila de Separação."
+    )
+    req_setor, req_emit, req_cc = _req_bloco_identificacao()
+    st.markdown("---")
+    _req_bloco_materiais(
+        PAL,
+        "Quanto o setor está pedindo. A baixa acontece ao finalizar; se o saldo não cobrir, "
+        "baixa o disponível e o restante vai para a Fila de Separação.",
+    )
+    st.markdown("---")
+
+    st.markdown("##### 3. Regras de Entrega e SESMT")
+    entrega_ind, destinatarios = _req_bloco_destinatarios()
+    is_sesmt = st.checkbox(":material/engineering: Requer Aprovação SESMT")
+    sesmt_resp = st.text_input("Responsável SESMT *") if is_sesmt else ""
+
+    st.markdown("##### 4. Autorização da Saída")
+    st.caption("Material só sai autorizado — na Padrão isto é exigido na criação, porque a baixa é agora.")
+    ca1, ca2 = st.columns(2)
+    aut_tipo = ca1.selectbox("Tipo de Autorizador *", autorizadores_lista)
+    aut_nome = ca2.text_input("Nome do Autorizador (gestor) *")
+
+    st.markdown("##### 5. Observações e Envio")
+    obs_req = st.text_area(
+        "Observações Gerais da Requisição",
+        height=70,
+        placeholder="Opcional. Ex.: urgência, referência de OS, local de entrega...",
+    )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button(":material/check_circle: FINALIZAR E BAIXAR ESTOQUE", type="primary", width="stretch"):
+        erros = []
+        if not req_setor or not req_emit:
+            erros.append("Preencha Setor e Emitente (campos com *).")
+        if not aut_nome.strip():
+            erros.append("Informe o autorizador (gestor): o material sai na criação.")
+        if not st.session_state.itens_req:
+            erros.append("A lista de materiais está vazia.")
+        if entrega_ind and not destinatarios:
+            erros.append("Entrega individual marcada: adicione ao menos um destinatário.")
+        if is_sesmt and not sesmt_resp.strip():
+            erros.append("Material SESMT: informe o responsável do SESMT.")
+
+        if erros:
+            for e in erros:
+                st.error(e)
+        else:
+            with st.spinner("Criando requisição e baixando estoque..."):
+                ok, resultado = criar_requisicao_com_baixa(
+                    setor=req_setor,
+                    emitente=req_emit,
+                    centro_custo=req_cc,
+                    autorizador_tipo=aut_tipo,
+                    autorizador_nome=aut_nome,
+                    entrega_individual=entrega_ind,
+                    destinatarios=destinatarios,
+                    sesmt=is_sesmt,
+                    sesmt_responsavel=sesmt_resp,
+                    itens=st.session_state.itens_req,
+                    observacoes=obs_req,
+                )
+            if ok:
+                invalidar_leituras()  # a Padrão escreve estoque
+                st.session_state.itens_req = []
+                st.session_state.req_destinatarios = []
+                st.session_state.req_confirmada = {"fluxo": "Padrão", **resultado}
+                st.rerun()
+            else:
+                st.error(f"Erro ao criar requisição: {resultado}")
+
+
+def _req_nova_digital(PAL):
+    """Requisição **Digital** — protótipo de vitrine do self-service (v5.7.0, decisão nº1).
+
+    Corpo idêntico ao da v4.7.0: abre o pedido na fila e NÃO baixa estoque (autorização e
+    SESMT ficam para a entrega, na aba Fila). O que mudou é só o enquadramento — a tela
+    agora diz que este fluxo é experimental."""
+    st.info(
+        ":material/science: **Fluxo experimental.** Serve para demonstrar o self-service: o "
+        "solicitante abre o pedido, que entra na Fila, e o almoxarife dá baixa na entrega "
+        "(parcial ou total). O fluxo usado na operação hoje é o **Padrão**."
+    )
+    req_setor, req_emit, req_cc = _req_bloco_identificacao()
+    st.markdown("---")
+    _req_bloco_materiais(
+        PAL,
+        "Quanto o setor está pedindo. A quantidade efetivamente ENTREGUE é definida na aba "
+        "Fila, na hora da entrega (pode ser parcial). Pode-se solicitar mais do que o saldo "
+        "atual — a fila mostra o que dá para atender.",
+    )
+    st.markdown("---")
+
+    # v4.7.0: autorização e SESMT saíram da criação — passaram para a ENTREGA
+    # (aba Fila / Separação), que é o momento em que o material realmente sai.
+    # Aqui só se ABRE o pedido; nada é baixado do estoque ainda.
+    st.markdown("##### 3. Observações e Envio")
+    obs_req = st.text_area(
+        "Observações Gerais da Requisição",
+        height=70,
+        placeholder="Opcional. Ex.: urgência, referência de OS, local de entrega...",
+    )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button(":material/send: CRIAR REQUISIÇÃO (enviar para a fila)", type="primary", width="stretch"):
+        erros = []
+        if not req_setor or not req_emit:
+            erros.append("Preencha Setor e Emitente (campos com *).")
+        if not st.session_state.itens_req:
+            erros.append("A lista de materiais está vazia.")
+
+        if erros:
+            for e in erros:
+                st.error(e)
+        else:
+            with st.spinner("Criando requisição..."):
+                ok, resultado = criar_requisicao(
+                    setor=req_setor,
+                    emitente=req_emit,
+                    centro_custo=req_cc,
+                    autorizador_tipo="",
+                    autorizador_nome="",
+                    entrega_individual=False,
+                    destinatarios=[],
+                    sesmt=False,
+                    sesmt_responsavel="",
+                    itens=st.session_state.itens_req,
+                    observacoes=obs_req,
+                )
+                if ok:
+                    invalidar_leituras()
+                    st.session_state.itens_req = []
+                    st.session_state.req_confirmada = {"fluxo": "Digital", "numero": resultado}
+                    st.rerun()
+                else:
+                    st.error(f"Erro ao criar requisição: {resultado}")
+
+
+def _req_tela_confirmacao(conf):
+    """Recibo da criação, para os dois fluxos (v5.7.0).
+
+    Na Padrão o desfecho não é único: `Entregue` (tudo baixado), `Parcial` (baixou o que
+    tinha) ou `Aberta` (nenhum item tinha saldo). Como decidido na entrevista, faltar saldo
+    não recusa o pedido — então a tela precisa dizer exatamente o que saiu e o que ficou na
+    fila, senão o almoxarife acha que entregou tudo."""
+    # Até a v5.6.0 `req_confirmada` guardava só o número (string). Uma aba aberta durante a
+    # atualização carrega esse valor antigo no `session_state` e cairia num TypeError já no
+    # `conf['numero']` — o recibo é o primeiro lugar que a pessoa veria depois do deploy.
+    if isinstance(conf, str):
+        conf = {"fluxo": "Digital", "numero": conf}
+    st.success(f"### :material/check_circle: Requisição {conf['numero']} criada!")
+    if conf.get("fluxo") != "Padrão":
+        st.info(
+            "A requisição entrou na **Fila / Separação**. O estoque só é baixado quando o "
+            "almoxarife registrar a entrega (com autorização)."
+        )
+    else:
+        faltas = conf.get("faltas") or []
+        status = conf.get("status")
+        if not faltas:
+            st.info(
+                ":material/inventory_2: Estoque baixado na hora, pedido atendido por completo "
+                f"(status **{status}**)."
+            )
+        else:
+            baixou_algo = status != "Aberta"
+            st.warning(
+                (
+                    ":material/pending_actions: Baixado o que havia em estoque. "
+                    if baixou_algo
+                    else ":material/pending_actions: **Nenhum item tinha saldo** — nada foi baixado. "
+                )
+                + f"A requisição ficou **{status}** e o pendente foi para a **Fila / Separação**:"
+            )
+            for f in faltas:
+                st.markdown(
+                    f"- **{f['part_number']}** — {f['nome_item']}: "
+                    f"pedido {f['solicitada']:g}, entregue {f['atendida']:g}, "
+                    f"**falta {f['falta']:g} {f['unidade']}**"
+                )
+    if st.button("Iniciar Nova Requisição", width="stretch"):
+        st.session_state.req_confirmada = None
+        st.rerun()
+
+
 def _render_requisicao():
     """Requisição de material — Nova Requisição + Histórico. v3.8.0: movido da página
     própria para uma aba da Movimentação. Usa guarda if/else (NÃO st.stop()) no fluxo
@@ -635,8 +953,9 @@ def _render_requisicao():
     PAL = paleta_atual()
     st.markdown("### :material/assignment: Requisição de Material")
     st.caption(
-        "Fluxo digital: abre-se a requisição (vai para a fila) e o almoxarife entrega o "
-        "material (parcial ou total), dando baixa no estoque só na entrega — com autorização."
+        "Dois fluxos: na **Padrão** o material sai no balcão e o estoque é baixado na criação "
+        "(o que não tiver saldo vai para a Fila); na **Digital**, experimental, o pedido entra "
+        "na Fila e o almoxarife dá baixa na entrega — sempre com autorização."
     )
 
     aba_nova, aba_fila, aba_hist_req = st.tabs(
@@ -652,19 +971,14 @@ def _render_requisicao():
     with aba_nova:
         if "itens_req" not in st.session_state:
             st.session_state.itens_req = []
+        if "req_destinatarios" not in st.session_state:
+            st.session_state.req_destinatarios = []
         if "req_confirmada" not in st.session_state:
             st.session_state.req_confirmada = None
 
         # v3.8.0: guarda if/else (sem st.stop(), que mataria as abas irmãs da Movimentação).
         if st.session_state.req_confirmada:
-            st.success(f"### :material/check_circle: Requisição {st.session_state.req_confirmada} criada!")
-            st.info(
-                "A requisição entrou na **Fila / Separação**. O estoque só é baixado quando o "
-                "almoxarife registrar a entrega (com autorização)."
-            )
-            if st.button("Iniciar Nova Requisição", width="stretch"):
-                st.session_state.req_confirmada = None
-                st.rerun()
+            _req_tela_confirmacao(st.session_state.req_confirmada)
         else:
             # Padroniza os setores: registra em Configurações os que só existiam no
             # histórico (uma vez por sessão, idempotente) e monta o select a partir da
@@ -673,138 +987,22 @@ def _render_requisicao():
                 sincronizar_setores_config()
                 st.session_state["_setores_sync"] = True
 
-            # --- BLOCO 1: IDENTIFICAÇÃO ---
-            with st.container():
-                st.markdown("##### 1. Identificação da Demanda")
-                c1, c2, c3 = st.columns(3)
-                req_setor = c1.selectbox(
-                    "Setor Solicitante *",
-                    options=[""] + listar_setores_conhecidos(),
-                    index=0,
-                    accept_new_options=True,
-                    help="Escolha um setor já usado ou digite um novo para padronizar o cadastro.",
-                )
-                # v5.7.0 — a Visão do Solicitante pode pré-preencher o nome. Sem `key` de
-                # propósito: definir o session_state de um widget já instanciado nesta mesma
-                # execução levantaria StreamlitAPIException (a aba Nova renderiza antes da Fila).
-                req_emit = c2.text_input(
-                    "Nome do Emitente *", value=st.session_state.get("_req_emit_prefill", "")
-                )
-                opcoes_cc = [""] + (listar_valores("centro_custo") or [])
-                req_cc = c3.selectbox("Centro de Custo *", options=opcoes_cc, index=0)
-
-            st.markdown("---")
-
-            # --- BLOCO 2: SELEÇÃO DE MATERIAIS ---
-            with st.container():
-                st.markdown("##### 2. Adicionar Materiais")
-                _, item_req_add, _ = sel_material("Pesquise o material para requisitar", "sel_req_add")
-
-                if item_req_add:
-                    # Card de disponibilidade rápida (cores acompanham o tema via PAL)
-                    st.markdown(
-                        f"""
-                        <div style="border: 1px solid {PAL["painel_borda"]}; padding: 10px; border-radius: 5px; background-color: {PAL["painel_bg"]}; margin-bottom: 10px;">
-                            <span style="color: {PAL["accent"]}; font-weight: bold;">DISPONÍVEL:</span> {item_req_add.get("estoque_atual", 0)} {item_req_add.get("unidade", "UN")}
-                        </div>
-                    """,
-                        unsafe_allow_html=True,
-                    )
-
-                with st.form("form_add_item_req", clear_on_submit=True):
-                    qtd_sol = st.number_input(
-                        "Qtd Solicitada *",
-                        min_value=1.0,
-                        step=1.0,
-                        value=1.0,
-                        help="Quanto o setor está pedindo. A quantidade efetivamente ENTREGUE é definida "
-                        "na aba Fila, na hora da entrega (pode ser parcial). Pode-se solicitar mais "
-                        "do que o saldo atual — a fila mostra o que dá para atender.",
-                    )
-                    add_item = st.form_submit_button(":material/add: ADICIONAR À LISTA", width="stretch")
-
-                if add_item:
-                    if not item_req_add:
-                        st.warning(":material/warning: Selecione um material antes de adicionar.")
-                    else:
-                        st.session_state.itens_req.append(
-                            {
-                                "item_id": item_req_add["id"],
-                                "part_number": item_req_add["part_number"],
-                                "nome_item": item_req_add["nome_item"],
-                                "unidade": item_req_add.get("unidade", "UN"),
-                                "estoque_disponivel": item_req_add.get("estoque_atual", 0),
-                                "quantidade_solicitada": qtd_sol,
-                            }
-                        )
-                        st.rerun()
-
-            # --- LISTA DE ITENS TEMPORÁRIA ---
-            if st.session_state.itens_req:
-                st.markdown("###### :material/inventory_2: Itens na Requisição Atual:")
-                for idx, it in enumerate(st.session_state.itens_req):
-                    with st.expander(f"{it['part_number']} — {it['nome_item']}", expanded=True):
-                        c_info, c_del = st.columns([5, 1])
-                        c_info.write(
-                            f"**Solicitado:** {it['quantidade_solicitada']:g} {it['unidade']} "
-                            f"· _saldo hoje:_ {it.get('estoque_disponivel', 0):g}"
-                        )
-
-                        if c_del.button("Remover", key=f"rm_req_{idx}", type="primary"):
-                            st.session_state.itens_req.pop(idx)
-                            st.rerun()
+            # v5.7.0 (decisão nº1 de 27/07/2026) — os dois fluxos convivem, e o **Padrão**
+            # é o default porque é o que a operação usa: o material sai no balcão e a baixa
+            # é na criação. A Digital continua existindo como protótipo do self-service.
+            fluxo = st.radio(
+                "Tipo de requisição",
+                ["Padrão", "Digital (experimental)"],
+                index=0,
+                horizontal=True,
+                key="req_fluxo",
+                help="Padrão: o material sai agora e o estoque é baixado na criação. "
+                "Digital: o pedido entra na Fila e a baixa acontece na entrega.",
+            )
+            if fluxo == "Padrão":
+                _req_nova_padrao(autorizadores_lista, PAL)
             else:
-                st.info("Aguardando adição de materiais...")
-
-            st.markdown("---")
-
-            # --- BLOCO 3: OBSERVAÇÕES E ENVIO ---
-            # v4.7.0: autorização e SESMT saíram da criação — passaram para a ENTREGA
-            # (aba Fila / Separação), que é o momento em que o material realmente sai.
-            # Aqui só se ABRE o pedido; nada é baixado do estoque ainda.
-            with st.container():
-                st.markdown("##### 3. Observações e Envio")
-                obs_req = st.text_area(
-                    "Observações Gerais da Requisição",
-                    height=70,
-                    placeholder="Opcional. Ex.: urgência, referência de OS, local de entrega...",
-                )
-
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button(
-                ":material/send: CRIAR REQUISIÇÃO (enviar para a fila)", type="primary", width="stretch"
-            ):
-                erros = []
-                if not req_setor or not req_emit:
-                    erros.append("Preencha Setor e Emitente (campos com *).")
-                if not st.session_state.itens_req:
-                    erros.append("A lista de materiais está vazia.")
-
-                if erros:
-                    for e in erros:
-                        st.error(e)
-                else:
-                    with st.spinner("Criando requisição..."):
-                        ok, resultado = criar_requisicao(
-                            setor=req_setor,
-                            emitente=req_emit,
-                            centro_custo=req_cc,
-                            autorizador_tipo="",
-                            autorizador_nome="",
-                            entrega_individual=False,
-                            destinatarios=[],
-                            sesmt=False,
-                            sesmt_responsavel="",
-                            itens=st.session_state.itens_req,
-                            observacoes=obs_req,
-                        )
-                        if ok:
-                            invalidar_leituras()
-                            st.session_state.itens_req = []
-                            st.session_state.req_confirmada = resultado
-                            st.rerun()
-                        else:
-                            st.error(f"Erro ao criar requisição: {resultado}")
+                _req_nova_digital(PAL)
 
     # --- ABA: FILA / SEPARAÇÃO (v4.7.0; duas visões na v5.7.0) ---
     with aba_fila:
@@ -920,21 +1118,26 @@ def _render_requisicao():
 
             st.markdown("---")
             st.markdown("##### :material/table_rows: Todas as requisições")
-            df_reqs = fil[
-                [
+            df_reqs = fil.reindex(
+                columns=[
                     "numero_requisicao",
                     "data_hora",
                     "status",
+                    "tipo_fluxo",
                     "setor",
                     "emitente",
                     "autorizador_nome",
                     "total_itens",
                 ]
-            ].copy()
+            ).copy()
+            # v5.7.0 — requisição anterior à coluna não tem fluxo conhecido: "—" é a
+            # informação correta. Inferir Padrão/Digital pela data seria chute.
+            df_reqs["tipo_fluxo"] = df_reqs["tipo_fluxo"].fillna("—").replace("", "—")
             df_reqs.columns = [
                 "Nº Req",
                 "Data/Hora",
                 "Status",
+                "Fluxo",
                 "Setor",
                 "Emitente",
                 "Autorizador",

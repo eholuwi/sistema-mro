@@ -276,6 +276,7 @@ def criar_banco():
             sesmt_responsavel  TEXT,
             observacoes        TEXT,
             status             TEXT CHECK(status IN ('Aberta','Parcial','Entregue','Cancelada')) DEFAULT 'Aberta',
+            tipo_fluxo         TEXT,
             data_criacao       TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -834,6 +835,23 @@ def _migrar(conn):
             _backup_db("itens-sc-recebida-protheus-v570")
         conn.execute("ALTER TABLE itens_sc ADD COLUMN quantidade_recebida_protheus REAL")
         logger.info("  ↳ Migração v5.7.0: quantidade_recebida_protheus em itens_sc adicionada.")
+
+    # v5.7.0 — a Requisição Padrão volta a existir ao lado da Digital (decisão nº1 da
+    # entrevista de 27/07/2026), e esta coluna registra por qual fluxo cada pedido nasceu:
+    # 'Padrão' baixa o estoque na criação, 'Digital' só na entrega. Sem ela as duas viram a
+    # mesma linha no histórico e não há como auditar por que uma requisição já nasceu
+    # Entregue. Aditiva e SEM backfill: NULL = requisição legada, exibida como "—". Inferir
+    # o fluxo das antigas pela data seria chute — a Padrão foi removida na v4.7.0 e o corte
+    # não é limpo (a migração da v4.7.0 já retro-marcou as legadas como 'Entregue').
+    if "tipo_fluxo" not in cols_req:
+        if conn.execute("SELECT 1 FROM requisicoes LIMIT 1").fetchone():
+            # Mesmo motivo dos backups da v4.7.0/v5.6.0: os ALTER TABLE acima deixam
+            # transação aberta e sem este commit o `wal_checkpoint` devolve BUSY e o .bak
+            # sai incompleto.
+            conn.commit()
+            _backup_db("requisicoes-tipo-fluxo-v570")
+        conn.execute("ALTER TABLE requisicoes ADD COLUMN tipo_fluxo TEXT")
+        logger.info("  ↳ Migração v5.7.0: tipo_fluxo em requisicoes adicionada (legado → NULL).")
 
     conn.commit()
 

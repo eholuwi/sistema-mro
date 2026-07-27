@@ -1099,6 +1099,13 @@ def categoria_movimentacao(m):
 # REQUISIÇÕES
 # ══════════════════════════════════════════════════════════════════════════════
 
+# v5.7.0 (decisão nº1 da entrevista de 27/07/2026) — os dois fluxos convivem: o **Padrão** é
+# o da operação real (o material sai no balcão, a baixa é na criação) e o **Digital** é o
+# protótipo de vitrine do self-service (baixa só na entrega). Gravado em
+# `requisicoes.tipo_fluxo`; NULL é requisição legada, anterior à coluna.
+FLUXO_PADRAO = "Padrão"
+FLUXO_DIGITAL = "Digital"
+
 
 def _gerar_numero_requisicao(conn):
     hoje = datetime.now().strftime("%Y%m%d")
@@ -1111,6 +1118,66 @@ def _gerar_numero_requisicao(conn):
     ).fetchone()
     seq = (r["n"] if r else 0) + 1
     return f"REQ-{hoje}-{seq:03d}"
+
+
+def _inserir_requisicao(
+    conn,
+    setor,
+    emitente,
+    centro_custo,
+    autorizador_tipo,
+    autorizador_nome,
+    entrega_individual,
+    destinatarios,
+    sesmt,
+    sesmt_responsavel,
+    itens,
+    observacoes,
+    tipo_fluxo,
+    agora,
+):
+    """v5.7.0 — Escrita do pedido: a linha em `requisicoes` mais os itens, sempre com
+    `quantidade_atendida=0`. Extraído de `criar_requisicao` para que a Requisição Padrão
+    (que baixa estoque na criação) reuse exatamente a mesma escrita em vez de duplicá-la.
+
+    Nasce **Aberta** nos dois fluxos; quem baixa estoque corrige o status depois, via
+    `_calcular_status_requisicao`. Não abre transação: o chamador é o dono dela — é o que
+    permite à Padrão criar e baixar atomicamente. Devolve `(req_id, numero_requisicao)`."""
+    num = _gerar_numero_requisicao(conn)
+    cur = conn.execute(
+        """INSERT INTO requisicoes
+        (numero_requisicao,data_hora,setor,emitente,centro_custo,autorizador_tipo,
+         autorizador_nome,entrega_individual,destinatarios,sesmt,sesmt_responsavel,
+         observacoes,status,tipo_fluxo)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'Aberta', ?)""",
+        (
+            num,
+            agora,
+            setor,
+            emitente,
+            centro_custo,
+            autorizador_tipo,
+            autorizador_nome,
+            1 if entrega_individual else 0,
+            json.dumps(destinatarios or [], ensure_ascii=False),
+            1 if sesmt else 0,
+            sesmt_responsavel,
+            observacoes,
+            tipo_fluxo,
+        ),
+    )
+    req_id = cur.lastrowid
+    for it in itens:
+        conn.execute(
+            "INSERT INTO itens_requisicao (requisicao_id,item_id,quantidade_solicitada,quantidade_atendida) VALUES (?,?,?,0)",
+            (req_id, it["item_id"], float(it.get("quantidade_solicitada", 0))),
+        )
+    return req_id, num
+
+
+def _itens_requisicao_validos(itens):
+    """Itens com quantidade > 0. Comum aos dois fluxos de criação."""
+    return [it for it in (itens or []) if float(it.get("quantidade_solicitada", 0)) > 0]
 
 
 def criar_requisicao(
@@ -1132,44 +1199,36 @@ def criar_requisicao(
     `quantidade_atendida=0`. O autorizador é opcional aqui (registrado na entrega).
 
     Assinatura preservada para compatibilidade; `quantidade_atendida` eventualmente
-    presente em `itens` é ignorada (a atendida é decidida na entrega)."""
+    presente em `itens` é ignorada (a atendida é decidida na entrega).
+
+    v5.7.0 — **o contrato de estoque não muda**: continua sem baixar nada (é o que
+    `tests/test_requisicao.py::test_criacao_nao_baixa_estoque` fixa desde a v4.7.0). O
+    único acréscimo é o carimbo `tipo_fluxo='Digital'`, que separa este pedido do fluxo
+    Padrão no histórico. Para criar baixando estoque, use `criar_requisicao_com_baixa`."""
     if not itens:
         return False, "Adicione ao menos um item."
-    itens_validos = [it for it in itens if float(it.get("quantidade_solicitada", 0)) > 0]
+    itens_validos = _itens_requisicao_validos(itens)
     if not itens_validos:
         return False, "Adicione ao menos um item com quantidade > 0."
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         with transaction() as conn:
-            num = _gerar_numero_requisicao(conn)
-            cur = conn.execute(
-                """INSERT INTO requisicoes
-                (numero_requisicao,data_hora,setor,emitente,centro_custo,autorizador_tipo,
-                 autorizador_nome,entrega_individual,destinatarios,sesmt,sesmt_responsavel,
-                 observacoes,status)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'Aberta')""",
-                (
-                    num,
-                    agora,
-                    setor,
-                    emitente,
-                    centro_custo,
-                    autorizador_tipo,
-                    autorizador_nome,
-                    1 if entrega_individual else 0,
-                    json.dumps(destinatarios or [], ensure_ascii=False),
-                    1 if sesmt else 0,
-                    sesmt_responsavel,
-                    observacoes,
-                ),
+            _, num = _inserir_requisicao(
+                conn,
+                setor,
+                emitente,
+                centro_custo,
+                autorizador_tipo,
+                autorizador_nome,
+                entrega_individual,
+                destinatarios,
+                sesmt,
+                sesmt_responsavel,
+                itens_validos,
+                observacoes,
+                FLUXO_DIGITAL,
+                agora,
             )
-            req_id = cur.lastrowid
-            for it in itens_validos:
-                qtd_sol = float(it.get("quantidade_solicitada", 0))
-                conn.execute(
-                    "INSERT INTO itens_requisicao (requisicao_id,item_id,quantidade_solicitada,quantidade_atendida) VALUES (?,?,?,0)",
-                    (req_id, it["item_id"], qtd_sol),
-                )
         return True, num
     except Exception as e:
         return False, str(e)
@@ -1191,6 +1250,140 @@ def _calcular_status_requisicao(conn, req_id):
     if all(float(i["quantidade_atendida"] or 0) >= float(i["quantidade_solicitada"] or 0) for i in itens):
         return "Entregue"
     return "Parcial"
+
+
+def _baixar_item_requisicao(conn, req, item_req_id, item_id, quantidade, agora):
+    """v5.7.0 — A baixa real de UM item de requisição, do jeito que a v4.7.0 já fazia na
+    entrega: movimentação `saida` amarrada à requisição (`requisicao_id`), `UPDATE` do
+    saldo, acúmulo em `quantidade_atendida` e recálculo de consumo/ruptura.
+
+    Extraído de `entregar_requisicao` para que a Requisição Padrão baixe pelo MESMO
+    caminho — sem isto haveria duas escritas de estoque a manter em sincronia, e o ledger
+    da Padrão nasceria diferente do da Digital. Recusa quantidade maior que o saldo
+    (contrato da entrega); a Padrão nunca esbarra nisso porque já entra com
+    `min(solicitada, estoque)`. Não abre transação: quem chama é o dono dela."""
+    r_est = conn.execute(
+        "SELECT estoque_atual, part_number FROM inventario WHERE id=?", (item_id,)
+    ).fetchone()
+    if not r_est or r_est["estoque_atual"] < quantidade:
+        pn = r_est["part_number"] if r_est else "Item"
+        raise Exception(f"Estoque insuficiente para {pn} (disp.: {r_est['estoque_atual'] if r_est else 0}).")
+    novo_saldo = r_est["estoque_atual"] - quantidade
+    conn.execute(
+        "INSERT INTO movimentacoes (item_id,tipo,quantidade,saldo_apos,data_hora,centro_custo,setor,solicitante,emitente,observacao,requisicao_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            item_id,
+            "saida",
+            quantidade,
+            novo_saldo,
+            agora,
+            req["centro_custo"],
+            req["setor"],
+            req["emitente"],
+            req["emitente"],
+            f"Req {req['numero_requisicao']}",
+            req["id"],
+        ),
+    )
+    conn.execute(
+        "UPDATE inventario SET estoque_atual=?, data_atualizacao=? WHERE id=?",
+        (novo_saldo, agora, item_id),
+    )
+    conn.execute(
+        "UPDATE itens_requisicao SET quantidade_atendida = quantidade_atendida + ? WHERE id=?",
+        (quantidade, item_req_id),
+    )
+    _recalcular_consumo(conn, item_id)
+    _recalcular_ruptura_by_id(conn, item_id)
+
+
+def criar_requisicao_com_baixa(
+    setor,
+    emitente,
+    centro_custo,
+    autorizador_tipo,
+    autorizador_nome,
+    entrega_individual,
+    destinatarios,
+    sesmt,
+    sesmt_responsavel,
+    itens,
+    observacoes="",
+):
+    """v5.7.0 — **Requisição Padrão** (decisões nº1 e nº2 da entrevista de 27/07/2026): o
+    fluxo real do balcão, em que o material sai na hora. Cria o pedido e baixa o estoque na
+    MESMA transação — ou tudo acontece, ou nada.
+
+    Falta de saldo **não recusa o pedido**: baixa `min(solicitada, estoque_atual)` de cada
+    item e o restante fica pendente, exatamente como a operação faz hoje no papel. O status
+    sai de `_calcular_status_requisicao` e a requisição entra na Fila de Separação com o
+    que faltou — é o que substitui a regra antiga de "recusa e avisa qual item"
+    (`docs/prompt.md:38`). Item sem nenhum saldo simplesmente não gera movimentação: sem
+    baixa nenhuma o pedido nasce `Aberta`, inteiro na fila.
+
+    Exige autorizador (material só sai autorizado) e, se SESMT, o responsável — as mesmas
+    validações de `entregar_requisicao`, aqui na criação porque é aqui que o material sai.
+
+    Devolve `(True, {"numero", "status", "faltas": [...]})`, com `faltas` listando o que
+    ficou pendente para a tela poder dizer o que foi para a fila."""
+    if not itens:
+        return False, "Adicione ao menos um item."
+    itens_validos = _itens_requisicao_validos(itens)
+    if not itens_validos:
+        return False, "Adicione ao menos um item com quantidade > 0."
+    if not autorizador_nome or not str(autorizador_nome).strip():
+        return False, "Informe o autorizador (gestor): na Requisição Padrão o material sai na criação."
+    if sesmt and not (sesmt_responsavel and str(sesmt_responsavel).strip()):
+        return False, "Material SESMT: informe o responsável do SESMT."
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with transaction() as conn:
+            req_id, num = _inserir_requisicao(
+                conn,
+                setor,
+                emitente,
+                centro_custo,
+                autorizador_tipo,
+                autorizador_nome,
+                entrega_individual,
+                destinatarios,
+                sesmt,
+                sesmt_responsavel if sesmt else "",
+                itens_validos,
+                observacoes,
+                FLUXO_PADRAO,
+                agora,
+            )
+            req = {
+                "id": req_id,
+                "numero_requisicao": num,
+                "setor": setor,
+                "emitente": emitente,
+                "centro_custo": centro_custo,
+            }
+            faltas = []
+            for it in listar_itens_requisicao(req_id, conn=conn):
+                solicitada = float(it["quantidade_solicitada"])
+                disponivel = float(it["estoque_atual"] or 0)
+                atendida = min(solicitada, disponivel)
+                if atendida > 0:
+                    _baixar_item_requisicao(conn, req, it["id"], it["item_id"], atendida, agora)
+                if atendida < solicitada:
+                    faltas.append(
+                        {
+                            "part_number": it["part_number"],
+                            "nome_item": it["nome_item"],
+                            "unidade": it["unidade"],
+                            "solicitada": solicitada,
+                            "atendida": atendida,
+                            "falta": solicitada - atendida,
+                        }
+                    )
+            novo_status = _calcular_status_requisicao(conn, req_id)
+            conn.execute("UPDATE requisicoes SET status=? WHERE id=?", (novo_status, req_id))
+        return True, {"numero": num, "status": novo_status, "faltas": faltas}
+    except Exception as e:
+        return False, str(e)
 
 
 def entregar_requisicao(
@@ -1231,41 +1424,7 @@ def entregar_requisicao(
                 ).fetchone()
                 if not ir:
                     raise Exception("Item da requisição não encontrado.")
-                r_est = conn.execute(
-                    "SELECT estoque_atual, part_number FROM inventario WHERE id=?", (ir["item_id"],)
-                ).fetchone()
-                if not r_est or r_est["estoque_atual"] < q:
-                    pn = r_est["part_number"] if r_est else "Item"
-                    raise Exception(
-                        f"Estoque insuficiente para {pn} (disp.: {r_est['estoque_atual'] if r_est else 0})."
-                    )
-                novo_saldo = r_est["estoque_atual"] - q
-                conn.execute(
-                    "INSERT INTO movimentacoes (item_id,tipo,quantidade,saldo_apos,data_hora,centro_custo,setor,solicitante,emitente,observacao,requisicao_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        ir["item_id"],
-                        "saida",
-                        q,
-                        novo_saldo,
-                        agora,
-                        req["centro_custo"],
-                        req["setor"],
-                        req["emitente"],
-                        req["emitente"],
-                        f"Req {req['numero_requisicao']}",
-                        req_id,
-                    ),
-                )
-                conn.execute(
-                    "UPDATE inventario SET estoque_atual=?, data_atualizacao=? WHERE id=?",
-                    (novo_saldo, agora, ir["item_id"]),
-                )
-                conn.execute(
-                    "UPDATE itens_requisicao SET quantidade_atendida = quantidade_atendida + ? WHERE id=?",
-                    (q, ir["id"]),
-                )
-                _recalcular_consumo(conn, ir["item_id"])
-                _recalcular_ruptura_by_id(conn, ir["item_id"])
+                _baixar_item_requisicao(conn, req, ir["id"], ir["item_id"], q, agora)
             novo_status = _calcular_status_requisicao(conn, req_id)
             conn.execute(
                 """UPDATE requisicoes SET status=?, autorizador_tipo=?, autorizador_nome=?,
@@ -1428,14 +1587,20 @@ def listar_emitentes_requisicao():
     return sorted(vistos.values(), key=lambda s: s.upper())
 
 
-def listar_itens_requisicao(req_id):
-    with transaction() as conn:
-        rows = conn.execute(
+def listar_itens_requisicao(req_id, conn=None):
+    """v5.7.0 — `conn` opcional (padrão do projeto) para que a Requisição Padrão leia os
+    itens que acabou de inserir DENTRO da própria transação, em vez de abrir uma segunda
+    conexão com escrita pendente na primeira. `ORDER BY` explícito porque a Padrão percorre
+    esta lista para baixar estoque e montar as faltas — ordem de exibição não pode depender
+    do plano de consulta."""
+    with transaction(conn) as c:
+        rows = c.execute(
             """
             SELECT ir.*,i.part_number,i.nome_item,i.unidade,i.estoque_atual
             FROM itens_requisicao ir
             JOIN inventario i ON i.id=ir.item_id
             WHERE ir.requisicao_id=?
+            ORDER BY ir.id
         """,
             (req_id,),
         ).fetchall()
