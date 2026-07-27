@@ -40,6 +40,26 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:/Users/eholu/AppData/Roaming/Python/Python314/Scripts/graphify.EXE hook-guard search"
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:/Users/eholu/AppData/Roaming/Python/Python314/Scripts/graphify.EXE hook-guard read"
+          }
+        ]
+      }
     ]
   }
 }

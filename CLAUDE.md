@@ -101,7 +101,33 @@ mapeia impacto, planeja versão/backlog e só implementa após aprovação.
 
 ## Graphify e Vault
 
-- Graphify é navegação; código é a fonte da verdade. Não atualizar automaticamente.
+Grafo em `graphify-out/` (1947 nós · 3966 arestas · 147 comunidades; AST local, custo 0 tokens).
+É **navegação** — o código continua sendo a fonte da verdade.
+
+**Consultar antes de abrir arquivo grande** (`db_functions.py`, `database.py`, `dashboards.py`),
+do mais barato ao mais caro:
+
+| Precisa de | Comando |
+|---|---|
+| Onde mora um assunto e o que ele toca | `graphify query "<pergunta>"` |
+| Um símbolo e sua vizinhança | `graphify explain "<nó>"` |
+| Como A se liga a B | `graphify path "<A>" "<B>"` |
+| Quem quebra se X mudar | `graphify affected "<X>"` |
+| Hubs arquiteturais | `graphify god-nodes` |
+
+`GRAPH_REPORT.md` só para revisão ampla de arquitetura. Fonte cru só depois que a query orientou,
+ou para de fato editar/depurar linhas. Vale para subagentes — inclua a regra no prompt de quem
+for explorar código. Para varrer texto use a ferramenta `Grep`, nunca `Select-String`/`findstr`:
+o guard do PreToolUse só reconhece `grep`/`rg` e não intercepta os equivalentes do PowerShell.
+
+**Atualização é explícita.** Depois de mexer no código: `graphify update .` (AST, sem API, sem
+custo). Sem rebuild em background e sem hook de post-commit — grafo desatualizado sem aviso é pior
+que grafo nenhum. `GRAPH_REPORT.md` grava o commit de origem; na dúvida compare com
+`git rev-parse HEAD`.
+
+O scan não alcança `vault/`, `mro.db`, `backups/` nem `venv/`, e `graphify-out/` está no
+`.gitignore` — nenhum dado operacional entra no grafo.
+
 - Vault Obsidian (`vault/`) **não é versionado** — está no `.gitignore` e sincroniza pelo OneDrive,
   junto com o resto da pasta. Existe no disco; o protocolo de sessão segue em `vault/CLAUDE.md`.
   Não modificar salvo pedido explícito envolvendo a apresentação/KPI mensal.
