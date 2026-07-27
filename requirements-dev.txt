@@ -11,3 +11,8 @@ pytest-cov==7.1.0
 # `F` inclui F821 (nome indefinido) — o mesmo que a antiga guarda pyflakes garantia,
 # so que no repo inteiro em vez de apenas `app.py` + `ui/`.
 ruff==0.16.0
+
+# v5.8.0 — so para congelar `deploy/launcher.py` em MRO.exe (scripts/portatil.py).
+# NAO entra no requirements.txt: nada muda no que roda no servidor, e o Streamlit
+# continua sendo executado pelo Python do `runtime\`, nunca congelado.
+pyinstaller==6.21.0

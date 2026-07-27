@@ -28,7 +28,7 @@ except Exception:
     pass
 
 st.set_page_config(
-    page_title="MRO Inventus Power 5.7.0",
+    page_title="MRO Inventus Power 5.8.0",
     page_icon=":material/build:",
     layout="wide",
     initial_sidebar_state="expanded",

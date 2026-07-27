@@ -23,10 +23,12 @@ contexto.
 | SCM / Monitor de SC | `services/monitor_scm.py`, `services/monitor_cruzamento.py`, `services/scm_client.py` |
 | SCM Sync (API → mro.db, v5.1.0/F2) | `services/scm_sync.py` (parsers + orquestrador `sincronizar`), tabela `itens_sc_externos` |
 | Constantes / tema / estilos | `services/constants.py`, `services/tema.py`, `services/styles.py` |
+| Backup do banco (automático + botão) | `database._backup_db`, `services/backup.py` |
 | Testes (regressão por versão) | `tests/test_vXXX_*.py` |
 | **Gate de verificação** | `verify.ps1`, `ruff.toml`, `.github/workflows/verify.yml` |
 | Automação do harness | `.claude/hooks/`, `.claude/settings.json`, `.claude/agents/validador-mro.md` |
 | Distribuição (servidor) | `deploy/`, `scripts/release.py`, `docs/INSTALACAO_SERVIDOR.md` |
+| Distribuição (pacote portátil / MRO.exe) | `scripts/portatil.py`, `deploy/launcher.py`, `deploy/instalar_servidor.ps1` |
 | Continuidade / backlog | `docs/HANDOFF.md` (seção "STATUS ATUAL" no topo), `docs/prompt.md` |
 | Changelog | `changelog/*.md` |
 
@@ -44,10 +46,19 @@ venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.t
 
 .\verify.ps1                                     # GATE: format + lint + testes → exit 0/1
 .\verify.ps1 -Rapido                             # pula o format check (loop apertado)
-venv\Scripts\python.exe -m pytest -q             # só os testes (~1 min, 491)
+venv\Scripts\python.exe -m pytest -q             # só os testes (~1 min, 638)
 venv\Scripts\python.exe -m streamlit run app.py  # sobe o app
-python scripts/release.py                        # empacota p/ o servidor → dist/
+python scripts/release.py                        # zip do código p/ o servidor → dist/
+python scripts/portatil.py                       # pacote portátil c/ runtime → dist/ (~148 MB)
+python scripts/portatil.py --pular-deps          # rebuild rápido (o pip é o passo lento)
 ```
+
+⚠️ **Armadilhas do runtime embeddable já pagas** (v5.8.0, medidas): o Python embeddable
+**ignora `PYTHONPATH`** — quem manda é o `python*._pth`; e sem a flag **`-s`** ele enxerga o
+`site-packages` global da máquina, o que faz o pacote portátil funcionar em dev e quebrar em
+máquina limpa. Além disso, **subir o servidor não cria o banco**: o Streamlit só executa
+`app.py` quando uma sessão de navegador conecta, então a prova de que a migração rodou é o
+`.bak` em `backups/`, nunca um HTTP 200.
 
 Dependências têm **versão fixada**. Ao mexer em qualquer pin, rode o gate **e** abra o app.
 

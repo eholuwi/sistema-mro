@@ -193,6 +193,11 @@ isoladamente).
   cada release — no máximo no launcher), streamlit-desktop-app/pywebview (não atende acesso em rede),
   briefcase (overhead), stlite (sem SQLite), exe por usuário com bancos separados (fragmenta dado).
   TI hospedar = ideal futuro; migração trivial (copiar `C:\MRO\`).
+- **v5.8.0 executou a ressalva "no máximo no launcher".** `deploy/launcher.py` → `MRO.exe`
+  congela só o launcher (stdlib pura, ~180 linhas); o Streamlit continua sendo executado pelo
+  Python do `runtime\`, então o exe **não** precisa ser refeito a cada release — só `app\` muda.
+  `scripts/portatil.py` entrega o `C:\MRO\` inteiro montado (~148 MB zipado), o que elimina os 7
+  passos manuais sem trocar o modelo de servidor único. As demais alternativas seguem descartadas.
 
 ## Riscos e mitigação
 

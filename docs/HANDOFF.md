@@ -8,6 +8,46 @@
 
 ## STATUS ATUAL — atualizado em 27/07/2026 (leia isto, não a seção 1-7 abaixo para status)
 
+- **v5.8.0 IMPLEMENTADA, gate verde (638 testes, 604 → +34), PENDENTE de validação no app
+  real.** Duas entregas independentes, ambas atacando "coisa que só o autor consegue fazer".
+  Ver `changelog/5.8.0.md`. **4 checkpoints, ainda NÃO commitados.**
+  - **CP1 — Backup sob demanda.** `services/backup.py` (novo) + bloco *Backup do Banco* em
+    Configurações: botão, **pasta de destino configurável** e **download pelo navegador** (o
+    único jeito de quem usa pela rede tirar cópia do servidor). Não reimplementa nada:
+    chama `database._backup_db`, que já trata a armadilha do `wal_checkpoint`.
+    **Regra de projeto:** falha no destino extra **não** invalida o `.bak` principal — ele já
+    está em disco quando a cópia é tentada. Pendrive desconectado → `erro_destino` com
+    `ok=True`.
+  - **CP2/CP3 — Pacote portátil.** `scripts/portatil.py` → `dist/mro-portatil-5.8.0.zip`
+    (**148 MB** zipado / 440 MB extraído). Extrair e dar dois cliques no `MRO.exe`; os 7
+    passos manuais do `INSTALACAO_SERVIDOR.md` viraram um comando na máquina de dev.
+    `deploy/launcher.py` **só importa stdlib** — o PyInstaller congela ~180 linhas triviais,
+    não o grafo do Streamlit, então **o exe não é refeito a cada release**. O `app\` do
+    portátil vem de `release.itens_do_pacote()`, não de uma segunda lista.
+  - **CP4** — `deploy/instalar_servidor.ps1` (tarefa agendada + firewall, idempotente,
+    auto-eleva) + guarda no `atualizar_mro.bat` + docs.
+  - ⚠️ **Migração de SCHEMA:** tabela `configuracoes (chave, valor)`, `CREATE TABLE IF NOT
+    EXISTS` em `criar_banco()` — aditiva pura, mesmo padrão das outras 21, sem `_migrar()` e
+    sem `_backup_db`. **Ainda não rodou no `mro.db` de produção.**
+  - **Três achados que valem memória** (todos medidos, todos travados por teste):
+    1. **O Python embeddable IGNORA `PYTHONPATH`** — o `python*._pth` substitui a busca de
+       caminhos. O `set "PYTHONPATH=..."` do `iniciar_mro.bat` **sempre foi inócuo**;
+       funcionava porque `Lib\site-packages` está no `._pth` e porque o `streamlit run`
+       insere sozinho a pasta do script. Se `import streamlit` falhar no servidor, **é no
+       `._pth` que se olha**, não na variável.
+    2. **O runtime embutido enxergava os pacotes GLOBAIS da máquina** —
+       `%APPDATA%\Python\Python314\site-packages` entrava no `sys.path` com `import site`
+       habilitado. O pacote deixava de ser auto-contido: funciona na máquina do dev, quebra
+       na limpa. Corrigido com **`-s`** no launcher e no `.bat`.
+    3. **Subir o servidor NÃO cria o banco** — o Streamlit só executa `app.py` quando uma
+       sessão de navegador conecta. `/_stcore/health` responde 200 com `dados\` vazio. Em
+       qualquer roteiro de validação, **a prova é o `.bak` em `backups\`, não o HTTP 200.**
+  - **Débito assumido por decisão do Luis:** sem listagem/exclusão de `.bak` na tela e sem
+    retenção automática. Nada apaga backup, e o botão manual acelera o acúmulo.
+  - **Validação no app real: PENDENTE.** Roteiro: (a) botão de backup com destino válido,
+    destino apagado e download; (b) `MRO.exe` na 8501 em máquina limpa, incluindo fechar a
+    janela e conferir que nenhum `python.exe` sobrou; (c) `atualizar_mro.bat` com o exe
+    aberto tem que **abortar**; (d) reboot-test depois do `instalar_servidor.ps1`.
 - **v5.7.0 CONCLUÍDA** — os itens **7, 8 e 9** do pedido de 26/07/2026 (os três que a v5.6.0
   deixou para a entrevista) **mais o achado nº1** daquela versão. Gate verde: **604 testes**
   (532 → +72). Ver `changelog/5.7.0.md`. **4 checkpoints, 1 commit cada:**

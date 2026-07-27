@@ -14,13 +14,22 @@ setlocal
 
 set "MRO_RAIZ=%~dp0"
 set "MRO_DB_PATH=%MRO_RAIZ%dados\mro.db"
+
+REM v5.8.0 — o Python EMBEDDABLE ignora PYTHONPATH: a presenca do python*._pth ao lado do
+REM python.exe substitui a busca padrao de caminhos. Quem coloca Lib\site-packages no
+REM sys.path e a linha correspondente do ._pth (secao 1 do INSTALACAO_SERVIDOR.md, ou
+REM scripts/portatil.py, que grava sozinho). Mantido so como rede para o caso de o runtime
+REM ser um CPython normal. MRO_DB_PATH acima nao sofre disso — e variavel comum.
 set "PYTHONPATH=%MRO_RAIZ%runtime\Lib\site-packages"
 
 if not exist "%MRO_RAIZ%dados\" mkdir "%MRO_RAIZ%dados"
 
 REM Porta e bind vem de app\.streamlit\config.toml (copia de deploy/config-servidor.toml).
 REM Repetidos aqui em linha de comando para que a subida nao dependa do arquivo estar no lugar.
-"%MRO_RAIZ%runtime\python.exe" -m streamlit run "%MRO_RAIZ%app\app.py" ^
+REM v5.8.0 — `-s` exclui o site-packages do USUARIO (%APPDATA%\Python\...). Sem ele o
+REM embeddable com `import site` habilitado enxerga os pacotes globais da maquina: na do
+REM dev funciona, na limpa quebra.
+"%MRO_RAIZ%runtime\python.exe" -s -m streamlit run "%MRO_RAIZ%app\app.py" ^
     --server.headless=true ^
     --server.address=0.0.0.0 ^
     --server.port=8501 ^

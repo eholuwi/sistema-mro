@@ -77,6 +77,18 @@ def criar_banco():
         )
     """)
 
+    # v5.8.0 — chave/valor de parâmetros globais (hoje só `backup_destino`).
+    # NÃO usar `listas` para isto: `adicionar_valor_lista` faz .strip().upper() (destrói o
+    # caso de um caminho) e `remover_valor_lista` é soft-delete (ativo=0) contra um
+    # UNIQUE(tipo,valor) — regravar o mesmo valor depois de trocá-lo bateria em
+    # IntegrityError, que é exatamente o uso de um campo editado várias vezes.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS configuracoes (
+            chave   TEXT PRIMARY KEY,
+            valor   TEXT
+        )
+    """)
+
     # ══════════════════════════════════════════════════════════════════════════════
     # PADRONIZAÇÃO DE LISTAS MESTRAS (v2.0.0)
     # ══════════════════════════════════════════════════════════════════════════════

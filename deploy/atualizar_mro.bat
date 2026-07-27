@@ -47,6 +47,18 @@ echo [3/5] Guardando a versao anterior em app_anterior\...
 if exist "%MRO_RAIZ%app_anterior" rmdir /S /Q "%MRO_RAIZ%app_anterior"
 if exist "%MRO_RAIZ%app" move "%MRO_RAIZ%app" "%MRO_RAIZ%app_anterior" >nul
 
+REM v5.8.0 — se o move falhou (alguem segurando arquivo em app\), ABORTAR aqui.
+REM Sem esta guarda o script seguia e o Expand-Archive -Force do passo 4 escrevia por
+REM cima da versao antiga: duas versoes misturadas na mesma pasta, sem aviso nenhum.
+REM No modo portatil isso e comum — nao ha tarefa agendada para o schtasks /End parar,
+REM e o MRO.exe do usuario continua com o app\ aberto.
+if exist "%MRO_RAIZ%app" (
+    echo ERRO: nao consegui mover app\ — algo ainda esta usando a pasta.
+    echo        Feche a janela do MRO.exe ^(ou pare a tarefa "%TAREFA%"^) e tente de novo.
+    echo        Atualizacao ABORTADA — nada foi alterado.
+    exit /b 1
+)
+
 echo [4/5] Extraindo a nova versao...
 powershell -NoProfile -Command "Expand-Archive -LiteralPath '%PACOTE%' -DestinationPath '%MRO_RAIZ%app' -Force"
 if errorlevel 1 (

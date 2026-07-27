@@ -22,8 +22,13 @@ ENV/
 .ruff_cache/
 .coverage
 
-# Pacotes de release gerados por scripts/release.py
+# Pacotes de release gerados por scripts/release.py e scripts/portatil.py
 dist/
+
+# v5.8.0 — montagem do pacote portátil: runtime embeddable, cache do download,
+# saída do PyInstaller. ~440 MB de binário reconstruível a partir do código.
+build/
+*.spec
 
 # Streamlit
 .streamlit/secrets.toml

@@ -12,6 +12,7 @@ página que prova o caminho escrita→invalidação da refatoração.
 
 from __future__ import annotations
 
+import os
 import time
 
 import pandas as pd
@@ -28,6 +29,7 @@ from services.db_functions import (
     definir_codigo_solicitante_mro,
 )
 from services import scm_sync
+from services import backup
 from ui.cache import invalidar_leituras
 from ui.tema import paleta_atual
 
@@ -49,6 +51,89 @@ def render() -> None:
             "escuro, as **tabelas** podem continuar claras — é uma limitação do Streamlit "
             "(as grades seguem o tema base); no modo claro (padrão) fica tudo consistente."
         )
+        st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Backup do banco (v5.8.0) ──────────────────────────────────────────────
+    # Os .bak automáticos só cobrem migração e o sync diário da API. Este é o backup
+    # sob demanda + o único caminho para quem usa o sistema pela REDE tirar uma cópia
+    # do servidor (o download_button entrega o arquivo na máquina de quem clicou).
+    with st.container(border=True):
+        st.subheader(":material/backup: Backup do Banco")
+        st.caption(
+            "Gera uma cópia do banco **na hora**, em `backups/` ao lado dele. Opcionalmente "
+            "copia também para uma pasta sua (disco externo, pasta de rede) e entrega o "
+            "arquivo pelo navegador. Os backups automáticos acontecem só antes de uma "
+            "migração e no sync diário da API — este botão é o backup sob demanda."
+        )
+
+        destino_atual = backup.destino_configurado()
+        if destino_atual:
+            _ok_dest, _msg_dest = backup.validar_destino(destino_atual)
+            if not _ok_dest:
+                st.warning(
+                    f":material/warning: {_msg_dest} — a cópia extra vai falhar até você "
+                    "corrigir. O backup em `backups/` continua funcionando."
+                )
+
+        c_dest, c_salvar = st.columns([4, 1])
+        novo_destino = c_dest.text_input(
+            "Pasta de destino (opcional)",
+            value=destino_atual or "",
+            key="bkp_destino",
+            placeholder="ex.: D:\\Backups  ou  \\\\servidor\\backups\\mro",
+            help="Em branco = guarda apenas em `backups/`.",
+        )
+        with c_salvar:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button(":material/save: Salvar", key="bkp_salvar_destino", width="stretch"):
+                ok_s, msg_s = backup.definir_destino(novo_destino)
+                if ok_s:
+                    st.success(msg_s)
+                    time.sleep(0.8)
+                    st.rerun()
+                else:
+                    st.error(msg_s)
+
+        st.divider()
+
+        if st.button(":material/backup: Fazer backup agora", type="primary", key="bkp_agora"):
+            st.session_state["ultimo_backup"] = backup.fazer_backup("manual")
+
+        res = st.session_state.get("ultimo_backup")
+        if res:
+            if not res["ok"]:
+                st.error(
+                    "Não foi possível gerar o backup. Confira o log do servidor — o banco "
+                    "pode não existir ainda ou a pasta `backups/` pode estar sem permissão."
+                )
+            else:
+                _mb = res["tamanho"] / (1024 * 1024)
+                st.success(
+                    f"Backup criado: **{res['nome']}** ({_mb:.1f} MB) em `{os.path.dirname(res['caminho'])}`"
+                )
+                if res["erro_destino"]:
+                    st.warning(f":material/warning: {res['erro_destino']}")
+                elif res["destino_extra"] and res["destino_extra"] != res["caminho"]:
+                    st.info(f"Cópia também gravada em `{res['destino_extra']}`.")
+
+                try:
+                    with open(res["caminho"], "rb") as fh:
+                        _dados = fh.read()
+                except OSError as e:
+                    st.warning(f"Backup gravado, mas não consegui lê-lo para download: {e}")
+                else:
+                    st.download_button(
+                        ":material/download: Baixar este backup",
+                        _dados,
+                        file_name=res["nome"],
+                        mime="application/octet-stream",
+                        key="bkp_download",
+                    )
+                    st.caption(
+                        "Para restaurar: pare o sistema, substitua o `mro.db` por este "
+                        "arquivo e **apague** os `mro.db-wal` / `mro.db-shm` — restaurar "
+                        "deixando um WAL de outra geração mistura dois estados do banco."
+                    )
         st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Importação da base do Neidson — Tipo, Mínimo, Máximo, Lead Time (Item 1) ──
