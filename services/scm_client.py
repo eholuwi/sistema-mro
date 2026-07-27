@@ -192,11 +192,36 @@ def aprovadores_pedido(filial, numero):
     return _get(f"/Pedidos/getAprovadores/{filial}/{numero}")
 
 
+_ENDPOINT_SAUDE = "/Usuario/Compradores"
+
+
+def diagnostico(timeout=10):
+    """Health-check COM diagnóstico: `{ok, latencia_ms, erro, endpoint}`. NÃO cacheia.
+
+    v5.6.0 — `esta_disponivel` devolvia só um bool e engolia a exceção, então a tela não
+    tinha o que mostrar além de verde/vermelho: nem quanto demorou, nem por que falhou.
+    O motivo do erro é o que permite distinguir "sem rota até o servidor" de "servidor
+    respondeu 500" — diagnósticos com ações diferentes para quem opera.
+
+    Continua batendo num endpoint pequeno (`/Usuario/Compradores`); note que ele NÃO é o
+    endpoint do sync (`ByUser`/`Timeline`), então verde aqui significa "a API responde",
+    não "o sync vai funcionar".
+    """
+    inicio = time.perf_counter()
+    try:
+        _get(_ENDPOINT_SAUDE, timeout=timeout, retries=1)
+        ok, erro = True, None
+    except Exception as e:
+        ok, erro = False, f"{type(e).__name__}: {e}".strip()
+    return {
+        "ok": ok,
+        "latencia_ms": int((time.perf_counter() - inicio) * 1000),
+        "erro": erro,
+        "endpoint": f"{BASE_URL}{_ENDPOINT_SAUDE}",
+    }
+
+
 def esta_disponivel(timeout=10):
     """Teste de conectividade LEVE (endpoint pequeno `/Usuario/Compradores`). True se a
     API respondeu; False em qualquer erro de rede/HTTP. NÃO cacheia (é health-check)."""
-    try:
-        _get("/Usuario/Compradores", timeout=timeout, retries=1)
-        return True
-    except Exception:
-        return False
+    return diagnostico(timeout=timeout)["ok"]

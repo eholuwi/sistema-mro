@@ -17,16 +17,29 @@ import streamlit as st
 from services.db_functions import listar_inventario
 
 
-def itens_select():
-    """Dicionário `"<PN> — <nome>" -> item` de todo o inventário (fonte do selectbox)."""
-    return {f"{i['part_number']} — {i['nome_item']}": i for i in listar_inventario()}
+def itens_select(incluir_descricao=False):
+    """Dicionário `"<PN> — <nome>" -> item` de todo o inventário (fonte do selectbox).
+
+    Com `incluir_descricao=True` o rótulo ganha ` · <descrição>` quando a descrição
+    acrescenta informação ao nome — assim o type-ahead nativo do selectbox também
+    encontra o item pela descrição, sem precisar de um campo de busca separado."""
+    opcoes = {}
+    for i in listar_inventario():
+        rotulo = f"{i['part_number']} — {i['nome_item']}"
+        if incluir_descricao:
+            desc = (i.get("descricao") or "").strip()
+            if desc and desc.lower() not in (i.get("nome_item") or "").lower():
+                rotulo += f" · {desc}"
+        opcoes[rotulo] = i
+    return opcoes
 
 
-def sel_material(label, key, placeholder=" "):
+def sel_material(label, key, placeholder=" ", incluir_descricao=False):
     """Selectbox com opção vazia no topo para forçar seleção consciente.
 
+    `incluir_descricao` repassa para `itens_select` (busca também pela descrição).
     Devolve `(rotulo_selecionado, item_dict_ou_None, opcoes_dict)`."""
-    opcoes = itens_select()
+    opcoes = itens_select(incluir_descricao=incluir_descricao)
     lista = [placeholder] + list(opcoes.keys())
     sel = st.selectbox(label, lista, index=0, key=key)
     item = opcoes.get(sel) if sel != placeholder else None

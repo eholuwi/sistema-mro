@@ -184,6 +184,26 @@ def resolver_codigos_solicitantes(conn=None):
     return resolvidos
 
 
+def resumo_escopo(conn=None):
+    """Escopo do sync: `{no_mro, com_codigo}`.
+
+    v5.6.0 — `ByUser` só alcança solicitante COM código Protheus. Quando `com_codigo` é 0
+    o sync percorre zero solicitantes e termina "sem erro" trazendo nada — condição que
+    nenhuma tela mostrava, e que é a razão de o Centro de Custo nunca ter vindo pela API.
+    O cadastro é preenchido em Configurações › Solicitantes MRO (SCM)."""
+    q = (
+        "SELECT COUNT(*) AS no_mro, "
+        "SUM(CASE WHEN codigo IS NOT NULL AND TRIM(codigo)<>'' THEN 1 ELSE 0 END) AS com_codigo "
+        "FROM solicitantes_mro WHERE incluir_mro=1"
+    )
+    if conn is not None:
+        row = conn.execute(q).fetchone()
+    else:
+        with transaction() as c:
+            row = c.execute(q).fetchone()
+    return {"no_mro": int(row["no_mro"] or 0), "com_codigo": int(row["com_codigo"] or 0)}
+
+
 def _solicitantes_para_sync(conn):
     """Solicitantes MRO (incluir_mro=1) COM código — os únicos sincronizáveis via ByUser."""
     rows = conn.execute(
@@ -418,9 +438,32 @@ def sincronizar(periodo_dias=180, progress_cb=None, hoje=None, backup=True):
 
     `progress_cb(nome, indice, total)` é chamado por solicitante. Retorna o resumo (dict)."""
     resumo = _resumo_zerado()
-    if not scm_client.esta_disponivel():
+    diag = scm_client.diagnostico()
+    if not diag["ok"]:
         resumo["ok"] = False
         resumo["erro"] = "API do SCM indisponível — nenhuma alteração feita. Use o Relatório de SCs (Excel)."
+        resumo["detalhe_erro"] = diag["erro"]
+        # v5.6.0 — a tentativa FALHA também vira log. Antes só o sucesso era registrado,
+        # então "nunca sincronizou" e "tentou e a API estava fora" eram indistinguíveis na
+        # tela — e não havia como mostrar ao usuário desde quando/por que está falhando.
+        # Nenhuma escrita de dado acontece aqui: só a linha de auditoria.
+        with transaction() as conn:
+            _log_importacao(
+                conn,
+                "api_scm",
+                "sincronizacao SCM",
+                0,
+                0,
+                0,
+                {
+                    "status": "falha",
+                    "periodo_dias": periodo_dias,
+                    "erro": diag["erro"],
+                    "endpoint": diag["endpoint"],
+                    "latencia_ms": diag["latencia_ms"],
+                    "resumo": {},
+                },
+            )
         return resumo
 
     hoje = hoje or date.today()

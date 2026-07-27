@@ -23,7 +23,6 @@ from datetime import date, datetime
 import pandas as pd
 import streamlit as st
 
-from services import scm_client
 from services.constants import PREVISAO_RUPTURA_SEM_RISCO, STATUS_SC
 from services.db_functions import (
     GUARDA_CHUVA_ESTAGIOS,
@@ -32,7 +31,6 @@ from services.db_functions import (
     carregar_planilha_livre,
     criar_guarda_chuva,
     criar_sc,
-    filtrar_itens_por_busca,
     importar_relatorio_scs,
     importar_solicitacoes_protheus,
     itens_com_sc_aberta,
@@ -53,11 +51,6 @@ from services.db_functions import (
     sincronizar_monitor_sc,
 )
 from services.monitor_cruzamento import cruzar_scm_sc7, preparar_df
-from services.monitor_scm import (
-    COLUNAS_SCS_NAO_ATENDIDAS,
-    cotacoes_no_escopo,
-    montar_scs_nao_atendidas,
-)
 from services.planejamento import (
     agrupar_por_tipo_material,
     buscar_sc_id_por_numero,
@@ -68,6 +61,7 @@ from services.planejamento import (
 )
 from ui.cache import invalidar_leituras
 from ui.componentes.selecao import sel_material
+from ui.componentes.tabela import chave_editor
 from ui.formatos import fmt, fmt_date_input
 
 
@@ -101,20 +95,19 @@ def render() -> None:
     # 📡 MONITOR DE COMPRAS
     # ══════════════════════════════════════════════════════════════════════════════
     with aba_mon:
-        # v4.11.0 — Monitor reordenado: (1) Controle Manual de Críticos (topo), (2) SCs/Itens
-        # não atendidos via API do SCM, (3) fallback de cruzamento por upload (sem rede). A
-        # grade técnica de 15 linhas (sync diário) saiu da UI — o vivo do SCM a substitui;
-        # `sincronizar_monitor_sc`/`listar_monitor_sc` seguem no db_functions só p/ regressão.
+        # v4.11.0 — Monitor reordenado: (1) Controle Manual de Críticos (topo), (2) fallback
+        # de cruzamento por upload (sem rede). A grade técnica de 15 linhas (sync diário) saiu
+        # da UI — `sincronizar_monitor_sc`/`listar_monitor_sc` seguem no db_functions só p/ regressão.
         # v5.2.0 (F3) — a sincronização SCM (API → banco) e a consulta das SCs migraram para
         # a página **SCM Integrado** (menu, abaixo de Controle de SC).
+        # v5.6.0 — "SCs/Itens não atendidos" removido a pedido da operação. A lógica pura segue
+        # em `services/monitor_scm.py` (sem consumidor de UI), coberta por test_v4100_monitor_scm.
         _render_controle_manual_criticos()
         st.divider()
         st.info(
             ":material/cloud_sync: A **sincronização SCM (API → banco)** e a consulta "
             "unificada das SCs agora vivem na página **SCM Integrado** (menu lateral)."
         )
-        st.divider()
-        _render_scs_nao_atendidas()
         st.divider()
         _render_cruzamento_upload_fallback()
 
@@ -332,11 +325,14 @@ def render() -> None:
                 "Qtd Sugerida": "%d",
             }
             df_sel = pd.DataFrame([_linha_rep(s, incluir=True) for s in filtradas])
+            # v5.6.0 — chave versionada pelo conjunto filtrado: com `key` fixa, o Streamlit
+            # 1.60.0 reaplicava os checkboxes "Incluir" de um filtro anterior sobre outro
+            # conjunto de mesmo tamanho, selecionando itens errados para as SCs sugeridas.
             edit_sel = st.data_editor(
                 df_sel,
                 hide_index=True,
                 width="stretch",
-                key="rep_sel_editor",
+                key=chave_editor("rep_sel_editor", [s["part_number"] for s in filtradas]),
                 column_config={
                     "Incluir": st.column_config.CheckboxColumn(
                         "Incluir", help="Marque os itens que entram nas SCs sugeridas abaixo."
@@ -993,12 +989,13 @@ def _render_guarda_chuva_controle():
 
     # ── Adicionar produto + código de fornecedor ──────────────────────────────
     with st.expander(":material/add: Adicionar um produto ao Guarda-Chuva", expanded=False):
-        _busca = st.text_input("Pesquisar produto (part number ou descrição)", key="gc_busca_add")
-        _itens = filtrar_itens_por_busca(listar_inventario(), _busca) if _busca else []
-        if _busca and not _itens:
-            st.warning("Nenhum material encontrado para a busca.")
-        _opcoes = {f"{i['part_number']} — {i['nome_item']}": i["id"] for i in _itens[:50]}
-        _sel = st.selectbox("Material", ["—"] + list(_opcoes.keys()), key="gc_sel_add", disabled=not _opcoes)
+        # v5.6.0 — busca única: o próprio select filtra por PN, nome OU descrição (o rótulo
+        # inclui a descrição), eliminando o campo de pesquisa separado que travava o select
+        # até alguém digitar e truncava silenciosamente em 50 itens. Mesmo padrão da v3.3.0
+        # em "Fornecedores & Cotação".
+        _, _item_gc, _ = sel_material(
+            "Material (busque por PN, nome ou descrição)", "gc_sel_add", incluir_descricao=True
+        )
         with st.form("form_gc_add", clear_on_submit=True):
             st.markdown("**Adicionar código de fornecedor**")
             f1, f2 = st.columns(2)
@@ -1012,9 +1009,9 @@ def _render_guarda_chuva_controle():
                 ":material/add: Adicionar ao Guarda-Chuva", type="primary", width="stretch"
             )
         if _add:
-            _item_id = _opcoes.get(_sel)
+            _item_id = _item_gc["id"] if _item_gc else None
             if not _item_id:
-                st.error("Selecione um material (busque por PN ou descrição).")
+                st.error("Selecione um material (busque por PN, nome ou descrição).")
             elif not (_cod or "").strip():
                 st.error("Informe o código do fornecedor.")
             else:
@@ -1203,8 +1200,8 @@ def _dialog_guarda_chuva():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 📡 MONITOR DE SC (v4.11.0) — seções reordenadas: (1) Controle Manual de Críticos,
-# (2) SCs/Itens não atendidos (via API SCM), (3) fallback de cruzamento por upload.
+# 📡 MONITOR DE SC — seções: (1) Controle Manual de Críticos, (2) fallback de
+# cruzamento por upload. v5.6.0: "SCs/Itens não atendidos" foi removido.
 # ══════════════════════════════════════════════════════════════════════════════
 
 
@@ -1298,90 +1295,6 @@ def _render_controle_manual_criticos():
         _corpo.columns = _cols_final
         st.caption("Pré-visualização (1ª linha como cabeçalho):")
         st.dataframe(_corpo, width="stretch", hide_index=True)
-
-
-def _render_scs_nao_atendidas():
-    """v4.11.0 — 'SCs/Itens não atendidos' via API do SCM: SCs do almoxarifado em fase de
-    cotação (sem pedido) cruzadas com o estoque MRO. Read-only, carregado sob demanda."""
-    st.markdown("### :material/assignment_late: SCs/Itens não atendidos")
-    st.caption(
-        "SCs do **almoxarifado** em **fase de cotação** (ainda sem pedido gerado), "
-        "direto do **SCM**, cruzadas com o estoque MRO. **Status**, **Esgotado em** e "
-        "**Faltando (d)** vêm do inventário (igual à aba 'Saldo em Estoque')."
-    )
-
-    _l1, _l2 = st.columns([3, 1])
-    with _l2:
-        _load = st.button(
-            ":material/cloud_sync: Carregar/Atualizar do SCM", key="scs_na_load", width="stretch"
-        )
-    if _load:
-        for _fn in (scm_client.cotacoes_em_andamento, scm_client.sc_timeline):
-            try:
-                _fn.clear()
-            except Exception:
-                pass
-        if not scm_client.esta_disponivel():
-            st.session_state["_scs_na_rows"] = "OFFLINE"
-        else:
-            with st.spinner("Consultando SCs em cotação no SCM…"):
-                _solic_mro, _pns, _dep = obter_cadastro_mro_para_cruzamento()
-                _lic = scm_client.cotacoes_em_andamento()
-                _escopo = cotacoes_no_escopo(_lic, _solic_mro)
-                _itens = {}
-                for _c in _escopo:
-                    _tl = scm_client.sc_timeline(_c["sc_id"]) or {}
-                    _itens[_c["sc_id"]] = _tl.get("items") or []
-                _inv = {
-                    str(i["part_number"]).strip().upper(): {
-                        "status_material": i.get("status_material"),
-                        "unidade": i.get("unidade"),
-                        "nome_item": i.get("nome_item"),
-                        "previsao_ruptura_dias": i.get("previsao_ruptura_dias"),
-                    }
-                    for i in listar_inventario()
-                }
-                st.session_state["_scs_na_rows"] = montar_scs_nao_atendidas(_escopo, _itens, _inv)
-
-    _rows = st.session_state.get("_scs_na_rows")
-    if _rows is None:
-        st.info(
-            ":material/cloud: Clique em **Carregar/Atualizar do SCM** para buscar as SCs "
-            "em cotação. (Requer rede até o SCM; senão use o fallback de upload abaixo.)"
-        )
-        return
-    if _rows == "OFFLINE":
-        st.warning(
-            ":material/cloud_off: Não foi possível conectar ao SCM "
-            "(`mansrvapp03:5715`). Use o **fallback de upload** abaixo."
-        )
-        return
-    if not _rows:
-        st.success(":material/check_circle: Nenhuma SC/Item do almoxarifado em cotação pendente.")
-        return
-    _df_na = pd.DataFrame(_rows, columns=COLUNAS_SCS_NAO_ATENDIDAS)
-    st.caption(f"**{len(_df_na)}** item(ns) em cotação, do escopo do almoxarifado (mais urgente primeiro).")
-    st.dataframe(
-        _df_na,
-        width="stretch",
-        hide_index=True,
-        height=460,
-        column_config={
-            "QTY Solicitada": st.column_config.NumberColumn(format="%.0f"),
-            "Saldo PO": st.column_config.NumberColumn(format="%.0f"),
-            "Faltando (d)": st.column_config.NumberColumn(format="%.1f"),
-        },
-    )
-    _buf = io.BytesIO()
-    with pd.ExcelWriter(_buf, engine="openpyxl") as _w:
-        _df_na.to_excel(_w, index=False, sheet_name="SCs nao atendidos")
-    st.download_button(
-        ":material/download: Baixar (Excel)",
-        data=_buf.getvalue(),
-        file_name="scs_nao_atendidos.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="scs_na_dl",
-    )
 
 
 def _render_cruzamento_upload_fallback():

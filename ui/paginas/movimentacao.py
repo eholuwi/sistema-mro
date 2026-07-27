@@ -54,6 +54,33 @@ from ui.tema import paleta_atual
 from ui.formatos import fmt
 from ui.componentes.graficos import _barv
 from ui.componentes.selecao import sel_material
+from ui.componentes.tabela import chave_editor
+
+
+def chave_editor_recebimento(sc_id, geracao):
+    """Chave do `data_editor` do recebimento por SC/PO, versionada por SC e por geração.
+
+    v5.6.0 — CORREÇÃO DO RECEBIMENTO PARCIAL (ver `ui/componentes/tabela.chave_editor`
+    para a causa no Streamlit 1.60.0). Com a chave fixa que existia aqui, receber 4 de 10
+    reaplicava o `{"Qtd a receber": 4}` antigo sobre o pendente já atualizado (6): o
+    parcial nunca andava e um segundo clique recebia 4 de novo. O recebimento TOTAL
+    escapava porque o item sai da lista, o nº de linhas muda e a assinatura muda junto.
+
+    - `sc_id` isola cada SC (sem ele, edições vazam entre SCs de mesmo formato);
+    - `geracao` é incrementada após cada recebimento, forçando um editor limpo.
+    """
+    return chave_editor("rec_sc_editor", sc_id, geracao)
+
+
+def _limpar_editores_recebimento(chave_viva):
+    """Descarta o estado dos editores de recebimento que não são mais o atual — evita
+    que o `session_state` cresça a cada SC visitada / geração numa sessão longa."""
+    for k in [
+        k
+        for k in st.session_state
+        if isinstance(k, str) and k.startswith("rec_sc_editor__") and k != chave_viva
+    ]:
+        st.session_state.pop(k, None)
 
 
 def _receber_por_sc(centros):
@@ -118,11 +145,13 @@ def _receber_por_sc(centros):
                 for it in itens
             ]
         )
+        _chave_editor = chave_editor_recebimento(sc["id"], st.session_state.get("rec_sc_gen", 0))
+        _limpar_editores_recebimento(_chave_editor)
         edit = st.data_editor(
             base,
             hide_index=True,
             width="stretch",
-            key="rec_sc_editor",
+            key=_chave_editor,
             column_config={
                 "Receber": st.column_config.CheckboxColumn(
                     "Receber", help="Desmarque itens que ainda não chegaram."
@@ -177,6 +206,9 @@ def _receber_por_sc(centros):
                     erros.append(f"{r['PN']}: {msg}")
             if recebidos:
                 invalidar_leituras()  # F4b: baixa de estoque no ledger — limpa cache das leituras
+                # v5.6.0 — nova geração: o editor renasce limpo e relê o pendente já
+                # atualizado, em vez de reaplicar a quantidade digitada no ciclo anterior.
+                st.session_state["rec_sc_gen"] = st.session_state.get("rec_sc_gen", 0) + 1
                 st.success(
                     f":material/check_circle: {recebidos} item(ns) recebido(s) na SC {sc['numero_sc']}."
                 )

@@ -105,6 +105,18 @@ _USUARIOS_FAKE = [
 def _instalar_fake_scm(monkeypatch, byuser, timelines, usuarios=None, disponivel=True):
     from services import scm_client
 
+    # v5.6.0 — `diagnostico` passou a ser a fonte do health-check (traz latência e motivo
+    # do erro); `esta_disponivel` deriva dele. Fingir os dois mantém coerência.
+    monkeypatch.setattr(
+        scm_client,
+        "diagnostico",
+        lambda *a, **k: {
+            "ok": disponivel,
+            "latencia_ms": 1,
+            "erro": None if disponivel else "ConnectionError: fake offline",
+            "endpoint": "http://fake/api/Usuario/Compradores",
+        },
+    )
     monkeypatch.setattr(scm_client, "esta_disponivel", lambda *a, **k: disponivel)
     monkeypatch.setattr(scm_client, "usuarios", lambda: list(usuarios or []))
 
@@ -230,11 +242,22 @@ def test_sincronizar_dedup_vs_excel_preserva_e_nao_regride(db, monkeypatch):
 
 
 def test_sincronizar_api_off_falha_graciosamente(db, monkeypatch):
+    """API fora: nenhum dado é tocado — essa é a garantia que importa.
+
+    v5.6.0 — o que mudou: a tentativa falha passou a deixar UMA linha de auditoria em
+    `log_importacoes` (antes não deixava nada, e a tela não sabia distinguir "nunca
+    sincronizou" de "tentou e a API estava fora"). Nenhuma escrita de dado acontece."""
     _seed_solicitante(db, "Julyo Oliveira")
     _instalar_fake_scm(monkeypatch, [], {}, usuarios=_USUARIOS_FAKE, disponivel=False)
     resumo = S.sincronizar(backup=False)
     assert resumo["ok"] is False and "erro" in resumo
     conn = db.get_connection()
     assert conn.execute("SELECT COUNT(*) FROM solicitacoes_compra").fetchone()[0] == 0
-    assert conn.execute("SELECT COUNT(*) FROM log_importacoes WHERE tipo='api_scm'").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM itens_sc").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM itens_sc_externos").fetchone()[0] == 0
     conn.close()
+
+    log = S.ultima_sync()
+    assert log is not None, "a tentativa falha precisa ficar registrada"
+    assert log["detalhe"]["status"] == "falha"
+    assert "fake offline" in log["detalhe"]["erro"]

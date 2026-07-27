@@ -20,7 +20,7 @@ from services import scm_consulta, scm_sync
 from ui.cache import invalidar_leituras
 from ui.componentes.filtros import barra_filtros
 from ui.componentes.tabela import tabela_paginada
-from ui.componentes.status import badge_origem, ponto_status_api
+from ui.componentes.status import badge_origem, painel_saude_scm, registrar_diagnostico_do_sync
 
 _ABERTAS_EXCLUI = {"Recebido", "Cancelado"}
 _DATA_COLS_SC = ["data_abertura", "data_aprovacao", "proxima_necessidade"]
@@ -58,33 +58,20 @@ def render() -> None:
 
 def _cabecalho_sync():
     """Sincronização SCM persistente (API → mro.db). Movida da aba Monitor (F2). Só
-    toca a rede quando o usuário clica em 'Atualizar agora'."""
+    toca a rede quando o usuário clica em 'Atualizar agora'.
+
+    v5.6.0 — o painel de saúde (conectividade + latência + última tentativa) passou a
+    abrir este container, sempre visível. A linha "Última sincronização" que existia aqui
+    foi absorvida por ele, com o dado a mais que faltava: se a última tentativa FALHOU."""
     with st.container(border=True):
-        _u = scm_sync.ultima_sync()
-        c1, c2 = st.columns([3, 1])
-        with c1:
-            if _u:
-                _res = (_u.get("detalhe") or {}).get("resumo", {})
-                _st = (_u.get("detalhe") or {}).get("status", "")
-                st.markdown(
-                    f":material/cloud_sync: **Última sincronização:** {_u['data_hora']}  ·  "
-                    f"{_res.get('scs', 0)} SC(s), {_res.get('itens', 0)} item(ns), "
-                    f"{_res.get('externos', 0)} externo(s)" + (f"  ·  _{_st}_" if _st else "")
-                )
-            else:
-                st.markdown(
-                    ":material/cloud_sync: **Última sincronização:** _nunca_ — clique em **Atualizar agora**."
-                )
-            st.caption(
-                "Puxa as SCs dos **solicitantes MRO** da API do SCM e **grava no banco** "
-                "(status, datas, itens, preços, itens fora do inventário). O **Relatório "
-                "de SCs (Excel)** segue como alternativa — a API nunca é dependência "
-                "exclusiva. Escopo em **Configurações › Solicitantes MRO (SCM)**."
-            )
-        with c2:
-            _go = st.button(
-                ":material/sync: Atualizar agora", key="scm_sync_go", width="stretch", type="primary"
-            )
+        painel_saude_scm()
+        st.caption(
+            "Puxa as SCs dos **solicitantes MRO** da API do SCM e **grava no banco** "
+            "(status, datas, itens, preços, itens fora do inventário). O **Relatório "
+            "de SCs (Excel)** segue como alternativa — a API nunca é dependência "
+            "exclusiva. Escopo em **Configurações › Solicitantes MRO (SCM)**."
+        )
+        _go = st.button(":material/sync: Atualizar agora", key="scm_sync_go", type="primary")
 
         if _go:
             with st.status("Sincronizando SCM…", expanded=True) as _s:
@@ -98,6 +85,9 @@ def _cabecalho_sync():
                     )
 
                 resumo = scm_sync.sincronizar(progress_cb=_cb)
+                # v5.6.0 — o sync acabou de falar com a API: aproveita o resultado para
+                # alimentar o painel de saúde, em vez de exigir um "Testar conexão" a mais.
+                registrar_diagnostico_do_sync(resumo)
                 if not resumo.get("ok"):
                     _s.update(label="API do SCM indisponível", state="error")
                 else:
@@ -411,14 +401,19 @@ def _ao_vivo_api(cab):
         if live is None:
             st.caption(
                 "Clique acima para consultar Timeline, cotação, pedido e aprovadores "
-                "diretamente do SCM (não altera o banco)."
+                "diretamente do SCM (não altera o banco). O estado da API está no topo da página."
             )
             return
+        # v5.6.0 — o status vem do resultado da consulta que ACABOU de ser feita, em vez de
+        # um novo health-check (que era chamado depois do `return` do caso offline, e por
+        # isso nunca conseguia ficar vermelho). Aqui offline e online desenham o indicador.
         if not live.get("disponivel"):
-            st.warning("API do SCM offline — exibindo apenas os dados do banco acima.")
+            st.markdown(
+                ":red[:material/sensors_off: **API do SCM offline**] — exibindo apenas os "
+                "dados do banco acima."
+            )
             return
-
-        ponto_status_api()
+        st.markdown(":green[:material/sensors: **API do SCM online**]")
         if live.get("eventos"):
             st.markdown("**Linha do tempo (eventos)**")
             st.dataframe(pd.DataFrame(live["eventos"]), width="stretch", hide_index=True)

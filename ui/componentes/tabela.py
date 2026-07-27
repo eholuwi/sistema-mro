@@ -8,9 +8,34 @@ Streamlit.
 
 from __future__ import annotations
 
+import hashlib
 import math
 
 import streamlit as st
+
+
+def chave_editor(prefixo, *partes):
+    """Chave de `st.data_editor` versionada pela identidade dos dados que ele edita.
+
+    v5.6.0 — No Streamlit 1.60.0, um `data_editor` com `key` e `num_rows="fixed"` passou
+    a ter identidade baseada na ASSINATURA DO SCHEMA (colunas, tipos, nº de linhas) e
+    **não nos valores** — "This keeps edits alive across pure value changes"
+    (`streamlit/elements/widgets/data_editor.py`). Com uma `key` fixa, as edições do
+    usuário sobrevivem a mudanças de conteúdo e são reaplicadas sobre dados que já não
+    são os mesmos: no recebimento por SC/PO o parcial nunca andava, e na sugestão de
+    reposição os checkboxes vazavam entre conjuntos filtrados de mesmo tamanho.
+
+    Passe em `partes` o que identifica o conteúdo (id da SC, geração, PNs filtrados);
+    quando qualquer uma mudar, o editor renasce limpo. Partes longas são resumidas em
+    hash curto para a chave não crescer sem limite.
+    """
+    fatias = []
+    for p in partes:
+        texto = "-".join(str(x) for x in p) if isinstance(p, (list, tuple, set, frozenset)) else str(p)
+        if len(texto) > 32:
+            texto = hashlib.blake2s(texto.encode("utf-8"), digest_size=8).hexdigest()
+        fatias.append(texto)
+    return "__".join([prefixo, *fatias])
 
 
 def _paginar(df, pagina, page_size):

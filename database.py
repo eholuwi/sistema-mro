@@ -801,6 +801,22 @@ def _migrar(conn):
         conn.execute("UPDATE requisicoes SET status='Entregue'")  # legado: baixa já feita na criação
         logger.info("  ↳ Migração v4.7.0: status em requisicoes adicionada (legado → Entregue).")
 
+    # v5.6.0 — backfill de `itens_sc.origem`. A coluna existe desde a v5.1.0, mas só o sync
+    # da API a preenchia: o ingestor Excel nunca gravou, e a tela do SCM Integrado mostrava
+    # "Origem" sempre vazia. Como nenhuma SC chegou pela API (nenhuma tem `sc_id_scm`), todo
+    # item já gravado é comprovadamente de origem Excel. Idempotente: na segunda execução o
+    # SELECT não encontra nada. Nunca regride linhas já marcadas 'api_scm'/'manual'.
+    if (
+        "origem" in cols_isc
+        and conn.execute("SELECT 1 FROM itens_sc WHERE origem IS NULL LIMIT 1").fetchone()
+    ):
+        # Mesmo motivo do backup da v4.7.0: os ALTER TABLE acima deixam transação aberta e
+        # sem este commit o backup sai incompleto, justamente antes de reescrever dados.
+        conn.commit()
+        _backup_db("itens-sc-origem-v560")
+        conn.execute("UPDATE itens_sc SET origem='excel' WHERE origem IS NULL")
+        logger.info("  ↳ Migração v5.6.0: itens_sc.origem retroativa → 'excel'.")
+
     conn.commit()
 
 

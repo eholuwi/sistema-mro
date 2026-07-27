@@ -8,6 +8,21 @@
 
 ## STATUS ATUAL — atualizado em 26/07/2026 (leia isto, não a seção 1-7 abaixo para status)
 
+- **v5.6.0 CONCLUÍDA e validada pelo Luis no app real** — 6 ajustes pontuais pedidos pela operação.
+  Gate verde: **532 testes** (491 → +41). Ver `changelog/5.6.0.md`. Três diagnósticos valem memória:
+  - **O recebimento parcial por SC/PO não quebrou por código do MRO.** O Streamlit 1.60.0 mudou a
+    identidade do `data_editor` com `key` + `num_rows="fixed"` para a **assinatura do schema**, não
+    os valores ("This keeps edits alive across pure value changes"). A quantidade digitada era
+    reaplicada sobre o pendente já atualizado. Só o parcial quebrou porque no total o item sai da
+    lista, o nº de linhas muda e a assinatura muda junto. Corrigido com chave versionada
+    (`ui/componentes/tabela.chave_editor`). **Se aparecer bug parecido em qualquer `data_editor` com
+    `key`, é aqui que se olha primeiro.**
+  - **Centro de Custo nunca foi importado:** a planilha sempre teve a coluna, `ingerir_scm` nunca a
+    mapeou (228 SCs, 0 com CC). Corrigido; falta **reimportar o Relatório de SCs** para preencher.
+  - **O indicador da API era incapaz de ficar vermelho** — estava depois do `return` do caso offline.
+  - **Migração de dados** (backfill `itens_sc.origem` → `'excel'`): ensaiada numa cópia do banco real
+    (658 itens, 0,13s, integridade/FK ok, backup íntegro) e **rollback testado** nos dois caminhos.
+    Roda sozinha no próximo boot do app.
 - **⚠️ A BRANCH DE TRABALHO É `feat/v5.0.0`, NÃO a `main`.** Decisão do Luis em 26/07/2026:
   seguir na feature branch, **sem** abrir PR para a `main` por enquanto. A `main` está parada em
   **v4.5.5** (`21fc73e`, 16/07) e já são 40+ commits de diferença — quem clonar o repositório cai

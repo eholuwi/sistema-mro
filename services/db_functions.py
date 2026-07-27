@@ -1475,15 +1475,17 @@ def criar_sc(numero_sc, data_abertura, itens, observacoes=""):
                     )
                     atualizados += 1
                 else:
+                    # v5.6.0 — `origem` só no INSERT: item criado à mão nasce 'manual', mas
+                    # editar por aqui um item que veio do Excel/API não reescreve a origem dele.
                     conn.execute(
                         """
                         INSERT INTO itens_sc
                             (sc_id,item_id,numero_po,quantidade_solicitada,quantidade_recebida,
                              data_necessidade,observacao_item,quantidade_pedido,fornecedor_item,
-                             data_prev_nfe,saldo_residual,status_item,divergencia_compra)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             data_prev_nfe,saldo_residual,status_item,divergencia_compra,origem)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
-                        (sc_id, it["item_id"], *dados),
+                        (sc_id, it["item_id"], *dados, "manual"),
                     )
                     criados += 1
                 conn.execute("UPDATE inventario SET ultima_sc_id=? WHERE id=?", (sc_id, it["item_id"]))
@@ -1764,6 +1766,10 @@ def importar_solicitacoes_protheus(arquivo_excel, nome_arquivo="Solicitacoes.xls
         "qtd_entregue": _coluna(df, ["Qtd.Entregue", "Qtd Entregue"]),
         "documento": _coluna(df, ["Documento"]),
         "quantidade_nfe": _coluna(df, ["Quantidade NFe"]),
+        # v5.6.0 — mapeamento aditivo: este export nem sempre traz centro de custo. Se a
+        # coluna não existir, `_coluna` devolve None e o COALESCE do UPDATE preserva o
+        # valor que a ingestão do Relatório de SCs já tiver gravado.
+        "centro_custo": _coluna(df, ["Centro Custo", "Centro de Custo", "CC", "C.Custo"]),
     }
 
     obrigatorias = ["numero_sc", "solicitante", "produto", "quantidade"]
@@ -1838,6 +1844,9 @@ def importar_solicitacoes_protheus(arquivo_excel, nome_arquivo="Solicitacoes.xls
 
                 descricao_item = str(_valor(row, colunas["descricao_item"], part_number)).strip()
                 justificativa = str(_valor(row, colunas["justificativa"], "") or "").strip()
+                # v5.6.0 — centro de custo (opcional neste export; None preserva o já gravado).
+                centro_custo = str(_valor(row, colunas["centro_custo"], "") or "").strip()
+                centro_custo = centro_custo if centro_custo and centro_custo != "-" else None
                 qtd_sc = _to_float(_valor(row, colunas["quantidade"], 0))
                 qtd_entregue = _to_float(_valor(row, colunas["qtd_entregue"], 0))
                 qtd_pedido = _to_float(_valor(row, colunas["quantidade_pedido"], 0))
@@ -1913,7 +1922,8 @@ def importar_solicitacoes_protheus(arquivo_excel, nome_arquivo="Solicitacoes.xls
                             data_abertura=?, data_aprovacao=?, numero_po=?, fornecedor=?,
                             data_prev_entrega=?, status=?, observacoes=?, solicitante=?,
                             descricao_solicitacao=?, status_protheus=?, prioridade_critica=?,
-                            origem_importacao=?, data_importacao=?
+                            origem_importacao=?, data_importacao=?,
+                            centro_custo=COALESCE(?, centro_custo)
                         WHERE id=?
                     """,
                         (
@@ -1930,6 +1940,7 @@ def importar_solicitacoes_protheus(arquivo_excel, nome_arquivo="Solicitacoes.xls
                             1 if prioridade_critica else 0,
                             nome_arquivo,
                             agora,
+                            centro_custo,
                             sc_id,
                         ),
                     )
@@ -1941,8 +1952,8 @@ def importar_solicitacoes_protheus(arquivo_excel, nome_arquivo="Solicitacoes.xls
                             (numero_sc,data_abertura,data_aprovacao,numero_po,fornecedor,
                              data_prev_entrega,status,observacoes,solicitante,
                              descricao_solicitacao,status_protheus,prioridade_critica,
-                             origem_importacao,data_importacao)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             origem_importacao,data_importacao,centro_custo)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                         (
                             numero_sc,
@@ -1959,6 +1970,7 @@ def importar_solicitacoes_protheus(arquivo_excel, nome_arquivo="Solicitacoes.xls
                             1 if prioridade_critica else 0,
                             nome_arquivo,
                             agora,
+                            centro_custo,
                         ),
                     )
                     sc_id = cur.lastrowid
@@ -4277,6 +4289,9 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
         "valor_total": _coluna(df, ["Vlr.Total", "Valor Total", "Vlr Total"]),
         "moeda": _coluna(df, ["Moeda"]),
         "unidade": _coluna(df, ["Unidade", "UM", "U.M.", "Um"]),  # v2.9.0: UM de compra
+        # v5.6.0 — a planilha sempre trouxe "Centro Custo", mas a coluna não era mapeada:
+        # o dado era lido e descartado, e o campo chegava vazio no SCM Integrado.
+        "centro_custo": _coluna(df, ["Centro Custo", "Centro de Custo", "CC", "C.Custo"]),
     }
     faltantes = [n for n in ("numero_sc", "solicitante", "produto", "quantidade") if not colunas[n]]
     if faltantes:
@@ -4369,6 +4384,10 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                 saving_val = _to_float(_valor(row, colunas["saving"], 0))
                 departamento = str(_valor(row, colunas["departamento"], "") or "").strip()
                 departamento = departamento if departamento and departamento != "-" else None
+                # v5.6.0 — centro de custo da SC (mesmo tratamento de comprador/departamento:
+                # vazio ou '-' vira None para não sobrescrever com lixo no COALESCE do UPDATE).
+                centro_custo = str(_valor(row, colunas["centro_custo"], "") or "").strip()
+                centro_custo = centro_custo if centro_custo and centro_custo != "-" else None
                 descricao_sc = str(_valor(row, colunas["descricao_sc"], "") or "").strip()
                 documento = str(_valor(row, colunas["documento"], "") or "").strip() or None
                 preco_unit = _to_float(_valor(row, colunas["preco_unitario"], 0))
@@ -4398,7 +4417,8 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                             origem_importacao=?, data_importacao=?,
                             comprador=COALESCE(?, comprador), data_po=COALESCE(?, data_po),
                             saving=MAX(COALESCE(saving, 0), ?),
-                            departamento=COALESCE(?, departamento)
+                            departamento=COALESCE(?, departamento),
+                            centro_custo=COALESCE(?, centro_custo)
                         WHERE id=?
                     """,
                         (
@@ -4419,6 +4439,7 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                             data_po,
                             saving_val,
                             departamento,
+                            centro_custo,
                             sc_id,
                         ),
                     )
@@ -4430,8 +4451,9 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                             (numero_sc,data_abertura,data_aprovacao,numero_po,fornecedor,
                              data_prev_entrega,status,observacoes,solicitante,
                              descricao_solicitacao,status_protheus,prioridade_critica,
-                             origem_importacao,data_importacao,comprador,data_po,saving,departamento)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             origem_importacao,data_importacao,comprador,data_po,saving,departamento,
+                             centro_custo)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                         (
                             numero_sc,
@@ -4452,6 +4474,7 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                             data_po,
                             saving_val,
                             departamento,
+                            centro_custo,
                         ),
                     )
                     sc_id = cur.lastrowid
@@ -4496,6 +4519,9 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                     preco_unit,
                     valor_total,
                     moeda_str,
+                    # v5.6.0 — a `origem` do item só era gravada pelo sync da API; vinda do
+                    # Excel a coluna ficava NULL e a tela mostrava o campo sempre vazio.
+                    "excel",
                 )
                 item_sc = conn.execute(
                     "SELECT id FROM itens_sc WHERE sc_id=? AND item_id=?", (sc_id, item_id)
@@ -4509,7 +4535,7 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                             quantidade_pedido=?, fornecedor_item=?, data_prev_nfe=?, documento_nf=?,
                             quantidade_nfe=?, saldo_residual=?, status_item=?, ruptura=?,
                             divergencia_compra=?, ultima_importacao=?, preco_unitario=?,
-                            valor_total=?, moeda=?
+                            valor_total=?, moeda=?, origem=?
                         WHERE id=?
                     """,
                         (*dados_item, item_sc["id"]),
@@ -4522,8 +4548,8 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                              data_necessidade,observacao_item,descricao_detalhada,quantidade_pedido,
                              fornecedor_item,data_prev_nfe,documento_nf,quantidade_nfe,saldo_residual,
                              status_item,ruptura,divergencia_compra,ultima_importacao,preco_unitario,
-                             valor_total,moeda)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             valor_total,moeda,origem)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                         (sc_id, item_id, *dados_item),
                     )
