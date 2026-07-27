@@ -1,6 +1,6 @@
 # Backlog / prompt de continuidade — Sistema MRO
 
-> Atualizado em 26/07/2026, ao fechar a **v5.6.0**. As 4 demandas antigas desta lista
+> Atualizado em 27/07/2026, ao fechar a **v5.7.0**. As 4 demandas antigas desta lista
 > (Consumo/Mensal, Guarda-Chuva, Monitor de SC, integração com a API do SCM) foram entregues
 > entre a v4.8 e a v5.6 e saíram daqui. O estudo das requisições digitais segue em
 > `docs/REQUISICOES_DIGITAIS_ESTUDO.md`.
@@ -9,99 +9,65 @@
 
 ## O QUE ESTÁ ABERTO
 
-O pedido de 26/07/2026 tinha 9 itens. **Os itens 1–6 foram entregues na v5.6.0.** Ficaram de fora,
-por decisão do Luis, os três que dependem de **entrevista de alinhamento**:
+**O pedido de 26/07/2026 está FECHADO.** Os itens 1–6 saíram na v5.6.0; os itens **7, 8 e 9** —
+que dependiam de entrevista — saíram na **v5.7.0**, junto com o achado nº1 daquela versão. Ver
+`changelog/5.7.0.md`.
 
-### Item 7 — Requisição de Material: Padrão × Digital
+Não há demanda de produto em aberto no momento. O que resta são os **achados 2–7 da v5.6.0**
+(abaixo), os **4 achados novos da v5.7.0** e as pendências de infra.
 
-Radio button na aba "Nova Requisição" com **Requisição Padrão** (default) e **Requisição Digital**.
+---
 
-Fatos já levantados (não repetir a investigação):
+## DECISÕES DA ENTREVISTA DE 27/07/2026
 
-- O fluxo Padrão **não foi desativado, foi removido** — commit `84c654b` (17/07/2026), o mesmo que
-  introduziu a Digital. O pai é `4d25e2c`. O código antigo está recuperável quase 1:1 em
-  `git show 4d25e2c:app.py`, função `_render_requisicao()`, **linhas 1196-1348** — inclusive os dois
-  checkboxes pedidos (Entrega Individual e Aprovação SESMT).
-- **As colunas já existem** em `requisicoes` (`database.py:263-281`): `entrega_individual`,
-  `destinatarios` (JSON), `sesmt`, `sesmt_responsavel`, `autorizador_tipo/nome`. **Sem migração**
-  para elas. Falta só um campo para distinguir Padrão de Digital.
-- **Matrícula nunca teve coluna própria** — era parseada de um `text_area` livre no formato
-  `MATRÍCULA — NOME` e serializada em JSON. Campos separados de Matrícula e Nome são pedido **novo**,
-  não restauração.
-- ⚠️ **Conflito de regra:** a Padrão baixa estoque **na criação**; a v4.7.0 mudou isso de propósito
-  (baixa na entrega) e `tests/test_requisicao.py::test_criacao_nao_baixa_estoque` trava o contrato.
-  Usar **função separada** (ex.: `criar_requisicao_com_baixa`) ou flag — **não** alterar
-  `criar_requisicao`.
-- Hoje SESMT só existe na **entrega** (`ui/paginas/movimentacao.py:601-606`); "Entrega Individual"
-  não existe em lugar nenhum da UI.
-- **Decisão já tomada pelo Luis:** na Padrão vai **só "Qtd Solicitada"**, com baixa integral (o fluxo
-  antigo tinha Qtd Solicitada + Qtd Atendida). Faltando saldo, recusa e avisa qual item.
+Registradas porque **têm autoridade sobre o que estava escrito neste arquivo** — em dois pontos
+elas contradizem o plano anterior, e quem ler o histórico precisa saber qual venceu.
 
-### Item 8 — Fila de Separação: visões Almoxarife × Solicitante + "Adicionar Item" sempre
+1. **Os dois fluxos de requisição convivem.** A **Padrão** é a da operação real (o material sai no
+   balcão, a baixa é na criação) e vira o **default**; a **Digital** é protótipo de vitrine do
+   self-service e passa a ser assumidamente experimental.
+2. ⚠️ **SUBSTITUI a regra antiga deste arquivo** (*"faltando saldo, recusa e avisa qual item"*):
+   falta de saldo **não recusa o pedido**. Baixa `min(solicitada, estoque)` e manda o pendente para
+   a Fila de Separação — que é o que a operação já faz no papel.
+3. **Ajuste não tem Centro de Custo.** É correção do almoxarifado, não consumo de setor: CC vazio é
+   a informação **correta**, não dado faltando.
+4. **Requisição entregue que recebe item novo reabre como Parcial** e volta à fila (não vira pedido
+   novo vinculado).
+5. **Visão do Solicitante é simulação**, identificada por nome digitado. O MRO não tem login, e a
+   tela precisa dizer isso em destaque.
+6. **O relatório serve aos dois usos** — rateio mensal por CC/Setor **e** auditoria/rastreio.
+   Daí a exportação larga com colunas explodidas e o filtro de período.
+7. **O relatório tem de responder três perguntas:** quanto perdemos no período · quais itens vivem
+   divergindo · reconciliação do saldo. É por isso que cada caminho de ajuste ganhou categoria
+   própria: sem isso não dá para somar perda sem varrer junto correção de cadastro.
+8. **Matrícula e Nome em campos separados** (a `text_area` antiga adivinhava o separador).
+9. **Só o MRO escreve `quantidade_recebida`.** Import do Protheus e API do SCM viram leitura; o
+   número do ERP vive em coluna própria, visível ao lado.
 
-- "Adicionar Item" **não tem condição na UI** — o expander é sempre renderizado
-  (`ui/paginas/movimentacao.py:627-647`). A restrição vem de dois pontos indiretos:
-  `services/db_functions.py:1356` (a fila só lista `Aberta`/`Parcial`) e `:1298` (o serviço recusa
-  os demais status).
-- ⚠️ **Armadilha:** `adicionar_itens_requisicao` **não recalcula o status**. Liberar a guarda sem
-  recalcular deixa a requisição `Entregue` com item pendente — e ela **não reaparece na fila**, então
-  o item novo fica **órfão e invisível**, e a entrega passa a recusá-lo. Correção mínima: chamar
-  `_calcular_status_requisicao` + `UPDATE` ao final, reabrindo para `Parcial`. Isso faz
-  `tests/test_v470_requisicao_digital.py:67-76` falhar — precisa ser reescrito.
-- **Não existe autenticação no MRO** (`tests/test_v330_seguranca.py` é sobre *estoque* de segurança,
-  não acesso). A "visão do Solicitante" depende dessa decisão de arquitetura — ver
-  `docs/REQUISICOES_DIGITAIS_ESTUDO.md`, seção 4 (login local × reusar `/Usuario` do SCM) e as fases
-  R1/R2/R3.
+---
 
-### Item 9 — Relatório de Movimentações (exportação)
+## ARQUIVO — o que estava aqui e foi entregue na v5.7.0
 
-Análise do `movimentacoes_26-07-2026.xlsx` (2.815 linhas, 16/04 a 21/07 — arquivo **fora do git**,
-mantido só para análise).
+Os itens 7, 8 e 9 tinham páginas de investigação neste arquivo. Foram removidos porque **estão
+implementados**; o que sobreviveu deles como conhecimento vivo está no `changelog/5.7.0.md` e no
+`docs/HANDOFF.md`. Dois fatos que valem repetir aqui, porque voltam a morder:
 
-A coluna **Observação nunca é digitada** — é sempre string montada por código, em 8 templates, e
-empilha 4 semânticas diferentes:
-
-| Padrão | Ocorrências | O que está escondido no texto |
-|---|---|---|
-| `Req REQ-…` | 1.545 | nº da requisição |
-| `Requisição REQ-…` | 336 | **o mesmo, em formato histórico diferente** |
-| `Ajuste …` / `AJUSTE: …` | 517 | motivo do ajuste (dois formatos) |
-| `Conferência …` | 136 | mudança de local (`Local: X → Y`) |
-| `NF: …` | 108 | número da nota fiscal |
-
-Dado que **já existe no banco e não é exportado**: `centro_custo` (99% preenchido), `setor` (66%),
-`solicitante` (100%), `requisicao_id` (66%), `sc_item_id` (4%). As FKs para puxar SC/PO/NF/
-fornecedor/autorizador/SESMT já existem. **`motivo` está 0% preenchido** — não serve de fonte.
-
-Proposta a validar: explodir a Observação em colunas próprias (Nº Requisição, NF, SC/PO, Centro de
-Custo, Setor, Motivo, Categoria), manter Observação como texto residual, e trocar o `Tipo` cru
-(`saida`/`entrada`) pela categoria amigável que a tela já calcula.
-
-⚠️ Dois defeitos a corrigir junto, independentemente do desenho: **teto rígido de 5.000 linhas**
-(`services/db_functions.py:3049`) com `ORDER BY data_hora DESC` — as mais antigas somem
-**silenciosamente**, e no ritmo atual o corte começa em ~6 meses — e **ausência de filtro por período**.
-
-### Pauta da entrevista (itens 7-9)
-
-1. Requisição Padrão × Digital: quem usa cada uma, e a Digital é criada pelo solicitante ou pelo almoxarife?
-2. Baixa imediata na Padrão: quando falta saldo — recusa tudo, ou baixa o que tem?
-3. Matrícula/Nome: um colaborador por requisição ou vários (a lista antiga aceitava vários)?
-4. "Adicionar Item" em requisição entregue: ela volta para a fila como Parcial, ou vira pedido novo vinculado?
-5. Visão do Solicitante: consulta só, ou também cria? Identifica por nome digitado ou precisa de login?
-6. Relatório: quem consome, com que frequência, e para responder qual pergunta?
+- **`movimentacoes.motivo` está 0% preenchido** nas 2.822 linhas do histórico real. Ele só passou a
+  ser gravado na v4.3.0. Para classificar movimentação **legada**, a fonte confiável é o
+  **`centro_custo`** (`INVENTÁRIO` / `EDIÇÃO`) — os templates de texto da Observação mudaram cinco
+  vezes ao longo das versões, o CC nunca mudou.
+- **A Observação nunca é digitada** — é string montada por código. Se aparecer um template novo,
+  ele nasce em `services/db_functions.py` ou na borda da UI, não no teclado do almoxarife.
 
 ---
 
 ## ACHADOS DA v5.6.0 — pendentes de decisão
 
-1. **⚠️ Segundo caminho de perda do recebimento parcial.** `ingerir_scm` grava
-   `quantidade_recebida = qtd_entregue` (do Protheus) direto no UPDATE de `itens_sc` (via
-   `dados_item`); `importar_solicitacoes_protheus` faz o mesmo. Mas o `changelog/4.5.7.md:27`
-   declara: *"`quantidade_recebida` NUNCA é escrita fora de `registrar_recebimento_sc`"*.
-   **Efeito real:** o parcial registrado hoje é sobrescrito no próximo import do Relatório de SCs,
-   porque o Protheus só enxerga a NF — mesmo com a UI já corrigida na v5.6.0. Corrigir é **decidir
-   quem é a fonte de verdade**: (a) `MAX(quantidade_recebida, qtd_entregue)`; (b) o import nunca
-   reduz o valor; (c) manter como está, Protheus manda.
+> O **nº1** (segundo caminho de perda do recebimento parcial) foi **resolvido no CP1 da v5.7.0**
+> pela decisão nº9: só o MRO escreve `quantidade_recebida`. A numeração dos demais é **preservada
+> de propósito** — o `changelog/5.7.0.md` e o `docs/HANDOFF.md` referenciam estes achados pelo
+> número, e renumerar quebraria as referências.
+
 2. **`badge_origem` nunca acerta o azul.** Compara `origem == 'excel'`, mas a ingestão grava o **nome
    do arquivo** em `origem_importacao` — as 228 SCs aparecem como "origem não registrada". Os testes
    não pegam porque inserem `'excel'` na mão (`tests/test_v510_scm_sync.py:207`).
@@ -121,8 +87,37 @@ Custo, Setor, Motivo, Categoria), manter Observação como texto residual, e tro
 
 ---
 
+## ACHADOS DA v5.7.0 — pendentes de decisão
+
+Todos do Relatório de Movimentações (CP4). Nenhum é bug: são escolhas que ficaram deliberadamente
+dentro do escopo aprovado e que o Luis pode querer ampliar.
+
+1. **A categoria `Entrada` ainda mistura duas coisas** — recebimento por SC (139 linhas) e entrada
+   avulsa (2). É a mesma doença que os ajustes tinham, mas o plano do CP4 listava só os caminhos de
+   *ajuste*. As colunas NF e SC/PO já tornam essas linhas rastreáveis; uma categoria
+   `Recebimento SC` fecharia o assunto.
+2. **`SC/PO` saiu como coluna única** (`SC 41340 · PO F64923`), seguindo a lista do plano ao pé da
+   letra. Duas colunas separadas seriam melhores para pivotar no Excel.
+3. **Somar `Qtd` mistura direção** — a coluna é sempre positiva e o sentido está em `Tipo`. Um
+   pivot resolve, mas uma coluna `Qtd (sinalizada)` responderia "quanto perdemos" direto, que é a
+   primeira das três perguntas da decisão nº7.
+4. **⚠️ Cuidado ao agrupar o relatório por Centro de Custo:** `INVENTÁRIO` e `EDIÇÃO` são CCs de
+   **sistema**, não centros de custo reais (ver `CC_GENERICOS` em `services/constants.py`), e
+   `99000 - ATIVO PASSIVO RES. F` é conta residual. Para rateio, filtrar por
+   `Categoria == "Requisição"` primeiro. Isso se soma ao achado **nº5 da v5.6.0** (vocabulários
+   divergentes entre MRO e API do SCM) — o relatório usa o CC do **MRO**, coerente consigo mesmo.
+
+---
+
 ## PENDÊNCIAS DE INFRA
 
+- **⚠️ Ao subir a v5.7.0:** as migrações do CP1 e do CP3 (`itens_sc.quantidade_recebida_protheus` e
+  `requisicoes.tipo_fluxo`) **ainda não rodaram no `mro.db` de produção**. Executam sozinhas no
+  primeiro render e gravam o `.bak` em `backups/`. São aditivas, nullable e sem backfill.
+- **Validação interativa do CP1 pendente** — depende do Relatório de SCs, que o Luis ainda não tem.
+  Falta abrir a tela e conferir o aviso de divergência (Controle de SC, Movimentação) e as colunas
+  **Recebido (MRO)** × **Recebido (Protheus)** no SCM Integrado. A regra foi ensaiada contra cópia
+  do `mro.db` real (SC 41494 / PN 29TP0086).
 - **Após atualizar o app:** reimportar o **Relatório de SCs** para preencher o Centro de Custo das
   228 SCs — a correção da v5.6.0 vale para importações novas, não faz backfill do passado.
 - **Validação física da F5:** reboot-test no PC-servidor, acesso de outra máquina, ensaio de

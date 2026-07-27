@@ -6,8 +6,43 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 26/07/2026 (leia isto, não a seção 1-7 abaixo para status)
+## STATUS ATUAL — atualizado em 27/07/2026 (leia isto, não a seção 1-7 abaixo para status)
 
+- **v5.7.0 CONCLUÍDA** — os itens **7, 8 e 9** do pedido de 26/07/2026 (os três que a v5.6.0
+  deixou para a entrevista) **mais o achado nº1** daquela versão. Gate verde: **604 testes**
+  (532 → +72). Ver `changelog/5.7.0.md`. **4 checkpoints, 1 commit cada:**
+  - **CP1 `ca0b997`** — o MRO passa a ser a **fonte de verdade do recebimento**. `itens_sc.
+    quantidade_recebida` era sobrescrita pela "Qtd.Entregue" do Protheus a cada import **e** a
+    cada edição manual: um parcial de 4 conferido na doca era apagado na reimportação e o pendente
+    saltava de volta. Import e API viram leitura; o número do ERP vai para
+    `quantidade_recebida_protheus`, exibido lado a lado.
+  - **CP2 `9927938`** — `adicionar_itens_requisicao` **nunca recalculou o status**. O bug e o
+    pedido foram no mesmo commit porque um sem o outro é o defeito: liberar a guarda sem recalcular
+    deixaria o item novo órfão numa requisição `Entregue`, fora da fila e não entregável. Requisição
+    entregue agora **reabre como Parcial**. + as visões Almoxarife × Solicitante (⚠️ a do
+    Solicitante é **simulação**, não controle de acesso — o MRO não tem login).
+  - **CP3 `3626713`** — **Requisição Padrão volta a existir** ao lado da Digital, como default.
+    ⚠️ A **decisão nº2 substituiu** a regra antiga do `prompt.md` (*"recusa e avisa qual item"*):
+    falta de saldo **não recusa** o pedido, grava o que tem e manda o pendente para a fila.
+    `_inserir_requisicao` e `_baixar_item_requisicao` foram **extraídos antes de criar** — os dois
+    fluxos gravam o **mesmo ledger**, senão o relatório do CP4 veria duas formas de saída.
+  - **CP4 `8f95b12`** — **Relatório de Movimentações**. Teto de 5.000 linhas removido (cortava as
+    **mais antigas** em silêncio, porque o ledger vem em ordem descendente; ~6 meses até começar a
+    apagar histórico), filtro de período e a Observação explodida em colunas: **8 → 17**. A
+    Observação virou o **resíduo** e caiu de ~100% para **29,3%** de preenchimento no banco real.
+    **Regra: a FK manda, o texto é fallback do legado** — há linha cuja Observação é `F61846` (o
+    **PO**) e cujo `documento_nf` é `169357`.
+  - **Os três caminhos de ajuste deixaram de se confundir** (decisão nº7): `Ajuste de Inventário`
+    (569 linhas), `Ajuste por Edição`, `Ajuste Manual` (30) — antes tudo caía em "Entrada"/"Saída".
+    Como **`motivo` está 0% preenchido** nas 2.822 linhas do histórico, a derivação do legado se
+    apoia no **centro de custo**: os templates de texto da tela de Inventário mudaram **cinco
+    vezes**, o CC nunca mudou. **Se precisar classificar movimentação legada, é no CC que se olha.**
+  - **Validação no app real:** CP2, CP3 e CP4 ✅ (Luis). **CP1 segue PENDENTE** — depende do
+    Relatório de SCs, que o Luis ainda não tem; a regra foi ensaiada contra cópia do `mro.db` real
+    (SC 41494 / PN 29TP0086). Refazer o roteiro do CP1 quando o arquivo chegar.
+  - ⚠️ **Migração de SCHEMA:** duas colunas aditivas e nullable, sem backfill
+    (`itens_sc.quantidade_recebida_protheus` e `requisicoes.tipo_fluxo`). **Ainda não rodaram no
+    `mro.db` de produção** — executam sozinhas no primeiro render e gravam o `.bak` em `backups/`.
 - **v5.6.0 CONCLUÍDA e validada pelo Luis no app real** — 6 ajustes pontuais pedidos pela operação.
   Gate verde: **532 testes** (491 → +41). Ver `changelog/5.6.0.md`. Três diagnósticos valem memória:
   - **O recebimento parcial por SC/PO não quebrou por código do MRO.** O Streamlit 1.60.0 mudou a
