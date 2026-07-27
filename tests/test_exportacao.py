@@ -35,16 +35,10 @@ def test_exportar_movimentacoes_com_dados(db, make_item):
     F.registrar_movimentacao(item_id, "entrada", 50, CC, "Joao", "Joao")
     df = F.exportar_movimentacoes_df()
     assert len(df) == 1
-    assert list(df.columns) == [
-        "Data/Hora",
-        "PN",
-        "Item",
-        "Tipo",
-        "Qtd",
-        "Saldo Pós",
-        "Responsável",
-        "Observação",
-    ]
+    # v5.7.0 (CP4): o cabeçalho passou de 8 para 17 colunas — os dados que já existiam no
+    # banco (CC, setor, solicitante, requisição, fluxo, NF, SC/PO, motivo) deixaram de
+    # ficar presos dentro da string `observacao`. A lista canônica mora no módulo.
+    assert list(df.columns) == list(F.COLUNAS_RELATORIO_MOVIMENTACOES)
 
 
 def test_exportar_movimentacoes_filtro_que_casa(db, make_item):

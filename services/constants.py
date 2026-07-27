@@ -136,14 +136,23 @@ CATEGORIA_SC_PADRAO = "SOLICITAÇÃO DE COMPRA - OUTROS"
 # nesta categoria padrão.
 TIPO_MATERIAL_PADRAO = "Não Classificado"
 
+# v5.7.0 (CP4) — os dois CCs "de sistema" que o ledger grava quando a movimentação NÃO é
+# consumo de um setor: a contagem física da tela de Inventário e o ajuste implícito da
+# edição de item (`_mov_inline`). Ganharam nome porque `categoria_movimentacao` os usa
+# para separar os caminhos de ajuste: no histórico real as 764 linhas de inventário trazem
+# `centro_custo='INVENTÁRIO'` sem exceção — sinal muito mais confiável que o prefixo da
+# Observação, que mudou de template cinco vezes ao longo das versões.
+CC_INVENTARIO = "INVENTÁRIO"
+CC_EDICAO = "EDIÇÃO"
+
 # Centros de custo genéricos/contábeis que NÃO indicam o setor consumidor real
 # (dominam as saídas por serem conta residual/rótulos de ajuste). São ignorados ao
 # sugerir o CC de uma SC, para não sugerir "99000" em tudo.
 CC_GENERICOS = frozenset(
     {
         "99000 - ATIVO PASSIVO RES. F",
-        "INVENTÁRIO",
-        "EDIÇÃO",
+        CC_INVENTARIO,
+        CC_EDICAO,
         "",
     }
 )

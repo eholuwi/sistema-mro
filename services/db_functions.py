@@ -21,6 +21,8 @@ from services.constants import (
     SAIDA_REAL_WHERE,
     STATUS_SEM_MOVIMENTACAO,
     FATOR_CONVERSAO_PADRAO,
+    CC_INVENTARIO,
+    CC_EDICAO,
     extrair_fator_embalagem,
 )
 from collections import Counter
@@ -429,7 +431,7 @@ def _mov_inline(
     saldo_apos,
     observacao,
     agora,
-    centro_custo="EDIÇÃO",
+    centro_custo=CC_EDICAO,
     responsavel="Sistema",
 ):
     """Insere uma movimentação usando a conexão/transação CORRENTE (sem abrir
@@ -1054,36 +1056,96 @@ def _recalcular_consumo(conn, item_id):
         )
 
 
-def listar_movimentacoes(item_id=None, limit=200):
+def _data_limite_sql(data, fim_do_dia=False):
+    """Normaliza `date`/`datetime`/str para o formato do ledger ('YYYY-MM-DD HH:MM:SS').
+
+    `data_hora` é TEXT e a comparação é lexicográfica: sem o fim-do-dia explícito,
+    `data_hora <= '2026-07-27'` deixaria de fora TODAS as movimentações do próprio 27,
+    que gravam hora ('2026-07-27 14:08:23' > '2026-07-27'). Erro clássico e silencioso."""
+    if not data:
+        return None
+    texto = data.strftime("%Y-%m-%d") if hasattr(data, "strftime") else str(data).strip()[:10]
+    return f"{texto} 23:59:59" if fim_do_dia else f"{texto} 00:00:00"
+
+
+def listar_movimentacoes(item_id=None, limit=200, data_inicio=None, data_fim=None):
+    """Ledger cru (mais recente primeiro), com os vínculos já resolvidos.
+
+    v5.7.0 (CP4) — ganhou recorte de período e `limit=None` (= SEM `LIMIT`). Os defaults
+    preservam exatamente o comportamento das duas telas que já a usavam (Histórico e
+    Ficha 360); quem precisa do histórico inteiro é o Relatório de Movimentações, que
+    passa `limit=None` em vez do antigo teto de 5.000 — teto que cortava as movimentações
+    mais ANTIGAS em silêncio (o `ORDER BY ... DESC` faz o corte pela cauda).
+
+    Os `LEFT JOIN` trazem o que hoje só existe empacotado dentro da string `observacao`:
+    nº da requisição e seu fluxo, NF, PO e nº da SC. São aditivos — quem já consumia a
+    função continua lendo as mesmas chaves. O período é FECHADO nos dois extremos."""
+    where, params = [], []
+    if item_id:
+        where.append("m.item_id=?")
+        params.append(item_id)
+    ini = _data_limite_sql(data_inicio)
+    if ini:
+        where.append("m.data_hora>=?")
+        params.append(ini)
+    fim = _data_limite_sql(data_fim, fim_do_dia=True)
+    if fim:
+        where.append("m.data_hora<=?")
+        params.append(fim)
+
+    sql = f"""
+        SELECT m.*, i.part_number, i.nome_item,
+               r.numero_requisicao, r.tipo_fluxo,
+               isc.documento_nf, isc.numero_po,
+               sc.numero_sc
+        FROM movimentacoes m
+        JOIN inventario i ON i.id=m.item_id
+        LEFT JOIN requisicoes r ON r.id=m.requisicao_id
+        LEFT JOIN itens_sc isc ON isc.id=m.sc_item_id
+        LEFT JOIN solicitacoes_compra sc ON sc.id=isc.sc_id
+        {"WHERE " + " AND ".join(where) if where else ""}
+        ORDER BY m.data_hora DESC
+    """
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+
     with transaction() as conn:
-        if item_id:
-            rows = conn.execute(
-                """
-                SELECT m.*,i.part_number,i.nome_item FROM movimentacoes m
-                JOIN inventario i ON i.id=m.item_id
-                WHERE m.item_id=? ORDER BY m.data_hora DESC LIMIT ?
-            """,
-                (item_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT m.*,i.part_number,i.nome_item FROM movimentacoes m
-                JOIN inventario i ON i.id=m.item_id
-                ORDER BY m.data_hora DESC LIMIT ?
-            """,
-                (limit,),
-            ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
 
 
-def categoria_movimentacao(m):
-    """Rótulo amigável de uma movimentação para o Histórico (v4.3.0).
+# v5.7.0 (CP4) — prefixos de Observação que identificam a origem de um lançamento no
+# legado. `motivo` só passou a ser gravado na v4.3.0 e está 0% preenchido nas 2.822 linhas
+# do histórico real, então para tudo que é anterior o texto é a única pista. A ordem
+# importa: o primeiro prefixo que casar vence.
+_PREFIXOS_CATEGORIA = (
+    ("saldo inicial", "Saldo Inicial"),
+    ("ajuste via edição de item", "Ajuste por Edição"),
+    ("ajuste:", "Ajuste Manual"),
+    ("ajuste —", "Ajuste Manual"),
+    ("ajuste -", "Ajuste Manual"),
+)
 
-    Deriva de (motivo, tipo, vínculo). Os lançamentos do Ajuste Rápido guardam o
-    rótulo em `motivo` (Entrada Avulsa / Devolução / Perda de Material / Saída
-    Avulsa); os demais são classificados por tipo e vínculo (Requisição = saída
-    com requisição; Conferência = quantidade zero; senão Entrada/Saída/Devolução)."""
+
+def categoria_movimentacao(m):
+    """Rótulo amigável de uma movimentação para o Histórico e para o relatório.
+
+    v4.3.0 — deriva de (motivo, tipo, vínculo). Os lançamentos do Ajuste Rápido guardam o
+    rótulo em `motivo` (Entrada Avulsa / Devolução / Perda de Material / Saída Avulsa).
+
+    v5.7.0 (CP4) — separa os TRÊS caminhos de ajuste, que até aqui desabavam juntos em
+    "Entrada"/"Saída" e tornavam impossível responder às perguntas da decisão nº7 (quanto
+    se perdeu no período · quais itens vivem divergindo · reconciliação do saldo):
+
+      • **Ajuste de Inventário** — contagem física que mexeu no saldo (`CC_INVENTARIO`);
+      • **Ajuste por Edição** — o saldo mudou ao editar o cadastro do item (`CC_EDICAO`);
+      • **Ajuste Manual** — correção de balcão pelo Ajuste Rápido sem `motivo` (legado).
+
+    A ordem das checagens é preservada de propósito: `quantidade == 0` continua vindo
+    ANTES do vínculo e da derivação (é o que `tests/test_v430_ajuste_pn.py` afirma), senão
+    a Conferência de Inventário — que existe justamente para registrar contagem sem
+    alteração de saldo — viraria "Ajuste de Inventário" e inflaria a divergência."""
     motivo = (m.get("motivo") or "").strip()
     if motivo:
         return motivo
@@ -1092,6 +1154,18 @@ def categoria_movimentacao(m):
     tipo = m.get("tipo")
     if tipo == "saida" and m.get("requisicao_id"):
         return "Requisição"
+
+    obs = (m.get("observacao") or "").strip().lower()
+    for prefixo, rotulo in _PREFIXOS_CATEGORIA:
+        if obs.startswith(prefixo):
+            return rotulo
+    # O CC é o sinal forte do legado: os templates da tela de Inventário mudaram cinco
+    # vezes ("Ajuste Físico", "Ajuste de Qtd", "174 UN Caixa: …"), mas o CC nunca mudou.
+    cc = (m.get("centro_custo") or "").strip().upper()
+    if cc == CC_INVENTARIO:
+        return "Ajuste de Inventário"
+    if cc == CC_EDICAO:
+        return "Ajuste por Edição"
     return {"entrada": "Entrada", "saida": "Saída", "devolucao": "Devolução"}.get(tipo, tipo or "—")
 
 
@@ -3323,9 +3397,144 @@ def exportar_inventario_df():
     return df
 
 
-def exportar_movimentacoes_df(item_id=None, tipos_selecionados=None, categorias_selecionadas=None):
-    # Busca todas as movimentações (sem o limite da tela para o relatório ser completo)
-    movs = listar_movimentacoes(item_id=item_id, limit=5000)
+# ── v5.7.0 (CP4) — Relatório de Movimentações ────────────────────────────────
+#
+# Os templates que o código já montou dentro de `observacao` ao longo das versões. A
+# coluna é string escrita à mão e empilha quatro semânticas em oito templates; aqui elas
+# voltam a ser dado. Só entram como FALLBACK do legado — a FK sempre ganha, porque o
+# texto mente: há linha cuja Observação é 'F61846' (que é o PO) e cujo `documento_nf`
+# real é 169357.
+_RX_OBS_REQ = re.compile(r"\b(?:requisi[cç][aã]o|req)\s+(REQ-\d{8}-\d{3})\b", re.I)
+_RX_OBS_NF = re.compile(r"^\s*NF:\s*([^|·]+)", re.I)
+_RX_OBS_VINCULO_SC = re.compile(r"\(\s*vinculado\s+[àa]\s+SC\s+\d+\s*\)", re.I)
+_RX_OBS_AJUSTE = re.compile(r"^\s*(?:ajuste:|ajuste\s*[—-])\s*", re.I)
+
+
+def _rotulo_documento(prefixo, valor):
+    """'41494' → 'SC 41494'; 'SC-2026-001' → 'SC-2026-001' (não duplica o prefixo)."""
+    valor = (valor or "").strip()
+    if not valor:
+        return ""
+    return valor if valor.upper().startswith(prefixo) else f"{prefixo} {valor}"
+
+
+def _limpar_residuo(texto):
+    """Remove separadores órfãos deixados pela extração ('… | · ' → '…')."""
+    texto = re.sub(r"[|·]\s*(?=[|·])", "", texto)
+    texto = re.sub(r"\s{2,}", " ", texto)
+    return texto.strip(" \t|·—-")
+
+
+def _explodir_linha_movimentacao(m):
+    """v5.7.0 (CP4) — desempacota UMA movimentação nas colunas do relatório.
+
+    Função pura de propósito (recebe o dict de `listar_movimentacoes`, não abre conexão):
+    é o coração do item 9 e precisa de teste próprio, sem banco no caminho.
+
+    Regra única: **FK primeiro, texto só como fallback**. A FK cobre 100% das saídas por
+    requisição (venham do fluxo Padrão ou do Digital — os dois gravam o mesmo ledger pelo
+    mesmo helper) e 100% das entradas vinculadas a SC. O regex existe para as linhas
+    anteriores às FKs, não para competir com elas.
+
+    A Observação sai como RESÍDUO: o que sobra depois de extraído o que virou coluna. Nas
+    1.887 saídas por requisição isso zera a coluna — o texto era só 'Req REQ-…', que agora
+    é a coluna Nº Requisição."""
+    obs = (m.get("observacao") or "").strip()
+    residuo = obs
+
+    numero_req = (m.get("numero_requisicao") or "").strip()
+    achado = _RX_OBS_REQ.search(obs)
+    if not numero_req and achado:
+        numero_req = achado.group(1)
+    if achado:
+        residuo = _RX_OBS_REQ.sub("", residuo)
+
+    nf = (m.get("documento_nf") or "").strip()
+    achado_nf = _RX_OBS_NF.search(obs)
+    if not nf and achado_nf:
+        nf = achado_nf.group(1).strip()
+    if achado_nf:
+        residuo = _RX_OBS_NF.sub("", residuo)
+
+    sc_po = " · ".join(
+        p
+        for p in (
+            _rotulo_documento("SC", m.get("numero_sc")),
+            _rotulo_documento("PO", m.get("numero_po")),
+        )
+        if p
+    )
+    if sc_po:
+        residuo = _RX_OBS_VINCULO_SC.sub("", residuo)
+
+    # O prefixo 'AJUSTE:' virou a coluna Categoria; o que vem depois dele é a nota real
+    # do almoxarife ('MATERIAL PAGO SEM REQUISIÇÃO') e precisa sobreviver.
+    residuo = _RX_OBS_AJUSTE.sub("", residuo)
+
+    return {
+        "Data/Hora": m.get("data_hora"),
+        "PN": m.get("part_number"),
+        "Item": m.get("nome_item"),
+        "Categoria": categoria_movimentacao(m),
+        "Tipo": m.get("tipo"),
+        "Qtd": m.get("quantidade"),
+        "Saldo Pós": m.get("saldo_apos"),
+        "Centro de Custo": m.get("centro_custo") or "",
+        "Setor": m.get("setor") or "",
+        "Solicitante": m.get("solicitante") or "",
+        "Responsável": m.get("emitente") or "",
+        "Nº Requisição": numero_req,
+        "Fluxo": (m.get("tipo_fluxo") or "").strip(),
+        "NF": nf,
+        "SC/PO": sc_po,
+        "Motivo": (m.get("motivo") or "").strip(),
+        "Observação": _limpar_residuo(residuo),
+    }
+
+
+COLUNAS_RELATORIO_MOVIMENTACOES = (
+    "Data/Hora",
+    "PN",
+    "Item",
+    "Categoria",
+    "Tipo",
+    "Qtd",
+    "Saldo Pós",
+    "Centro de Custo",
+    "Setor",
+    "Solicitante",
+    "Responsável",
+    "Nº Requisição",
+    "Fluxo",
+    "NF",
+    "SC/PO",
+    "Motivo",
+    "Observação",
+)
+
+
+def exportar_movimentacoes_df(
+    item_id=None,
+    tipos_selecionados=None,
+    categorias_selecionadas=None,
+    data_inicio=None,
+    data_fim=None,
+):
+    """Relatório de Movimentações — exportação larga, para rateio mensal e para auditoria.
+
+    v5.7.0 (CP4, item 9 + decisão nº6) — duas mudanças de fundo:
+
+    1. **Sem teto.** O antigo `limit=5000` cortava as movimentações mais ANTIGAS em
+       silêncio (o ledger vem em ordem decrescente). No ritmo atual — 2.822 linhas em
+       três meses — o corte começaria a apagar histórico em ~6 meses, sem nenhum aviso.
+       Recorte agora é escolha explícita de quem exporta, via período.
+    2. **Colunas explodidas.** Centro de custo, setor, solicitante, nº da requisição, seu
+       fluxo, NF, PO e SC já existiam no banco e não saíam na planilha; quem precisasse
+       rastrear tinha de ler a Observação com o olho. Ver `_explodir_linha_movimentacao`.
+
+    Ajuste continua SEM Centro de Custo (decisão nº3): é correção do almoxarifado, não
+    consumo de setor — célula vazia é a informação correta, não um dado faltando."""
+    movs = listar_movimentacoes(item_id=item_id, limit=None, data_inicio=data_inicio, data_fim=data_fim)
 
     if not movs:
         return pd.DataFrame()
@@ -3344,26 +3553,10 @@ def exportar_movimentacoes_df(item_id=None, tipos_selecionados=None, categorias_
     if not movs:
         return pd.DataFrame()
 
-    df = pd.DataFrame(movs)
-
-    # Colunas desejadas para o Excel
-    colunas = [
-        "data_hora",
-        "part_number",
-        "nome_item",
-        "tipo",
-        "quantidade",
-        "saldo_apos",
-        "emitente",
-        "observacao",
-    ]
-
-    df = df[[c for c in colunas if c in df.columns]]
-
-    # Renomear para o cabeçalho do Excel
-    df.columns = ["Data/Hora", "PN", "Item", "Tipo", "Qtd", "Saldo Pós", "Responsável", "Observação"]
-
-    return df
+    return pd.DataFrame(
+        [_explodir_linha_movimentacao(m) for m in movs],
+        columns=list(COLUNAS_RELATORIO_MOVIMENTACOES),
+    )
 
 
 def _mediana(valores):

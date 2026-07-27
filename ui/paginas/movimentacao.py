@@ -59,6 +59,16 @@ from ui.componentes.selecao import sel_material
 from ui.componentes.status import divergencia_recebimento
 from ui.componentes.tabela import chave_editor
 
+# v5.7.0 (CP4) — a exportação não corta mais nada; a partir daqui ela apenas AVISA que o
+# recorte ficou grande. O número é o antigo teto silencioso de 5.000 linhas, mantido como
+# referência do que a operação já considerava "muita coisa" — só que agora visível.
+LIMITE_AVISO_EXPORTACAO = 5000
+
+
+def _milhar(n):
+    """12345 → '12.345' (separador pt-BR, sem depender de locale do servidor)."""
+    return f"{n:,}".replace(",", ".")
+
 
 def chave_editor_recebimento(sc_id, geracao):
     """Chave do `data_editor` do recebimento por SC/PO, versionada por SC e por geração.
@@ -1317,25 +1327,62 @@ def render() -> None:
             else:
                 st.info("Nenhuma movimentação encontrada para os filtros selecionados.")
 
-            # --- BOTÃO DE EXPORTAR (Abaixo do dataframe de histórico) ---
+            # --- RELATÓRIO DE MOVIMENTAÇÕES (v5.7.0 / CP4) ---
+            # O "Limite" acima é da TELA. A exportação não tem mais teto: o antigo
+            # limit=5.000 cortava as movimentações mais ANTIGAS em silêncio. Quem recorta
+            # agora é o período abaixo — escolha explícita, e o volume é sempre avisado.
             st.markdown("---")
-            col_btn, _ = st.columns([1, 4])
-            with col_btn:
+            st.markdown("##### :material/download: Relatório de Movimentações")
+            st.caption(
+                "Exportação larga, para o rateio mensal por Centro de Custo/Setor e para auditoria: "
+                "cada informação em sua coluna (requisição, fluxo, NF, SC/PO, setor, solicitante) "
+                "em vez de empacotada no texto da Observação. Sem período, sai o histórico inteiro."
+            )
+
+            cper1, cper2 = st.columns(2)
+            d_ini_exp = cper1.date_input("Período — de", value=None, format="DD/MM/YYYY", key="exp_mov_ini")
+            d_fim_exp = cper2.date_input("Período — até", value=None, format="DD/MM/YYYY", key="exp_mov_fim")
+
+            if d_ini_exp and d_fim_exp and d_ini_exp > d_fim_exp:
+                st.error(":material/cancel: A data inicial é posterior à final — o período está invertido.")
+            else:
                 # Passamos os filtros atuais para a função
                 _cats_all = bool(f_cat) and len(f_cat) == len(cats_presentes)
                 df_exp_mov = exportar_movimentacoes_df(
-                    item_id=item_id_f, categorias_selecionadas=None if _cats_all else (f_cat or None)
+                    item_id=item_id_f,
+                    categorias_selecionadas=None if _cats_all else (f_cat or None),
+                    data_inicio=d_ini_exp,
+                    data_fim=d_fim_exp,
                 )
 
-                if not df_exp_mov.empty:
+                if df_exp_mov.empty:
+                    st.info(
+                        ":material/info: Nenhuma movimentação no recorte selecionado — "
+                        "amplie o período ou os filtros acima."
+                    )
+                else:
+                    _n = len(df_exp_mov)
+                    st.caption(f"**{_milhar(_n)} linhas** no recorte · {len(df_exp_mov.columns)} colunas.")
+                    if _n > LIMITE_AVISO_EXPORTACAO:
+                        st.warning(
+                            f":material/warning: São {_milhar(_n)} linhas. O arquivo fica pesado para abrir "
+                            "no Excel — se o objetivo é o rateio do mês, recorte pelo período acima. "
+                            "Nada será cortado: a planilha sai inteira do jeito que está."
+                        )
+
                     buf = io.BytesIO()
                     with pd.ExcelWriter(buf, engine="openpyxl") as w:
                         df_exp_mov.to_excel(w, index=False, sheet_name="Movimentacoes")
 
+                    _sufixo = (
+                        f"_{d_ini_exp:%d-%m-%Y}_a_{d_fim_exp:%d-%m-%Y}"
+                        if (d_ini_exp and d_fim_exp)
+                        else f"_{date.today():%d-%m-%Y}"
+                    )
                     st.download_button(
-                        label="⬇️ Baixar planilha excel completo de todas as movimentações",
+                        label="⬇️ Baixar planilha Excel do Relatório de Movimentações",
                         data=buf.getvalue(),
-                        file_name=f"movimentacoes_{date.today().strftime('%d-%m-%Y')}.xlsx",
+                        file_name=f"movimentacoes{_sufixo}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="btn_exp_mov",
                     )

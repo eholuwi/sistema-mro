@@ -15,7 +15,7 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
-from services.constants import PREVISAO_RUPTURA_SEM_RISCO
+from services.constants import PREVISAO_RUPTURA_SEM_RISCO, CC_INVENTARIO
 from services.db_functions import (
     listar_valores,
     exportar_inventario_df,
@@ -266,7 +266,7 @@ def render() -> None:
                                 item_id=item_inv["id"],
                                 tipo=tipo_aj,
                                 quantidade=qtd_reg,
-                                centro_custo="INVENTÁRIO",
+                                centro_custo=CC_INVENTARIO,
                                 solicitante="Inventário",
                                 emitente="Inventário",
                                 observacao=obs_final,
@@ -284,7 +284,7 @@ def render() -> None:
                                 item_id=item_inv["id"],
                                 tipo="entrada",
                                 quantidade=0.0,  # Qtd 0 para não alterar saldo
-                                centro_custo="INVENTÁRIO",
+                                centro_custo=CC_INVENTARIO,
                                 solicitante="Inventário",
                                 emitente="Inventário",
                                 observacao=obs_final,
