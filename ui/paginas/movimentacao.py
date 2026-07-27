@@ -41,6 +41,7 @@ from services.db_functions import (
     adicionar_itens_requisicao,
     cancelar_requisicao,
     listar_requisicoes_abertas,
+    listar_emitentes_requisicao,
     obter_analitico_movimentacoes,
     obter_analitico_divergencias,
     obter_analitico_rupturas,
@@ -393,6 +394,240 @@ def _render_receber_material():
                         st.error(f":material/cancel: {msg}")
 
 
+def _fila_visao_almoxarife(autorizadores_lista):
+    """Visão do Almoxarife (default) — a fila de trabalho: separar, entregar, dar baixa.
+
+    v5.7.0 — extraída da aba Fila para conviver com a Visão do Solicitante. O corpo é o da
+    v4.7.0, acrescido do toggle "incluir entregues": sem ele a requisição Entregue não é
+    selecionável e o "Adicionar item" (que agora a reabre) fica inalcançável pela tela."""
+    st.caption(
+        "Requisições aguardando entrega. Registre a saída (parcial ou total) — só aqui o "
+        "estoque é baixado. Material só sai com autorização (gestor; +SESMT se for EPI/SSO)."
+    )
+
+    incluir_entregues = st.toggle(
+        "Incluir requisições já entregues",
+        key="fila_incluir_entregues",
+        help="Para o caso 'escreve no mesmo papel': o solicitante volta com mais um item num "
+        "pedido já fechado. Ao incluir o item, a requisição reabre como Parcial e volta à fila.",
+    )
+    abertas = listar_requisicoes_abertas(incluir_entregues=incluir_entregues)
+    if not abertas:
+        st.success(":material/inventory: Nenhuma requisição pendente na fila. Tudo em dia!")
+        return
+
+    pendentes = [a for a in abertas if a["status"] != "Entregue"]
+    mp1, mp2 = st.columns(2)
+    mp1.metric(":material/pending_actions: Requisições na fila", len(pendentes))
+    mp2.metric(
+        ":material/hourglass_top: Mais antiga",
+        str(min(a["data_hora"] for a in pendentes))[:10] if pendentes else "—",
+    )
+
+    def _fmt_fila(a):
+        _falt = int(a.get("itens_pendentes") or 0)
+        return (
+            f"{a['numero_requisicao']} · {a['setor']} · {a['emitente']} · {a['status']} · {_falt} pendente(s)"
+        )
+
+    opc_fila = {_fmt_fila(a): a for a in abertas}
+    sel_f = st.selectbox(
+        "Escolha a requisição para separar/entregar:", [""] + list(opc_fila.keys()), key="fila_sel"
+    )
+
+    req = opc_fila.get(sel_f) if sel_f else None
+    if not req:
+        return
+    req_id = req["id"]
+    st.markdown(f"#### :material/assignment: {req['numero_requisicao']} — {req['setor']} · {req['emitente']}")
+    st.caption(
+        f"Aberta em {str(req['data_hora'])[:16]} · "
+        f"C.Custo: {req.get('centro_custo') or '—'} · Status: **{req['status']}**"
+    )
+    if req.get("observacoes"):
+        st.info(f":material/sticky_note_2: {req['observacoes']}")
+    if req["status"] == "Entregue":
+        st.info(
+            ":material/task_alt: Requisição já **entregue por completo**. Para incluir mais um "
+            "material no mesmo pedido, use **Adicionar item** abaixo — ela reabre como Parcial "
+            "e volta à fila."
+        )
+
+    itens_f = listar_itens_requisicao(req_id)
+
+    st.markdown("##### 1. Itens — quanto entregar agora")
+    entregas = []
+    for it in itens_f:
+        falta = float(it["quantidade_solicitada"]) - float(it["quantidade_atendida"])
+        disp = float(it.get("estoque_atual") or 0)
+        ci1, ci2, ci3 = st.columns([3, 2, 2])
+        ci1.markdown(f"**{it['part_number']}** — {it['nome_item']}")
+        ci1.caption(
+            f"Solicitado {float(it['quantidade_solicitada']):g} · "
+            f"atendido {float(it['quantidade_atendida']):g} · "
+            f"falta {max(falta, 0):g} {it['unidade']}"
+        )
+        ci2.markdown(f":material/inventory_2: Disp.: **{disp:g}** {it['unidade']}")
+        if falta <= 0:
+            ci3.success("Completo")
+            continue
+        _max = float(min(falta, disp))
+        q = ci3.number_input(
+            "Entregar",
+            min_value=0.0,
+            max_value=float(disp) if disp > 0 else 0.0,
+            value=_max if _max > 0 else 0.0,
+            step=1.0,
+            key=f"ent_{req_id}_{it['id']}",
+            help="Sem saldo em estoque para este item." if disp <= 0 else None,
+        )
+        if q > 0:
+            entregas.append({"item_req_id": it["id"], "quantidade": float(q)})
+
+    st.markdown("##### 2. Autorização da saída")
+    ca1, ca2 = st.columns(2)
+    f_aut_tipo = ca1.selectbox("Tipo de Autorizador *", autorizadores_lista, key=f"aut_t_{req_id}")
+    f_aut_nome = ca2.text_input("Nome do Autorizador (gestor) *", key=f"aut_n_{req_id}")
+    f_sesmt = st.checkbox("Material SESMT? (EPI/SSO — exige responsável do SESMT)", key=f"sesmt_{req_id}")
+    f_sesmt_resp = ""
+    if f_sesmt:
+        f_sesmt_resp = st.text_input("Responsável SESMT *", key=f"sesmt_r_{req_id}")
+
+    if st.button(
+        ":material/local_shipping: REGISTRAR ENTREGA",
+        type="primary",
+        width="stretch",
+        key=f"btn_ent_{req_id}",
+    ):
+        if not entregas:
+            st.warning("Informe ao menos um item com quantidade a entregar.")
+        else:
+            ok, res = entregar_requisicao(req_id, entregas, f_aut_tipo, f_aut_nome, f_sesmt, f_sesmt_resp)
+            if ok:
+                invalidar_leituras()  # F4b: entrega baixa estoque
+                st.success(f":material/check_circle: Entrega registrada. Status: **{res}**.")
+                st.rerun()
+            else:
+                st.error(f":material/cancel: {res}")
+
+    st.markdown("---")
+    with st.expander(":material/add_circle: Adicionar item (o caso 'põe no mesmo pedido')"):
+        _, item_add_f, _ = sel_material("Material para incluir nesta requisição", f"add_fila_{req_id}")
+        qadd = st.number_input("Qtd Solicitada", min_value=1.0, step=1.0, value=1.0, key=f"qadd_{req_id}")
+        if st.button(":material/add: Incluir item", key=f"btn_add_{req_id}"):
+            if not item_add_f:
+                st.warning("Selecione um material.")
+            else:
+                ok, res = adicionar_itens_requisicao(
+                    req_id, [{"item_id": item_add_f["id"], "quantidade_solicitada": qadd}]
+                )
+                if ok:
+                    invalidar_leituras()
+                    st.success(res)
+                    st.rerun()
+                else:
+                    st.error(res)
+
+    if req["status"] == "Aberta":
+        if st.button(":material/cancel: Cancelar requisição (nada foi entregue)", key=f"btn_cancel_{req_id}"):
+            ok, res = cancelar_requisicao(req_id)
+            if ok:
+                invalidar_leituras()
+                st.warning(res)
+                st.rerun()
+            else:
+                st.error(res)
+
+
+def _fila_visao_solicitante():
+    """Visão do Solicitante (v5.7.0, decisão nº5 de 27/07/2026) — SIMULAÇÃO, sem login.
+
+    O MRO não autentica ninguém, e esta tela não inventa autenticação: o "Estou vendo como"
+    é um seletor sobre os emitentes que já abriram requisição, e qualquer pessoa pode
+    escolher qualquer nome. Serve para o Luis demonstrar como o self-service se pareceria.
+    Mostra TODOS os status — inclusive Entregue e Cancelada, que é justamente o que quem
+    pediu o material quer acompanhar (a fila do almoxarife, ao contrário, só mostra o que
+    falta separar)."""
+    st.caption(
+        "Acompanhe os pedidos de um solicitante e abra um novo em nome dele. "
+        "Aqui aparecem todos os status, inclusive os já entregues."
+    )
+    st.warning(
+        ":material/science: **Simulação — o sistema não tem login.** Escolher um nome só "
+        "filtra a visualização; não é controle de acesso e não restringe nada."
+    )
+
+    emitentes = listar_emitentes_requisicao()
+    if not emitentes:
+        st.info("Nenhuma requisição registrada ainda — não há solicitante para simular.")
+        return
+
+    nome = st.selectbox("Estou vendo como:", [""] + emitentes, key="fila_solicitante_nome")
+    if not nome:
+        st.caption("Escolha um nome para ver os pedidos daquela pessoa.")
+        return
+
+    reqs = listar_requisicoes(limit=500, emitente=nome)
+    if not reqs:
+        st.info(f"**{nome}** ainda não tem requisições registradas.")
+    else:
+        na_fila = [r for r in reqs if r["status"] in ("Aberta", "Parcial")]
+        ms1, ms2, ms3 = st.columns(3)
+        ms1.metric(":material/receipt_long: Meus pedidos", len(reqs))
+        ms2.metric(":material/pending_actions: Aguardando separação", len(na_fila))
+        ms3.metric(":material/task_alt: Entregues", len([r for r in reqs if r["status"] == "Entregue"]))
+
+        df_s = pd.DataFrame(reqs).reindex(
+            columns=[
+                "numero_requisicao",
+                "data_hora",
+                "setor",
+                "centro_custo",
+                "status",
+                "total_itens",
+                "total_atendido",
+            ]
+        )
+        st.dataframe(
+            df_s,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "numero_requisicao": "Nº",
+                "data_hora": "Aberta em",
+                "setor": "Setor",
+                "centro_custo": "Centro de Custo",
+                "status": "Status",
+                "total_itens": st.column_config.NumberColumn("Itens", format="%d"),
+                "total_atendido": st.column_config.NumberColumn("Qtd entregue", format="%.0f"),
+            },
+        )
+
+        opc_s = {f"{r['numero_requisicao']} · {r['status']}": r for r in reqs}
+        sel_s = st.selectbox(
+            "Ver os itens de um pedido:", [""] + list(opc_s.keys()), key="fila_solicitante_req"
+        )
+        if sel_s:
+            r_sel = opc_s[sel_s]
+            for it in listar_itens_requisicao(r_sel["id"]):
+                falta = float(it["quantidade_solicitada"]) - float(it["quantidade_atendida"])
+                marca = ":material/check_circle:" if falta <= 0 else ":material/pending:"
+                st.markdown(
+                    f"{marca} **{it['part_number']}** — {it['nome_item']} · "
+                    f"pedido {float(it['quantidade_solicitada']):g} · "
+                    f"recebido {float(it['quantidade_atendida']):g} {it['unidade']}"
+                )
+
+    st.markdown("---")
+    if st.button(
+        f":material/edit_note: Abrir nova requisição como **{nome}**",
+        width="stretch",
+        key="fila_solicitante_nova",
+    ):
+        st.session_state["_req_emit_prefill"] = nome
+        st.success(f"Nome **{nome}** preenchido. Abra a aba **Nova Requisição** acima para montar o pedido.")
+
+
 def _render_requisicao():
     """Requisição de material — Nova Requisição + Histórico. v3.8.0: movido da página
     própria para uma aba da Movimentação. Usa guarda if/else (NÃO st.stop()) no fluxo
@@ -449,7 +684,12 @@ def _render_requisicao():
                     accept_new_options=True,
                     help="Escolha um setor já usado ou digite um novo para padronizar o cadastro.",
                 )
-                req_emit = c2.text_input("Nome do Emitente *")
+                # v5.7.0 — a Visão do Solicitante pode pré-preencher o nome. Sem `key` de
+                # propósito: definir o session_state de um widget já instanciado nesta mesma
+                # execução levantaria StreamlitAPIException (a aba Nova renderiza antes da Fila).
+                req_emit = c2.text_input(
+                    "Nome do Emitente *", value=st.session_state.get("_req_emit_prefill", "")
+                )
                 opcoes_cc = [""] + (listar_valores("centro_custo") or [])
                 req_cc = c3.selectbox("Centro de Custo *", options=opcoes_cc, index=0)
 
@@ -566,145 +806,22 @@ def _render_requisicao():
                         else:
                             st.error(f"Erro ao criar requisição: {resultado}")
 
-    # --- ABA: FILA / SEPARAÇÃO (v4.7.0) ---
+    # --- ABA: FILA / SEPARAÇÃO (v4.7.0; duas visões na v5.7.0) ---
     with aba_fila:
         st.markdown("### :material/list_alt: Fila de Separação")
-        st.caption(
-            "Requisições aguardando entrega. Registre a saída (parcial ou total) — só aqui o "
-            "estoque é baixado. Material só sai com autorização (gestor; +SESMT se for EPI/SSO)."
+        visao = st.segmented_control(
+            "Estou usando como",
+            ["Almoxarife", "Solicitante"],
+            default="Almoxarife",
+            key="fila_visao",
+            help="Almoxarife separa e entrega. Solicitante acompanha os próprios pedidos "
+            "(simulação — o sistema não tem login).",
         )
-
-        abertas = listar_requisicoes_abertas()
-        if not abertas:
-            st.success(":material/inventory: Nenhuma requisição pendente na fila. Tudo em dia!")
+        # `segmented_control` devolve None se o usuário desmarcar: cai no default operacional.
+        if visao == "Solicitante":
+            _fila_visao_solicitante()
         else:
-            mp1, mp2 = st.columns(2)
-            mp1.metric(":material/pending_actions: Requisições na fila", len(abertas))
-            mp2.metric(":material/hourglass_top: Mais antiga", str(min(a["data_hora"] for a in abertas))[:10])
-
-            def _fmt_fila(a):
-                _falt = int(a.get("itens_pendentes") or 0)
-                return (
-                    f"{a['numero_requisicao']} · {a['setor']} · {a['emitente']} "
-                    f"· {a['status']} · {_falt} pendente(s)"
-                )
-
-            opc_fila = {_fmt_fila(a): a for a in abertas}
-            sel_f = st.selectbox(
-                "Escolha a requisição para separar/entregar:", [""] + list(opc_fila.keys()), key="fila_sel"
-            )
-
-            req = opc_fila.get(sel_f) if sel_f else None
-            if req:
-                req_id = req["id"]
-                st.markdown(
-                    f"#### :material/assignment: {req['numero_requisicao']} "
-                    f"— {req['setor']} · {req['emitente']}"
-                )
-                st.caption(
-                    f"Aberta em {str(req['data_hora'])[:16]} · "
-                    f"C.Custo: {req.get('centro_custo') or '—'} · Status: **{req['status']}**"
-                )
-                if req.get("observacoes"):
-                    st.info(f":material/sticky_note_2: {req['observacoes']}")
-
-                itens_f = listar_itens_requisicao(req_id)
-
-                st.markdown("##### 1. Itens — quanto entregar agora")
-                entregas = []
-                for it in itens_f:
-                    falta = float(it["quantidade_solicitada"]) - float(it["quantidade_atendida"])
-                    disp = float(it.get("estoque_atual") or 0)
-                    ci1, ci2, ci3 = st.columns([3, 2, 2])
-                    ci1.markdown(f"**{it['part_number']}** — {it['nome_item']}")
-                    ci1.caption(
-                        f"Solicitado {float(it['quantidade_solicitada']):g} · "
-                        f"atendido {float(it['quantidade_atendida']):g} · "
-                        f"falta {max(falta, 0):g} {it['unidade']}"
-                    )
-                    ci2.markdown(f":material/inventory_2: Disp.: **{disp:g}** {it['unidade']}")
-                    if falta <= 0:
-                        ci3.success("Completo")
-                        continue
-                    _max = float(min(falta, disp))
-                    q = ci3.number_input(
-                        "Entregar",
-                        min_value=0.0,
-                        max_value=float(disp) if disp > 0 else 0.0,
-                        value=_max if _max > 0 else 0.0,
-                        step=1.0,
-                        key=f"ent_{req_id}_{it['id']}",
-                        help="Sem saldo em estoque para este item." if disp <= 0 else None,
-                    )
-                    if q > 0:
-                        entregas.append({"item_req_id": it["id"], "quantidade": float(q)})
-
-                st.markdown("##### 2. Autorização da saída")
-                ca1, ca2 = st.columns(2)
-                f_aut_tipo = ca1.selectbox(
-                    "Tipo de Autorizador *", autorizadores_lista, key=f"aut_t_{req_id}"
-                )
-                f_aut_nome = ca2.text_input("Nome do Autorizador (gestor) *", key=f"aut_n_{req_id}")
-                f_sesmt = st.checkbox(
-                    "Material SESMT? (EPI/SSO — exige responsável do SESMT)", key=f"sesmt_{req_id}"
-                )
-                f_sesmt_resp = ""
-                if f_sesmt:
-                    f_sesmt_resp = st.text_input("Responsável SESMT *", key=f"sesmt_r_{req_id}")
-
-                if st.button(
-                    ":material/local_shipping: REGISTRAR ENTREGA",
-                    type="primary",
-                    width="stretch",
-                    key=f"btn_ent_{req_id}",
-                ):
-                    if not entregas:
-                        st.warning("Informe ao menos um item com quantidade a entregar.")
-                    else:
-                        ok, res = entregar_requisicao(
-                            req_id, entregas, f_aut_tipo, f_aut_nome, f_sesmt, f_sesmt_resp
-                        )
-                        if ok:
-                            invalidar_leituras()  # F4b: entrega baixa estoque
-                            st.success(f":material/check_circle: Entrega registrada. Status: **{res}**.")
-                            st.rerun()
-                        else:
-                            st.error(f":material/cancel: {res}")
-
-                st.markdown("---")
-                with st.expander(":material/add_circle: Adicionar item (o caso 'põe no mesmo pedido')"):
-                    _, item_add_f, _ = sel_material(
-                        "Material para incluir nesta requisição", f"add_fila_{req_id}"
-                    )
-                    qadd = st.number_input(
-                        "Qtd Solicitada", min_value=1.0, step=1.0, value=1.0, key=f"qadd_{req_id}"
-                    )
-                    if st.button(":material/add: Incluir item", key=f"btn_add_{req_id}"):
-                        if not item_add_f:
-                            st.warning("Selecione um material.")
-                        else:
-                            ok, res = adicionar_itens_requisicao(
-                                req_id, [{"item_id": item_add_f["id"], "quantidade_solicitada": qadd}]
-                            )
-                            if ok:
-                                invalidar_leituras()
-                                st.success(res)
-                                st.rerun()
-                            else:
-                                st.error(res)
-
-                if req["status"] == "Aberta":
-                    if st.button(
-                        ":material/cancel: Cancelar requisição (nada foi entregue)",
-                        key=f"btn_cancel_{req_id}",
-                    ):
-                        ok, res = cancelar_requisicao(req_id)
-                        if ok:
-                            invalidar_leituras()
-                            st.warning(res)
-                            st.rerun()
-                        else:
-                            st.error(res)
+            _fila_visao_almoxarife(autorizadores_lista)
 
     # --- ABA: HISTÓRICO ---
     with aba_hist_req:

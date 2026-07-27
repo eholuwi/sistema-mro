@@ -1285,8 +1285,18 @@ def entregar_requisicao(
 
 
 def adicionar_itens_requisicao(req_id, itens):
-    """v4.7.0 — Adiciona itens a uma requisição Aberta/Parcial (caso 'escreve no mesmo
-    papel'). Itens entram com `quantidade_atendida=0`. Não altera baixa."""
+    """v4.7.0 — Adiciona itens a uma requisição (caso 'escreve no mesmo papel').
+    Itens entram com `quantidade_atendida=0`. Não altera baixa.
+
+    v5.7.0 (decisão nº4 da entrevista de 27/07/2026) — passa a aceitar requisição
+    **Entregue**, que REABRE como `Parcial`. Só `Cancelada` é recusada: nela não há o que
+    reabrir.
+
+    O `UPDATE` do status no fim é a metade indispensável da mudança, não um detalhe: sem
+    ele, o item novo entra numa requisição que continua marcada `Entregue`, some da fila
+    (`listar_requisicoes_abertas` filtra por Aberta/Parcial) e é recusado por
+    `entregar_requisicao` — um item órfão, invisível e não entregável. Por isso liberar a
+    guarda e recalcular o status andam sempre juntos."""
     itens_validos = [it for it in (itens or []) if float(it.get("quantidade_solicitada", 0)) > 0]
     if not itens_validos:
         return False, "Adicione ao menos um item com quantidade > 0."
@@ -1295,14 +1305,20 @@ def adicionar_itens_requisicao(req_id, itens):
             req = conn.execute("SELECT status FROM requisicoes WHERE id=?", (req_id,)).fetchone()
             if not req:
                 raise Exception("Requisição não encontrada.")
-            if req["status"] not in ("Aberta", "Parcial"):
-                raise Exception(f"Requisição {req['status']}: não aceita novos itens.")
+            if req["status"] == "Cancelada":
+                raise Exception("Requisição Cancelada: não aceita novos itens.")
             for it in itens_validos:
                 conn.execute(
                     "INSERT INTO itens_requisicao (requisicao_id,item_id,quantidade_solicitada,quantidade_atendida) VALUES (?,?,?,0)",
                     (req_id, it["item_id"], float(it["quantidade_solicitada"])),
                 )
-        return True, f"{len(itens_validos)} item(ns) adicionado(s)."
+            novo_status = _calcular_status_requisicao(conn, req_id)
+            conn.execute("UPDATE requisicoes SET status=? WHERE id=?", (novo_status, req_id))
+        reaberta = req["status"] == "Entregue" and novo_status != "Entregue"
+        msg = f"{len(itens_validos)} item(ns) adicionado(s)."
+        if reaberta:
+            msg += f" Requisição reaberta como {novo_status} e de volta à fila de separação."
+        return True, msg
     except Exception as e:
         return False, str(e)
 
@@ -1343,38 +1359,73 @@ def cancelar_requisicao(req_id):
         return False, str(e)
 
 
-def listar_requisicoes_abertas():
+def listar_requisicoes_abertas(incluir_entregues=False):
     """v4.7.0 — Fila de separação: requisições Aberta/Parcial (mais antigas primeiro),
-    com contagem de itens e do que ainda falta atender."""
+    com contagem de itens e do que ainda falta atender.
+
+    v5.7.0 — `incluir_entregues` traz também as **Entregues**, para que o "Adicionar Item"
+    (que desde a v5.7.0 as reabre como `Parcial`) seja alcançável pela tela. Sem esse
+    parâmetro a requisição Entregue não é selecionável na fila e a liberação no serviço
+    ficaria inútil na prática. `Cancelada` nunca entra: não aceita item novo.
+    O default preserva a fila de trabalho do almoxarife — só o que falta separar."""
+    status = "('Aberta','Parcial','Entregue')" if incluir_entregues else "('Aberta','Parcial')"
     with transaction() as conn:
-        rows = conn.execute("""
+        rows = conn.execute(f"""
             SELECT r.*,
                    COUNT(ir.id) AS total_itens,
                    SUM(CASE WHEN ir.quantidade_atendida < ir.quantidade_solicitada THEN 1 ELSE 0 END) AS itens_pendentes
             FROM requisicoes r
             LEFT JOIN itens_requisicao ir ON ir.requisicao_id = r.id
-            WHERE r.status IN ('Aberta','Parcial')
+            WHERE r.status IN {status}
             GROUP BY r.id
             ORDER BY r.data_hora ASC
         """).fetchall()
     return [dict(r) for r in rows]
 
 
-def listar_requisicoes(limit=100):
+def listar_requisicoes(limit=100, emitente=None):
+    """v5.7.0 — `emitente` filtra as requisições de um solicitante (comparação
+    case-insensitive, para não perder 'Joao' × 'JOAO'). Alimenta a Visão do Solicitante da
+    Fila, que mostra TODOS os status — inclusive Entregue/Cancelada, que é justamente o que
+    quem pediu o material quer acompanhar."""
+    filtro, params = "", []
+    if emitente and str(emitente).strip():
+        filtro = "WHERE UPPER(TRIM(r.emitente)) = UPPER(TRIM(?))"
+        params.append(str(emitente).strip())
+    params.append(limit)
     with transaction() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT r.*,
                    COUNT(ir.id) AS total_itens,
                    SUM(ir.quantidade_atendida) AS total_atendido
             FROM requisicoes r
             LEFT JOIN itens_requisicao ir ON ir.requisicao_id=r.id
+            {filtro}
             GROUP BY r.id
             ORDER BY r.data_hora DESC LIMIT ?
         """,
-            (limit,),
+            params,
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def listar_emitentes_requisicao():
+    """v5.7.0 — Solicitantes que já abriram requisição, para o seletor da Visão do
+    Solicitante. Sai do histórico real (`requisicoes.emitente`) e não de uma lista curada:
+    o objetivo é simular "quem sou eu" entre pessoas que de fato existem na operação.
+    Deduplica por forma normalizada (a primeira grafia vista vence) e ordena."""
+    vistos = {}
+    with transaction() as conn:
+        rows = conn.execute(
+            "SELECT emitente FROM requisicoes WHERE emitente IS NOT NULL AND TRIM(emitente) <> '' "
+            "GROUP BY UPPER(TRIM(emitente)) ORDER BY MAX(data_hora) DESC"
+        ).fetchall()
+    for r in rows:
+        v = str(r["emitente"]).strip()
+        if v:
+            vistos.setdefault(v.upper(), v)
+    return sorted(vistos.values(), key=lambda s: s.upper())
 
 
 def listar_itens_requisicao(req_id):
