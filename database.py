@@ -817,6 +817,24 @@ def _migrar(conn):
         conn.execute("UPDATE itens_sc SET origem='excel' WHERE origem IS NULL")
         logger.info("  ↳ Migração v5.6.0: itens_sc.origem retroativa → 'excel'.")
 
+    # v5.7.0 — fonte de verdade do recebimento. Até aqui o import do Protheus e a edição
+    # manual sobrescreviam `itens_sc.quantidade_recebida` com a "Qtd Entregue" do ERP,
+    # apagando o recebimento parcial que o almoxarifado havia conferido na doca. A partir
+    # de agora `quantidade_recebida` é escrita SÓ pelo MRO (`registrar_recebimento_sc`) e o
+    # número do Protheus vive nesta coluna espelho, usada apenas para exibir divergência.
+    # Aditiva e sem backfill: NULL = "o Protheus ainda não declarou nada para esta linha",
+    # que é a verdade — o valor hoje em `quantidade_recebida` pode ser tanto do ERP quanto
+    # do MRO, e chutar um deles inventaria divergência onde não há. O primeiro import
+    # preenche o espelho naturalmente.
+    if "quantidade_recebida_protheus" not in cols_isc:
+        if conn.execute("SELECT 1 FROM itens_sc LIMIT 1").fetchone():
+            # Mesmo motivo do backup da v4.7.0/v5.6.0: os ALTER TABLE acima deixam transação
+            # aberta e sem este commit o `wal_checkpoint` devolve BUSY e o .bak sai incompleto.
+            conn.commit()
+            _backup_db("itens-sc-recebida-protheus-v570")
+        conn.execute("ALTER TABLE itens_sc ADD COLUMN quantidade_recebida_protheus REAL")
+        logger.info("  ↳ Migração v5.7.0: quantidade_recebida_protheus em itens_sc adicionada.")
+
     conn.commit()
 
 

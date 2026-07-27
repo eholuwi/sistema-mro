@@ -1412,6 +1412,37 @@ def mapa_pn_por_requisicao():
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+def _saldo_status_item_sc(qtd_negociada, qtd_recebida):
+    """(saldo_residual, status_item) de uma linha de `itens_sc`.
+
+    v5.7.0 — `qtd_recebida` é SEMPRE o recebimento do MRO (`itens_sc.quantidade_recebida`),
+    nunca o número do Protheus (`quantidade_recebida_protheus`): o saldo pendente do
+    almoxarifado é o que foi conferido na doca, não o que o ERP declarou. Derivar o saldo do
+    espelho faria o pendente saltar de volta a cada import, que era o defeito da v5.6.0."""
+    negociada = qtd_negociada or 0
+    recebida = qtd_recebida or 0
+    saldo = max(negociada - recebida, 0)
+    return saldo, ("Recebido" if saldo <= 0 else ("Parcial" if recebida > 0 else "Aberto"))
+
+
+def _recebimento_mro_item_sc(conn, numero_sc, item_id):
+    """Recebimento já gravado pelo MRO para o par (SC, item), ou `None` se a linha não existe.
+
+    v5.7.0 — os importadores precisam desse valor ANTES de resolver o `sc_id` (o status da SC
+    depende do saldo, e o saldo depende do recebimento), por isso a busca é pelo `numero_sc`."""
+    if not numero_sc or not item_id:
+        return None
+    row = conn.execute(
+        """
+        SELECT isc.quantidade_recebida AS qtd
+        FROM itens_sc isc JOIN solicitacoes_compra sc ON sc.id = isc.sc_id
+        WHERE sc.numero_sc=? AND isc.item_id=?
+    """,
+        (numero_sc, item_id),
+    ).fetchone()
+    return None if row is None else (row["qtd"] or 0)
+
+
 def criar_sc(numero_sc, data_abertura, itens, observacoes=""):
     if not itens:
         return False, "Adicione ao menos um item."
@@ -1442,12 +1473,17 @@ def criar_sc(numero_sc, data_abertura, itens, observacoes=""):
                 qtd_solicitada = _to_float(it.get("quantidade_solicitada", 0))
                 qtd_negociada = _to_float(it.get("quantidade_pedido", qtd_solicitada)) or qtd_solicitada
                 qtd_recebida = _to_float(it.get("quantidade_recebida", 0))
-                saldo = max(qtd_negociada - qtd_recebida, 0)
-                status_item = "Recebido" if saldo <= 0 else ("Parcial" if qtd_recebida > 0 else "Aberto")
                 divergencia = 1 if abs(qtd_solicitada - qtd_negociada) > 0.0001 else 0
                 existente = conn.execute(
-                    "SELECT id FROM itens_sc WHERE sc_id=? AND item_id=?", (sc_id, it["item_id"])
+                    "SELECT id, quantidade_recebida FROM itens_sc WHERE sc_id=? AND item_id=?",
+                    (sc_id, it["item_id"]),
                 ).fetchone()
+                # v5.7.0 — só o MRO escreve `quantidade_recebida`. Em linha que já existe, o
+                # número informado aqui é leitura do Protheus: vai para a coluna espelho e o
+                # saldo continua saindo do recebimento do MRO. Em linha nova não há o que
+                # preservar, então o valor inicializa as duas colunas.
+                recebida_mro = (existente["quantidade_recebida"] or 0) if existente else qtd_recebida
+                saldo, status_item = _saldo_status_item_sc(qtd_negociada, recebida_mro)
                 dados = (
                     it.get("numero_po") or None,
                     qtd_solicitada,
@@ -1465,7 +1501,7 @@ def criar_sc(numero_sc, data_abertura, itens, observacoes=""):
                     conn.execute(
                         """
                         UPDATE itens_sc SET
-                            numero_po=?, quantidade_solicitada=?, quantidade_recebida=?,
+                            numero_po=?, quantidade_solicitada=?, quantidade_recebida_protheus=?,
                             data_necessidade=?, observacao_item=?, quantidade_pedido=?,
                             fornecedor_item=?, data_prev_nfe=?, saldo_residual=?,
                             status_item=?, divergencia_compra=?
@@ -1480,12 +1516,13 @@ def criar_sc(numero_sc, data_abertura, itens, observacoes=""):
                     conn.execute(
                         """
                         INSERT INTO itens_sc
-                            (sc_id,item_id,numero_po,quantidade_solicitada,quantidade_recebida,
+                            (sc_id,item_id,numero_po,quantidade_solicitada,quantidade_recebida_protheus,
                              data_necessidade,observacao_item,quantidade_pedido,fornecedor_item,
-                             data_prev_nfe,saldo_residual,status_item,divergencia_compra,origem)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             data_prev_nfe,saldo_residual,status_item,divergencia_compra,
+                             quantidade_recebida,origem)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
-                        (sc_id, it["item_id"], *dados, "manual"),
+                        (sc_id, it["item_id"], *dados, qtd_recebida, "manual"),
                     )
                     criados += 1
                 conn.execute("UPDATE inventario SET ultima_sc_id=? WHERE id=?", (sc_id, it["item_id"]))
@@ -1569,9 +1606,17 @@ def atualizar_sc(
                         continue
                     qtd_solicitada = _to_float(it.get("quantidade_solicitada", 0))
                     qtd_negociada = _to_float(it.get("quantidade_pedido", qtd_solicitada)) or qtd_solicitada
-                    qtd_recebida = _to_float(it.get("quantidade_recebida", 0))
-                    saldo = max(qtd_negociada - qtd_recebida, 0)
-                    status_item = "Recebido" if saldo <= 0 else ("Parcial" if qtd_recebida > 0 else "Aberto")
+                    # v5.7.0 — o saldo sai do recebimento GRAVADO, nunca do `quantidade_recebida`
+                    # que veio no payload: a tela só devolve o número que leu, e derivar o saldo
+                    # dele deixaria o pendente à mercê de qualquer chamador. A coluna em si já
+                    # não era escrita aqui desde a v4.5.7 — agora o cálculo também não a usa.
+                    row_rec = conn.execute(
+                        "SELECT quantidade_recebida FROM itens_sc WHERE id=? AND sc_id=?",
+                        (item_sc_id, sc_id),
+                    ).fetchone()
+                    saldo, status_item = _saldo_status_item_sc(
+                        qtd_negociada, row_rec["quantidade_recebida"] if row_rec else 0
+                    )
                     divergencia = 1 if abs(qtd_solicitada - qtd_negociada) > 0.0001 else 0
                     conn.execute(
                         """
@@ -1852,18 +1897,11 @@ def importar_solicitacoes_protheus(arquivo_excel, nome_arquivo="Solicitacoes.xls
                 qtd_pedido = _to_float(_valor(row, colunas["quantidade_pedido"], 0))
                 qtd_nfe = _to_float(_valor(row, colunas["quantidade_nfe"], 0))
                 qtd_negociada = qtd_pedido or qtd_sc
-                saldo_residual = max(qtd_negociada - qtd_entregue, 0)
                 prioridade_critica = _tem_prioridade_critica(justificativa)
                 data_necessidade = _to_date_str(_valor(row, colunas["data_necessidade"], None))
-                ruptura = bool(
-                    data_necessidade
-                    and saldo_residual > 0
-                    and datetime.strptime(data_necessidade, "%Y-%m-%d").date() < hoje
-                )
                 divergencia = bool(qtd_pedido and abs(qtd_sc - qtd_pedido) > 0.0001)
-                status_item = (
-                    "Recebido" if saldo_residual <= 0 else ("Parcial" if qtd_entregue > 0 else "Aberto")
-                )
+                # v5.7.0 — saldo/status/ruptura só são calculados depois de resolver o item_id,
+                # porque agora dependem do recebimento do MRO e não mais de `qtd_entregue`.
                 # status_protheus já foi extraído acima
 
                 # 🚫 Filtro 3: Verificar se o Item (PN) já existe no Banco MRO
@@ -1885,6 +1923,21 @@ def importar_solicitacoes_protheus(arquivo_excel, nome_arquivo="Solicitacoes.xls
                     continue  # Pula para a próxima linha do Excel
 
                 item_id = item_existente["id"]
+
+                # v5.7.0 — fonte de verdade do recebimento é o MRO. `qtd_entregue` (Protheus)
+                # passa a alimentar só a coluna espelho: quando a linha já existe, saldo, status
+                # e ruptura saem de `itens_sc.quantidade_recebida`, então um recebimento parcial
+                # conferido na doca sobrevive à reimportação. Linha nova não tem o que preservar
+                # e o número do Protheus inicializa as duas colunas.
+                recebida_mro = _recebimento_mro_item_sc(conn, numero_sc, item_id)
+                if recebida_mro is None:
+                    recebida_mro = qtd_entregue
+                saldo_residual, status_item = _saldo_status_item_sc(qtd_negociada, recebida_mro)
+                ruptura = bool(
+                    data_necessidade
+                    and saldo_residual > 0
+                    and datetime.strptime(data_necessidade, "%Y-%m-%d").date() < hoje
+                )
 
                 # Opcional: Atualizar a importância se o Protheus indicar criticidade e o banco não tiver
                 if prioridade_critica and item_existente["importancia"] != "Parada de Linha":
@@ -2005,7 +2058,7 @@ def importar_solicitacoes_protheus(arquivo_excel, nome_arquivo="Solicitacoes.xls
                     conn.execute(
                         """
                         UPDATE itens_sc SET
-                            numero_po=?, quantidade_solicitada=?, quantidade_recebida=?,
+                            numero_po=?, quantidade_solicitada=?, quantidade_recebida_protheus=?,
                             data_necessidade=?, observacao_item=?, descricao_detalhada=?,
                             quantidade_pedido=?, fornecedor_item=?, data_prev_nfe=?,
                             documento_nf=?, quantidade_nfe=?, saldo_residual=?,
@@ -2018,14 +2071,14 @@ def importar_solicitacoes_protheus(arquivo_excel, nome_arquivo="Solicitacoes.xls
                     conn.execute(
                         """
                         INSERT INTO itens_sc
-                            (sc_id,item_id,numero_po,quantidade_solicitada,quantidade_recebida,
+                            (sc_id,item_id,numero_po,quantidade_solicitada,quantidade_recebida_protheus,
                              data_necessidade,observacao_item,descricao_detalhada,
                              quantidade_pedido,fornecedor_item,data_prev_nfe,documento_nf,
                              quantidade_nfe,saldo_residual,status_item,ruptura,divergencia_compra,
-                             ultima_importacao)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             ultima_importacao,quantidade_recebida)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
-                        (sc_id, item_id, *dados_item),
+                        (sc_id, item_id, *dados_item, qtd_entregue),
                     )
 
                 conn.execute("UPDATE inventario SET ultima_sc_id=? WHERE id=?", (sc_id, item_id))
@@ -2440,7 +2493,7 @@ def buscar_scs_por_item(item_id, apenas_abertas=True):
                    COALESCE(isc.fornecedor_item, sc.fornecedor) AS fornecedor_item,
                    isc.quantidade_solicitada,
                    COALESCE(isc.quantidade_pedido, isc.quantidade_solicitada) AS quantidade_negociada,
-                   isc.quantidade_recebida,
+                   isc.quantidade_recebida, isc.quantidade_recebida_protheus,
                    COALESCE(isc.saldo_residual, COALESCE(isc.quantidade_pedido, isc.quantidade_solicitada)-isc.quantidade_recebida) AS pendente,
                    isc.data_necessidade, isc.data_prev_nfe, isc.documento_nf, isc.status_item,
                    isc.preco_unitario, isc.valor_total, isc.moeda
@@ -2482,7 +2535,7 @@ def obter_pedido_sc(item_sc_id):
                    COALESCE(isc.fornecedor_item, sc.fornecedor) AS fornecedor_item,
                    isc.quantidade_solicitada,
                    COALESCE(isc.quantidade_pedido, isc.quantidade_solicitada) AS quantidade_negociada,
-                   isc.quantidade_recebida,
+                   isc.quantidade_recebida, isc.quantidade_recebida_protheus,
                    COALESCE(isc.saldo_residual, COALESCE(isc.quantidade_pedido, isc.quantidade_solicitada)-isc.quantidade_recebida) AS pendente,
                    isc.data_necessidade, isc.data_prev_nfe, isc.documento_nf, isc.status_item,
                    isc.observacao_item,
@@ -2536,9 +2589,7 @@ def atualizar_pedido_guarda_chuva(item_sc_id, campos):
                 else (row["quantidade_pedido"] or row["quantidade_solicitada"] or 0)
             )
             solicitada = row["quantidade_solicitada"] or 0
-            recebida = row["quantidade_recebida"] or 0
-            saldo = max(negociada - recebida, 0)
-            status_item = "Recebido" if saldo <= 0 else ("Parcial" if recebida > 0 else "Aberto")
+            saldo, status_item = _saldo_status_item_sc(negociada, row["quantidade_recebida"])
             divergencia = 1 if abs(solicitada - negociada) > 0.0001 else 0
 
             set_cols += ["saldo_residual=?", "status_item=?", "divergencia_compra=?"]
@@ -4357,17 +4408,21 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                 qtd_entregue = _to_float(_valor(row, colunas["qtd_entregue"], 0))
                 qtd_pedido = _to_float(_valor(row, colunas["qtd_pedido"], 0))
                 qtd_negociada = qtd_pedido or qtd_sc
-                saldo_residual = max(qtd_negociada - qtd_entregue, 0)
                 prioridade_critica = _tem_prioridade_critica(justificativa)
                 data_necessidade = _to_date_str(_valor(row, colunas["data_necessidade"], None))
+                divergencia = bool(qtd_pedido and abs(qtd_sc - qtd_pedido) > 0.0001)
+                # v5.7.0 — mesma regra do importador do Relatório de SCs: `qtd_entregue` é a
+                # leitura do Protheus e vai para a coluna espelho; saldo, status e ruptura saem
+                # do recebimento do MRO quando a linha já existe. Item externo (sem `item_id`)
+                # não tem linha em `itens_sc`, então cai no valor do Protheus.
+                recebida_mro = _recebimento_mro_item_sc(conn, numero_sc, item_id)
+                if recebida_mro is None:
+                    recebida_mro = qtd_entregue
+                saldo_residual, status_item = _saldo_status_item_sc(qtd_negociada, recebida_mro)
                 ruptura = bool(
                     data_necessidade
                     and saldo_residual > 0
                     and datetime.strptime(data_necessidade, "%Y-%m-%d").date() < hoje
-                )
-                divergencia = bool(qtd_pedido and abs(qtd_sc - qtd_pedido) > 0.0001)
-                status_item = (
-                    "Recebido" if saldo_residual <= 0 else ("Parcial" if qtd_entregue > 0 else "Aberto")
                 )
                 status = _status_sc_importado(status_protheus, saldo_residual)
                 numero_po = str(_valor(row, colunas["pedido"], "") or "").strip()
@@ -4530,7 +4585,7 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                     conn.execute(
                         """
                         UPDATE itens_sc SET
-                            numero_po=?, quantidade_solicitada=?, quantidade_recebida=?,
+                            numero_po=?, quantidade_solicitada=?, quantidade_recebida_protheus=?,
                             data_necessidade=?, observacao_item=?, descricao_detalhada=?,
                             quantidade_pedido=?, fornecedor_item=?, data_prev_nfe=?, documento_nf=?,
                             quantidade_nfe=?, saldo_residual=?, status_item=?, ruptura=?,
@@ -4544,14 +4599,14 @@ def ingerir_scm(df, nome_arquivo="Relatorio de SCs.xlsx"):
                     conn.execute(
                         """
                         INSERT INTO itens_sc
-                            (sc_id,item_id,numero_po,quantidade_solicitada,quantidade_recebida,
+                            (sc_id,item_id,numero_po,quantidade_solicitada,quantidade_recebida_protheus,
                              data_necessidade,observacao_item,descricao_detalhada,quantidade_pedido,
                              fornecedor_item,data_prev_nfe,documento_nf,quantidade_nfe,saldo_residual,
                              status_item,ruptura,divergencia_compra,ultima_importacao,preco_unitario,
-                             valor_total,moeda,origem)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             valor_total,moeda,origem,quantidade_recebida)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
-                        (sc_id, item_id, *dados_item),
+                        (sc_id, item_id, *dados_item, qtd_entregue),
                     )
 
                 conn.execute("UPDATE inventario SET ultima_sc_id=? WHERE id=?", (sc_id, item_id))

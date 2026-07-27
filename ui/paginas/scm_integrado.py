@@ -291,6 +291,9 @@ def _aba_detalhes(scs):
                 "nome_item",
                 "quantidade_solicitada",
                 "quantidade_recebida",
+                # v5.7.0 — leitura do ERP ao lado da do MRO: as duas colunas separadas são o
+                # que torna a divergência visível (antes o import sobrescrevia e ela sumia).
+                "quantidade_recebida_protheus",
                 "preco_unitario",
                 "valor_total",
                 "numero_po",
@@ -306,7 +309,14 @@ def _aba_detalhes(scs):
                 "part_number": "PN",
                 "nome_item": "Descrição",
                 "quantidade_solicitada": st.column_config.NumberColumn("Qtd", format="%.2f"),
-                "quantidade_recebida": st.column_config.NumberColumn("Recebido", format="%.2f"),
+                "quantidade_recebida": st.column_config.NumberColumn(
+                    "Recebido (MRO)", format="%.2f", help="Conferido na doca. Base do saldo pendente."
+                ),
+                "quantidade_recebida_protheus": st.column_config.NumberColumn(
+                    "Recebido (Protheus)",
+                    format="%.2f",
+                    help="Declarado pelo ERP. Não altera o saldo; serve para comparar.",
+                ),
                 "preco_unitario": st.column_config.NumberColumn("Preço Unit.", format="R$ %.2f"),
                 "valor_total": st.column_config.NumberColumn("Valor Total", format="R$ %.2f"),
                 "numero_po": "PO",

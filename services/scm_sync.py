@@ -257,8 +257,8 @@ def _upsert_item_api(conn, sc_id, it, agora, resumo):
             INSERT INTO itens_sc
                 (sc_id, item_id, quantidade_solicitada, quantidade_recebida, data_necessidade,
                  descricao_detalhada, saldo_residual, status_item, ultima_importacao,
-                 preco_unitario, valor_total, origem)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                 preco_unitario, valor_total, origem, quantidade_recebida_protheus)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
             (
                 sc_id,
@@ -273,6 +273,9 @@ def _upsert_item_api(conn, sc_id, it, agora, resumo):
                 preco,
                 vtot,
                 "api_scm",
+                # v5.7.0 — espelho do recebimento declarado pelo ERP. A API não informa
+                # entrega no item, e a linha nasce sem nada recebido: 0 nas duas colunas.
+                0,
             ),
         )
         conn.execute("UPDATE inventario SET ultima_sc_id=? WHERE id=?", (sc_id, item_id))

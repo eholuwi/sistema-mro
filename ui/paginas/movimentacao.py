@@ -54,6 +54,7 @@ from ui.tema import paleta_atual
 from ui.formatos import fmt
 from ui.componentes.graficos import _barv
 from ui.componentes.selecao import sel_material
+from ui.componentes.status import divergencia_recebimento
 from ui.componentes.tabela import chave_editor
 
 
@@ -120,6 +121,15 @@ def _receber_por_sc(centros):
             f"**SC {sc['numero_sc']}** · PO `{sc.get('numero_po') or '—'}` · "
             f"Fornecedor: {sc.get('fornecedor') or '—'} · Status: {sc.get('status') or '—'}"
         )
+        # v5.7.0 — o "Pendente" da grade sai do recebimento conferido pelo MRO. Onde o Protheus
+        # declara mais do que entrou na doca, o almoxarife vê a divergência antes de lançar.
+        _pns_div = [it["part_number"] for it in itens if divergencia_recebimento(it)]
+        if _pns_div:
+            st.caption(
+                ":orange[:material/rule: **Divergência de recebimento** com o Protheus em: "
+                + ", ".join(f"`{pn}`" for pn in _pns_div)
+                + ". O pendente abaixo segue o que o MRO conferiu.]"
+            )
 
         h1, h2, h3 = st.columns(3)
         forn = h1.text_input("Fornecedor", value=sc.get("fornecedor") or "", key="rec_sc_forn")
@@ -282,6 +292,11 @@ def _render_receber_material():
                         st.markdown(
                             f"Solicitado: `{sc_sel['quantidade_solicitada']}` | Negociado: `{sc_sel.get('quantidade_negociada') or sc_sel['quantidade_solicitada']}` | Recebido: `{sc_sel['quantidade_recebida']}` | **Saldo Residual: `{sc_sel['pendente']}` {_uc_rec}**"
                         )
+                        # v5.7.0 — o pendente sai do que o MRO conferiu; se o Protheus declara
+                        # mais, o almoxarife precisa ver a diferença antes de lançar a entrada.
+                        _div_rec = divergencia_recebimento(sc_sel)
+                        if _div_rec:
+                            st.caption(f":orange[{_div_rec}]")
             else:
                 st.info("ℹ️ Nenhuma SC aberta para este material. A entrada será registrada como avulsa.")
 

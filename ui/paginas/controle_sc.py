@@ -61,6 +61,7 @@ from services.planejamento import (
 )
 from ui.cache import invalidar_leituras
 from ui.componentes.selecao import sel_material
+from ui.componentes.status import divergencia_recebimento
 from ui.componentes.tabela import chave_editor
 from ui.formatos import fmt, fmt_date_input
 
@@ -858,7 +859,16 @@ def render() -> None:
                                 value=fmt_date_input(item_sc.get("data_necessidade")),
                                 key=f"ed_nec_{item_sc['id']}",
                             )
-                            ci7.metric("Já Recebido", item_sc.get("quantidade_recebida") or 0)
+                            ci7.metric(
+                                "Já Recebido",
+                                item_sc.get("quantidade_recebida") or 0,
+                                help="Recebimento conferido pelo MRO. Só muda por 'Receber Material'.",
+                            )
+                            # v5.7.0 — o número do Protheus não sobrescreve mais o do MRO; quando
+                            # os dois discordam, a diferença fica visível aqui em vez de sumir.
+                            _div_rec = divergencia_recebimento(item_sc)
+                            if _div_rec:
+                                st.caption(f":orange[{_div_rec}]")
 
                         itens_editados.append(
                             {

@@ -1,8 +1,9 @@
 """ui/componentes/status.py — indicadores de origem e disponibilidade (v5.2.0 / F3).
 
-Pequenos helpers visuais da página SCM Integrado: um "badge" da fonte do dado
-(API do SCM × Relatório Excel), o ponto de status da API (health-check com cache
-curto, para não bater na rede a cada rerun) e o painel de saúde do SCM (v5.6.0).
+Pequenos helpers visuais em torno da integração com o Protheus/SCM: um "badge" da fonte
+do dado (API do SCM × Relatório Excel), o ponto de status da API (health-check com cache
+curto, para não bater na rede a cada rerun), o painel de saúde do SCM (v5.6.0) e o aviso
+de divergência entre o recebimento do MRO e o declarado pelo ERP (v5.7.0).
 """
 
 from __future__ import annotations
@@ -28,6 +29,28 @@ def badge_origem(origem, quando=None):
     if quando:
         rotulo += f" · {fmt(quando)}"
     return rotulo
+
+
+def divergencia_recebimento(item):
+    """Aviso (markdown) quando o Protheus declara mais recebido do que o MRO conferiu.
+
+    v5.7.0 — `itens_sc.quantidade_recebida` passou a ser escrita SÓ pelo MRO e a leitura do
+    ERP vive em `quantidade_recebida_protheus`. Quando o ERP declara mais do que entrou na
+    doca, o pendente do MRO fica maior de propósito; o aviso existe para que essa diferença
+    seja lida como informação e não como erro de saldo. Devolve `None` quando não há espelho
+    (linha legada, anterior à migração) ou quando os dois números batem."""
+    if not item:
+        return None
+    protheus = item.get("quantidade_recebida_protheus")
+    if protheus is None:
+        return None
+    mro = item.get("quantidade_recebida") or 0
+    if protheus - mro <= 0.0001:
+        return None
+    return (
+        f":material/rule: **Divergência de recebimento:** o Protheus registra `{protheus:g}` "
+        f"e o MRO conferiu `{mro:g}`. O saldo pendente segue o MRO."
+    )
 
 
 _CHAVE_DIAG = "_scm_diagnostico"
