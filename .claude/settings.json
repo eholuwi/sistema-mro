@@ -14,8 +14,7 @@
     "deny": [
       "Read(./mro.db)",
       "Read(./backups/**)",
-      "Read(./mro.db.bak-*)",
-      "Read(../SCM_API_Docs/**)"
+      "Read(./mro.db.bak-*)"
     ]
   },
   "hooks": {
@@ -37,26 +36,6 @@
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/verify_on_stop.py\"",
             "timeout": 700
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Bash|PowerShell|Grep",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "C:/Users/eholu/AppData/Roaming/Python/Python314/Scripts/graphify.EXE hook-guard search"
-          }
-        ]
-      },
-      {
-        "matcher": "Read|Glob",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "C:/Users/eholu/AppData/Roaming/Python/Python314/Scripts/graphify.EXE hook-guard read"
           }
         ]
       }
