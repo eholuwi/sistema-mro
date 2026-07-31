@@ -18,17 +18,19 @@
   `requirements.txt` **sem pin** — descartado por decisão do Luis, nada a resgatar. As duas branches
   agora apontam para o mesmo commit; quem clonar o repositório cai no estado atual.
 
-- **v5.8.0 COMMITADA (`015a5cf`), gate verde (641 testes locais), PENDENTE de validação no app real.**
-  Ver `changelog/5.8.0.md`. Duas entregas: backup sob demanda na tela (`services/backup.py` +
-  bloco em Configurações) e pacote portátil (`scripts/portatil.py` → `MRO.exe`).
-  - ⚠️ **Migração de schema ainda NÃO rodou no `mro.db` de produção:** tabela
-    `configuracoes (chave, valor)`, `CREATE TABLE IF NOT EXISTS` em `criar_banco()` — aditiva pura.
-  - **Roteiro de validação pendente:** (a) botão de backup com destino válido, destino apagado e
-    download pelo navegador; (b) `MRO.exe` na 8501 em **máquina limpa**, incluindo fechar a janela e
-    conferir que nenhum `python.exe` sobrou; (c) `atualizar_mro.bat` com o exe aberto tem que
-    **abortar**; (d) reboot-test depois do `instalar_servidor.ps1`.
+- **v5.8.0 COMMITADA (`015a5cf`), gate verde (641 testes locais), ✅ VALIDADA NO APP REAL
+  (31/07/2026) e EM PRODUÇÃO.** Ver `changelog/5.8.0.md`. Duas entregas: backup sob demanda na tela
+  (`services/backup.py` + bloco em Configurações) e pacote portátil (`scripts/portatil.py` →
+  `MRO.exe`).
+  - **O pacote portátil está em uso real: a Jasiva opera pelo `MRO.exe`.** É a prova de campo do
+    objetivo da v5.8.0 — os 7 passos manuais do `INSTALACAO_SERVIDOR.md` viraram "extrair e dois
+    cliques", e o runtime embeddable roda em máquina que não é a do dev.
+  - **Migração de schema:** rodou (tabela `configuracoes (chave, valor)`, `CREATE TABLE IF NOT
+    EXISTS` em `criar_banco()`, aditiva pura) — o app abriu em produção, e é o boot que executa a
+    migração.
   - **Débito assumido (decisão do Luis):** sem listagem/exclusão de `.bak` na tela e sem retenção
-    automática. Nada apaga backup, e o botão manual acelera o acúmulo.
+    automática. Nada apaga backup, e o botão manual acelera o acúmulo. **Com o sistema em uso por
+    mais de uma pessoa, isso passa a acumular mais rápido** — vale revisitar.
 
 - **v5.7.0 — CP1 segue PENDENTE de validação.** Depende do Relatório de SCs, que o Luis ainda não
   tem; a regra foi ensaiada contra cópia do `mro.db` real (SC 41494 / PN 29TP0086). CP2/CP3/CP4 ✅.
