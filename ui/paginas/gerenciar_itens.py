@@ -1,4 +1,4 @@
-"""Página Gerenciar Itens MRO (v5.3.0 / F4a) — cadastro e edição de itens.
+"""Página Cadastro de Itens MRO (v5.3.0 / F4a) — cadastro e edição de itens.
 
 Migrada do bloco inline do `app.py`. É uma página de FORMULÁRIO (2 abas: Cadastrar
 Novo / Editar Existente) — o item é escolhido por `sel_material` (selectbox), não há
@@ -6,6 +6,10 @@ lista/tabela navegável, então não há adoção de `barra_filtros`/`tabela_pag
 aqui. Toda escrita (salvar/atualizar/alterar PN) chama `invalidar_leituras()` para
 as telas cacheadas (Saldo/Dashboard/sidebar) não exibirem dado velho. Regra de
 negócio (conversão de unidades, alteração de PN, lead time) preservada 1:1.
+
+O nome da tela era "Gerenciar Itens" até a v5.9.0; o MÓDULO segue `gerenciar_itens`
+de propósito (o router importa por nome explícito — renomear o arquivo só produziria
+ruído de diff sem ganho).
 """
 
 from __future__ import annotations
@@ -33,11 +37,34 @@ from services.db_functions import (
 )
 from ui.cache import invalidar_leituras
 from ui.formatos import fmt
-from ui.componentes.selecao import sel_material, opcoes_com_atual
+from ui.componentes.selecao import (
+    sel_material,
+    opcoes_com_atual,
+    resetar_campos_ao_trocar,
+    rotulo_item,
+)
+
+# Widgets do formulário de edição (aba "Editar Item Existente"). A key é fixa — as duas
+# abas têm widgets de mesmo rótulo/opções e sem key colidiriam em id — então a troca de
+# item precisa limpar estes campos explicitamente. Ver `resetar_campos_ao_trocar`.
+CAMPOS_EDICAO = (
+    "ed_desc",
+    "ed_un",
+    "ed_tipo",
+    "ed_imp",
+    "ed_loc",
+    "ed_loc2",
+    "ed_caixa",
+    "ed_lead",
+    "ed_min",
+    "ed_max",
+    "ed_uc",
+    "ed_fator",
+)
 
 
 def render() -> None:
-    st.title(":material/add: Gerenciar Itens MRO")
+    st.title(":material/add: Cadastro de Itens MRO")
 
     # --- TABS PARA ORGANIZAÇÃO ---
     tab_editar, tab_novo = st.tabs(
@@ -131,6 +158,9 @@ def render() -> None:
         with st.container(border=True):
             st.subheader("Selecionar Item para Edição")
             _, item_sel, _ = sel_material("Busque pelo PN ou Nome", "sel_edit_item")
+
+            # Trocou de item → os campos abaixo precisam voltar a ler o item novo.
+            resetar_campos_ao_trocar("ed_item_atual", item_sel["id"] if item_sel else None, CAMPOS_EDICAO)
 
             if item_sel:
                 st.info(f"**Editando:** `{item_sel['part_number']} — {item_sel['nome_item']}`")
@@ -346,6 +376,12 @@ def render() -> None:
                         )
                         if ok:
                             invalidar_leituras()
+                            # O rótulo da seleção é montado a partir do PN: com o PN novo,
+                            # o rótulo antigo some das opções e o formulário desapareceria
+                            # logo após salvar. Reaponta a seleção para o rótulo novo.
+                            st.session_state["sel_edit_item"] = rotulo_item(
+                                {**item_sel, "part_number": novo_pn.strip()}
+                            )
                             st.success(msg)
                             time.sleep(1.2)
                             st.rerun()

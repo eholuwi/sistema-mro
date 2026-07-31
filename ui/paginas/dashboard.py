@@ -35,7 +35,6 @@ from ui.componentes.graficos import (
     _barh,
     _donut,
     _barv,
-    _linhas,
     _barras_agrupadas,
     _bloco_top,
     _mes_label,
@@ -47,7 +46,7 @@ from ui.componentes.graficos import (
 def render() -> None:
     st.title(":material/bar_chart: Dashboard — MRO Inventus Power")
     if not inventario_cached():
-        st.info("Nenhum item cadastrado. Vá em **:material/add: Gerenciar Itens** para começar.")
+        st.info("Nenhum item cadastrado. Vá em **:material/add: Cadastro de Itens** para começar.")
         return
 
     # v4.1.0 — a aba "Gestão" foi extinta; seu conteúdo (2 linhas de distribuição, Top 10
@@ -576,64 +575,63 @@ def _render_dash_almoxarifado(vm, vm_gestao):
 
 
 def _render_dash_compras_mro(vm):
-    """:material/shopping_cart: Dashboard Compras MRO (§1) — espelha o Dashboard SCM WK29,
-    porém só com material MRO. Clicável (cards com 🔍 + seletor abaixo de cada gráfico). v4.5.5."""
+    """:material/shopping_cart: Dashboard do Comprador (§1) — material MRO.
+
+    v5.9.0: reduzido a **4 cards + 5 gráficos** (pedido do usuário). Saíram os blocos
+    redundantes ("Setores" repetia o Ranking de Departamentos; "Comparativo por
+    Comprador" repetia o gráfico de barras) e os que ninguém lia (aging, SC→PO,
+    tendência semanal, status dos POs, itens por pedido, lead time por fornecedor).
+    Clicável (cards com 🔍 + seletor abaixo de cada gráfico)."""
     from services.drill_down import (
         rows_itens_em_aberto,
         rows_fornecedores_aberto,
-        rows_setores_demanda_aberta,
         rows_scs_status,
-        rows_scs_comprador,
         rows_scs_mes,
-        rows_scs_itens_faixa,
     )
 
     k = vm["kpis"]
     ch, cw = st.columns([3, 1])
-    ch.markdown("### :material/shopping_cart: Dashboard Compras MRO · Inventus Power")
+    ch.markdown("### :material/shopping_cart: Dashboard do Comprador · Inventus Power")
     cw.markdown(
         f"<div style='text-align:right'><b>WK {vm['wk']}</b> · {vm['ano']}</div>", unsafe_allow_html=True
     )
     ua = vm.get("ultima_atualizacao")
     st.caption(
         f":material/update: Última atualização do Relatório de SCs: **{fmt(ua) if ua else '—'}** · "
-        f"escopo do ano de {vm['ano']}. Espelha o **Dashboard SCM**, só com material MRO. "
+        f"escopo do ano de {vm['ano']}, só material MRO. "
         ":material/ads_click: cards com 🔍 e seletor abaixo de cada gráfico."
     )
 
-    # ── KPIs ──
-    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    # ── 4 cards ──
+    m1, m2, m3, m4 = st.columns(4)
     _card_drill(
         m1,
-        ":material/request_quote: Em cotação",
+        ":material/request_quote: Itens em Aberto",
         k["itens_abertos"],
         "cmp_cot",
         lambda: rows_scs_status("Em Cotação"),
-        help="SCs abertas com status de Cotação.",
-    )
-    m2.metric(
-        "🔴 Críticos",
-        k["itens_criticos"],
-        delta_color="inverse",
-        help="Itens abertos com estoque no/abaixo do mínimo.",
-    )
-    m3.metric(
-        ":material/timer: Aging médio",
-        f"{k['aging_medio']}d" if k["aging_medio"] is not None else "—",
-        help="Tempo médio Emissão → atendimento (PO/aprovação) das SCs do ano.",
+        help="Linhas de item de SC cuja SC está em Cotação.",
     )
     _card_drill(
-        m4,
-        ":material/receipt_long: SCs abertas",
+        m2,
+        ":material/receipt_long: SCs em Aberto",
         k["scs_abertas"],
         "cmp_scab",
         lambda: rows_itens_em_aberto(),
-        help="SCs com saldo pendente (itens em aberto).",
+        help="SCs distintas com ao menos um item MRO em Cotação.",
     )
-    m5.metric(":material/shopping_cart_checkout: POs emitidos", k["pos_emitidos"])
-    m6.metric(":material/payments: Valor comprado", _brl_compact(k["valor_comprado"]))
+    m3.metric(
+        ":material/shopping_cart_checkout: QTY Pedidos Emitidos",
+        k["pos_emitidos"],
+        help="Pedidos de Compra distintos emitidos no ano.",
+    )
+    m4.metric(
+        ":material/inventory: QTY Itens com P.O.",
+        k["itens_com_po"],
+        help="Linhas de item de SC que já têm Pedido de Compra.",
+    )
 
-    # ── SCM: Qtd. de Itens por Mês · Qtd. de SCs por Mês ──
+    # ── Gráficos 1 e 2: Qtd. de Itens por Mês · Qtd. de SCs por Mês ──
     st.divider()
     vmn = vm["volume_mensal"]
     _meses_lbl = [_mes_label(m) for m in vmn["meses"]]
@@ -671,109 +669,45 @@ def _render_dash_compras_mro(vm):
             else:
                 st.caption("Sem SCs no ano.")
 
-    # ── SCM: Ranking de Departamentos · Itens por comprador ──
-    b1, b2 = st.columns(2)
-    with b1:
+    # ── Gráficos 3 e 4: Dispêndio Mensal · Ranking de Dispêndio por Setor ──
+    d1, d2 = st.columns(2)
+    with d1:
         with st.container(border=True):
-            st.markdown("##### :material/apartment: Ranking de Departamentos (demanda em aberto)")
-            pdep = vm["por_departamento"][:10]
-            if pdep:
+            st.markdown("##### :material/payments: Dispêndio Mensal MRO")
+            dm = vm["dispendio_mensal"]
+            if dm["meses"]:
                 st.plotly_chart(
-                    _barv([x["departamento"] or "—" for x in pdep], [x["n"] for x in pdep]),
+                    _barv([_mes_label(m) for m in dm["meses"]], dm["valores"]),
                     width="stretch",
                     config={"displayModeBar": False},
                 )
-                _drill_select(
-                    "cmp_dep",
-                    [x["departamento"] or "—" for x in pdep],
-                    lambda l: "Setores (demanda em aberto)",
-                    lambda l: rows_setores_demanda_aberta(),
+                st.caption(
+                    "Valor dos itens no **mês do Pedido de Compra** (`data_po`) — "
+                    "item ainda sem PO não entra."
                 )
             else:
-                st.caption("Sem demanda em aberto por setor.")
-    with b2:
+                st.caption("Sem dispêndio no ano.")
+    with d2:
         with st.container(border=True):
-            st.markdown("##### :material/badge: Itens atribuídos por comprador")
-            pc = vm["por_comprador"][:10]
-            if pc:
+            st.markdown("##### :material/apartment: Ranking de Dispêndio por Setor")
+            ds = vm["dispendio_setor"]
+            if ds:
                 st.plotly_chart(
-                    _barv([x["comprador"] for x in pc], [x["itens"] for x in pc]),
+                    _barv([x["setor"] for x in ds], [x["valor"] for x in ds]),
                     width="stretch",
                     config={"displayModeBar": False},
                 )
-                _drill_select(
-                    "cmp_comp",
-                    [x["comprador"] for x in pc],
-                    lambda l: f"Comprador · {l}",
-                    lambda l: rows_scs_comprador(l),
+                st.caption(
+                    "Mesmo valor do gráfico ao lado, atribuído ao setor que **de fato consome** "
+                    "o item (consumo real) — item sem consumo fica fora."
                 )
             else:
-                st.caption("Sem compradores no período.")
+                st.caption("Sem dispêndio atribuível a setor.")
 
-    # ── SCM: Status dos POs (rosca) · Qtd. de Itens por Pedido (rosca) ──
-    g1, g2 = st.columns(2)
-    with g1:
-        with st.container(border=True):
-            st.markdown("##### :material/donut_large: Status dos Pedidos de Compra (POs)")
-            sp = vm["status_pos"]
-            if sp:
-                lbls = list(sp.keys())
-                st.plotly_chart(
-                    _donut(lbls, [sp[x] for x in lbls]), width="stretch", config={"displayModeBar": False}
-                )
-                _drill_select("cmp_stpo", lbls, lambda l: f"SCs · Status {l}", lambda l: rows_scs_status(l))
-            else:
-                st.caption("Sem SCs no ano.")
-    with g2:
-        with st.container(border=True):
-            st.markdown("##### :material/donut_large: Qtd. de Itens por Pedido")
-            ipp = vm["itens_por_pedido"]
-            if ipp:
-                lbls = list(ipp.keys())
-                st.plotly_chart(
-                    _donut(lbls, [ipp[x] for x in lbls]), width="stretch", config={"displayModeBar": False}
-                )
-                _drill_select(
-                    "cmp_ipp", lbls, lambda l: f"Pedidos com {l}", lambda l: rows_scs_itens_faixa(l)
-                )
-            else:
-                st.caption("Sem itens por pedido.")
-
-    # ── SCM: Aging dos itens em aberto (faixa de dias) ──
-    # v4.5.6 — removidos "Ranking de Aging por Depto (>15d)" e "Semana atual vs.
-    # anterior" (pedido do usuário); os 2 gráficos mantidos passam a ocupar a largura toda.
+    # ── Gráfico 5: Fornecedores por valor ──
     with st.container(border=True):
-        st.markdown("##### :material/donut_large: Aging dos itens em aberto (faixa de dias)")
-        ad = vm["aging_dist"]
-        st.plotly_chart(
-            _donut(list(ad.keys()), [int(v) for v in ad.values()]),
-            width="stretch",
-            config={"displayModeBar": False},
-        )
-        st.caption("Dias desde a **aprovação** da SC · itens sem aprovação ficam fora.")
-
-    # ── SCM: Tendência por Semana — aprovados × POs ──
-    with st.container(border=True):
-        st.markdown("##### :material/show_chart: Tendência por Semana — aprovados × POs")
-        ev = vm["evolucao_semanal"]
-        if ev["weeks"]:
-            st.plotly_chart(
-                _linhas(
-                    [f"WK{w}" for w in ev["weeks"]],
-                    [("Itens aprovados", ev["aprovados"], "#3b82f6"), ("POs emitidos", ev["pos"], "#22c55e")],
-                ),
-                width="stretch",
-                config={"displayModeBar": False},
-            )
-        else:
-            st.caption("Sem dados semanais.")
-
-    # ── Mantidos como estão (pedido do usuário): Fornecedor por valor + Setores ──
-    st.divider()
-    cc, cd = st.columns(2)
-    with cc:
         _bloco_top(
-            "🏭 Fornecedores por valor",
+            "🏭 Fornecedores por Valor",
             vm["fornecedores_top"],
             lambda x: x["fornecedor"][:22],
             "valor",
@@ -786,141 +720,11 @@ def _render_dash_compras_mro(vm):
                 lambda l: "Fornecedores (SCs abertas por valor)",
                 lambda l: rows_fornecedores_aberto(),
             )
-    with cd:
-        _bloco_top(
-            "📦 Setores (demanda em aberto)",
-            vm["por_departamento"],
-            lambda x: x["departamento"] or "—",
-            "n",
-            lambda v: f"{int(v)}",
-            height=340,
-            label_outside=True,
-        )
-
-    # ── Detalhamento ──
-    st.divider()
-    st.markdown("#### :material/table_rows: Detalhamento")
-    if st.button("🔍 Ver todos os itens em aberto (fila do dia)", key="cmp_painel_btn"):
-        _abrir_drill("Itens em aberto (fila do dia)", rows_itens_em_aberto())
-    if vm["por_comprador"]:
-        st.markdown("##### 📈 Comparativo por Comprador")
-        st.dataframe(
-            pd.DataFrame(
-                [
-                    {
-                        "Comprador": c["comprador"],
-                        "Itens": c["itens"],
-                        "POs": c["pos"],
-                        "Valor": c["valor"],
-                        "Aging médio (d)": c["aging_medio"],
-                    }
-                    for c in vm["por_comprador"]
-                ]
-            ),
-            hide_index=True,
-            width="stretch",
-            column_config={
-                "Valor": st.column_config.NumberColumn(format="R$ %.2f"),
-                "Aging médio (d)": st.column_config.NumberColumn(format="%.1f"),
-            },
-        )
-
-    _bloco_top(
-        "📅 Lead Time por Fornecedor (dias)",
-        vm["lead_time_fornecedor"],
-        lambda x: x["fornecedor"][:24],
-        "dias",
-        lambda v: f"{v:g}d",
-        caption="Tempo médio Emissão → PO por fornecedor — maior = alvo de negociação.",
-    )
 
 
-def _render_dash_comprador(vm):
-    """:material/person: Comprador — o que fazer agora: KPIs de ação, fila priorizada, SCs sugeridas, aging."""
-    k = vm["kpis"]
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric(
-        "🔴 Críticos",
-        k["criticos"],
-        help="Itens tier-0 na fila de reposição (abaixo do ponto de pedido, com consumo real).",
-    )
-    c2.metric(
-        ":material/alarm: Comprar até atrasados",
-        k["comprar_atrasados"],
-        delta_color="inverse",
-        help="Sugestões cujo prazo-limite de compra (cobertura − lead time − 15d) já passou.",
-    )
-    c3.metric(
-        ":material/receipt_long: SCs abertas",
-        k["scs_abertas"],
-        help="Solicitações de compra com saldo pendente (não recebidas/canceladas).",
-    )
-    c4.metric(
-        ":material/emergency: Rupturas",
-        k["rupturas"],
-        delta_color="inverse",
-        help="Itens com consumo real e estoque físico = 0 (parada iminente).",
-    )
-
-    st.markdown("---")
-    col_fila, col_lado = st.columns([3, 2])
-
-    with col_fila:
-        with st.container(border=True):
-            st.markdown(
-                f"#### :material/psychology: Fila de reposição — top {len(vm['fila'])} de {vm['total_fila']}"
-            )
-            st.caption(
-                "Priorizada por urgência. Ação completa em **Controle de SC → :material/psychology: Assistente de Reposição**."
-            )
-            if vm["fila"]:
-                df = pd.DataFrame(
-                    [
-                        {
-                            "Prio": s.get("prioridade"),
-                            "Part Number": s.get("part_number"),
-                            "Item": (s.get("nome_item") or "")[:32],
-                            "Cobertura(d)": s.get("cobertura_dias"),
-                            "Comprar até": fmt(s.get("comprar_ate")) if s.get("comprar_ate") else "—",
-                            "Qtd": s.get("qtd_sugerida"),
-                            "Un": s.get("unidade"),
-                            "Fornecedor": s.get("fornecedor_sugerido") or "—",
-                        }
-                        for s in vm["fila"]
-                    ]
-                )
-                st.dataframe(df, width="stretch", hide_index=True, height=400)
-            else:
-                st.success("Nenhuma reposição pendente no momento. :material/celebration:")
-
-    with col_lado:
-        with st.container(border=True):
-            st.markdown("#### :material/inventory_2: SCs sugeridas (agrupadas)")
-            st.caption("Itens já agrupados por natureza — de 'mão beijada' para o Protheus.")
-            if vm["scs_sugeridas"]:
-                for g in vm["scs_sugeridas"][:6]:
-                    ca = fmt(g["comprar_ate_min"]) if g.get("comprar_ate_min") else "—"
-                    st.markdown(
-                        f"**{g['titulo']}** — {g['n_itens']} itens · qtd {g['qtd_total']} · comprar até {ca}"
-                    )
-                    st.caption(f"CC sugerido: {g.get('cc_sugerido', '—')}")
-            else:
-                st.caption("Sem SCs sugeridas no momento.")
-
-        with st.container(border=True):
-            st.markdown("#### :material/timer: Aging das SCs abertas")
-            ag = vm["aging"]
-            a1, a2, a3 = st.columns(3)
-            a1.metric("0–7 dias", ag["0-7"])
-            a2.metric("8–15 dias", ag["8-15"], delta_color="off")
-            a3.metric(
-                "15+ dias",
-                ag["15+"],
-                delta_color="inverse",
-                help="SCs abertas há mais de 15 dias — o gargalo entre abrir e comprar.",
-            )
-            if ag.get("sem_data"):
-                st.caption(f"{ag['sem_data']} SC(s) sem data de abertura registrada.")
+# v5.9.0 — `_render_dash_comprador` foi removido: era código morto (nenhum chamador
+# desde que a aba do Comprador passou a usar `_render_dash_compras_mro`). O assembler
+# que ele lia, `montar_visao_comprador()`, PERMANECE — `montar_visao_executiva()` o usa.
 
 
 def _clear_drill():

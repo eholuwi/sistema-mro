@@ -120,7 +120,7 @@ def test_manual_cobre_telas_essenciais():
         "Ficha 360",
         "Requisição",
         "Controle de SC",
-        "Gerenciar Itens",
+        "Cadastro de Itens",  # v5.9.0 — era "Gerenciar Itens"
         "Configurações",
     ):
         assert chave in telas, f"Manual não cobre: {chave}"

@@ -57,3 +57,24 @@ Uma alteração só termina quando:
   impacto maior.
 - Se o usuário pedir algo trivial e sem ambiguidade (ex.: corrigir um texto), colapse os passos 2–9
   em uma frase de confirmação em vez de expandir burocracia — mas não pule a aprovação (passo 10).
+
+## Matriz de decisão (modelo / esforço / modo)
+
+| Tipo de mudança | Modelo | Esforço | Modo | Validação além do gate |
+|---|---|---|---|---|
+| Schema / migração / `database.py` | premium | alto | **Plan obrigatório** | backup, migração aditiva e idempotente, rollback testado, FKs |
+| Cálculo / regra de negócio / Protheus / SCM | premium | alto | **Plan obrigatório** | teste novo + bordas (zero, `None`, unidades) |
+| Nova tela / rota / refactor local | premium | médio | Plan leve ou direto | nada além do gate |
+| Texto / label / estilo | qualquer | baixo | direto | colapsa os passos 2–9 |
+| Exploração standalone / pergunta avulsa | barato | baixo | direto, **sem editar** | sessão separada |
+| Changelog / docs / resumo | barato | baixo | direto | — |
+| Review de código (diff) | premium | médio | direto | nunca pela faixa barata |
+
+Regras:
+- A skill recomenda o nível; a **troca de modelo é decisão do usuário** (Shift+Tab / nova sessão).
+- "Na dúvida, use o nível mais alto e diga qual assumiu" (herdado do `CLAUDE.md`).
+- Exploração **dentro do fluxo de planejamento** (passo 6) roda no **modelo da sessão** — não
+  interrompa o Plan para explorar barato; a faixa barata é só para tarefas independentes.
+- A faixa barata **nunca avalia nem edita código**: só gera texto (changelog, docs, resumo,
+  mapeamento avulso).
+- Avaliação/review nunca passa pela faixa barata — a qualidade do gate não se negocia por tokens.

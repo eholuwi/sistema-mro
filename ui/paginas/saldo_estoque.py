@@ -8,7 +8,6 @@ Regra de negócio (ajuste físico / conferência / movimentação) preservada 1:
 
 from __future__ import annotations
 
-import io
 import time
 from datetime import date, timedelta
 
@@ -25,6 +24,7 @@ from services.db_functions import (
 )
 from ui.cache import inventario_cached, invalidar_leituras
 from ui.formatos import fmt
+from ui.componentes.exportar import botoes_export
 from ui.componentes.filtros import barra_filtros
 from ui.componentes.tabela import tabela_paginada
 from ui.componentes.selecao import sel_material
@@ -134,7 +134,7 @@ def render() -> None:
     st.title(":material/assignment: Saldo em Estoque")
     itens = inventario_cached()
     if not itens:
-        st.info("Nenhum item cadastrado. Vá em **:material/add: Gerenciar Itens** para começar.")
+        st.info("Nenhum item cadastrado. Vá em **:material/add: Cadastro de Itens** para começar.")
         return
 
     df = pd.DataFrame(itens)
@@ -310,15 +310,12 @@ def render() -> None:
     st.markdown("---")
     col_exp, _, _ = st.columns([1, 3, 1])
     with col_exp:
-        df_exp = exportar_inventario_df()
-        if not df_exp.empty:
-            buf = io.BytesIO()
-            with pd.ExcelWriter(buf, engine="openpyxl") as w:
-                df_exp.to_excel(w, index=False, sheet_name="Inventário")
-            st.download_button(
-                "⬇️ Exportar todos os itens para planilha Excel",
-                data=buf.getvalue(),
-                file_name=f"inventario_mro_{date.today().strftime('%d-%m-%Y')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                help="Baixa a planilha Excel com TODOS os itens do inventário e seus indicadores.",
-            )
+        botoes_export(
+            exportar_inventario_df(),
+            "inventario_mro",
+            key="saldo_export",
+            sheet_name="Inventário",
+            csv=False,
+            label_excel="⬇️ Exportar todos os itens para planilha Excel",
+            help="Baixa a planilha Excel com TODOS os itens do inventário e seus indicadores.",
+        )

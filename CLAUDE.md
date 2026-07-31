@@ -13,7 +13,7 @@ contexto.
 | UI — router (fonte única do menu) | `ui/router.py` (`ROTAS`, `ROTAS_MIGRADAS`, `render_pagina`) |
 | UI — sidebar / tema / formatos / cache | `ui/sidebar.py`, `ui/tema.py`, `ui/formatos.py`, `ui/cache.py` |
 | UI — páginas (`render()`) | `ui/paginas/` — as 9 rotas; `ROTAS_MIGRADAS == ROTAS` |
-| UI — componentes reusáveis | `ui/componentes/` (`filtros`, `tabela`, `selecao`, `status`, `graficos`) |
+| UI — componentes reusáveis | `ui/componentes/` (`filtros`, `tabela`, `selecao`, `status`, `graficos`, `exportar`) |
 | Lógica + acesso a dados | `services/db_functions.py` |
 | Banco / schema / migração | `database.py` — `criar_banco()` cria e `_migrar()` migra, em runtime |
 | Planejamento (min/máx, cobertura, lead time) | `services/planejamento.py` |
@@ -22,6 +22,7 @@ contexto.
 | Ficha 360 | `services/ficha.py` |
 | SCM / Monitor de SC | `services/monitor_scm.py`, `services/monitor_cruzamento.py`, `services/scm_client.py` |
 | SCM Sync (API → mro.db, v5.1.0/F2) | `services/scm_sync.py` (parsers + orquestrador `sincronizar`), tabela `itens_sc_externos` |
+| Guarda-Chuva por Pedido (v5.9.0) | `services/guarda_chuva.py` + `services/scm_pedido.py` (parser de `/Pedidos/ByNumero`) |
 | Constantes / tema / estilos | `services/constants.py`, `services/tema.py`, `services/styles.py` |
 | Backup do banco (automático + botão) | `database._backup_db`, `services/backup.py` |
 | Testes (regressão por versão) | `tests/test_vXXX_*.py` |
@@ -79,6 +80,10 @@ Quanto rigor **além** do gate, conforme o que a mudança toca:
 | `database.py`, migração, schema | + migração idempotente e aditiva, `_backup_db` antes, **rollback testado**, FKs preservadas |
 
 Na dúvida entre dois níveis, use o mais alto e diga qual assumiu.
+
+⚠️ **RTK não comprime o gate.** A saída de `.\verify.ps1`/`pytest` nunca passa por compressão de
+tokens (RTK) — detalhe de falha não se comprime. Garantir em `exclude_commands` do RTK e/ou
+`tee mode="failures"`; não confiar apenas em instrução de skill, porque o hook é automático.
 
 ⚠️ **Armadilha de banco já paga:** `PRAGMA` não levanta exceção — `wal_checkpoint` devolve
 `(busy, n, n)`. Nunca abra uma segunda conexão para checkpoint/backup com transação pendente na

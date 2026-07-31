@@ -19,6 +19,16 @@ FATOR_ESTOQUE_SEGURANCA = 1.5  # estoque_seguranca = consumo * lead_time * 1.5
 # e a Curva ABC, para que a definição de consumo real viva num único lugar.
 SAIDA_REAL_WHERE = "tipo='saida' AND requisicao_id IS NOT NULL"
 
+# --- Recebimento real (v5.9.0) — simétrico ao SAIDA_REAL_WHERE ---
+# Não existe tipo='AJUSTE' no schema (só entrada|saida|devolucao), então TODO ajuste
+# positivo é gravado como 'entrada': contagem física e conferência de inventário
+# (centro_custo='INVENTÁRIO'), ajuste por edição de item (CC='EDIÇÃO') e entrada
+# avulsa. Só `registrar_recebimento_sc` preenche `sc_item_id` — um único predicado
+# separa recebimento de material dos quatro tipos de ajuste.
+# Os ajustes continuam no ledger e no Histórico Completo; apenas saem dos
+# indicadores de recebimento (como já acontecia do lado das saídas).
+ENTRADA_REAL_WHERE = "tipo='entrada' AND sc_item_id IS NOT NULL"
+
 # Status atribuído ao item que NUNCA teve consumo real (0 requisições de saída).
 # Sobrepõe 🔴/🟡/🟢 em listar_inventario → some da lista de compra e ganha balde
 # próprio, filtrável. NÃO altera a base do Neidson nem apaga nada.
@@ -171,7 +181,7 @@ CC_SUGERIDO_PADRAO = "(a definir)"
 # NUNCA é sobrescrito automaticamente: o sistema sugere, o gestor confirma.
 FATOR_CONVERSAO_PADRAO = 1.0
 
-# Unidades de compra sugeridas na curadoria (Gerenciar Itens). LIVRES — apenas
+# Unidades de compra sugeridas na curadoria (Cadastro de Itens). LIVRES — apenas
 # atalhos de UI; o gestor pode digitar qualquer valor. Complementam as unidades de
 # estoque com as unidades de fornecedor observadas nos dados reais (solventes em
 # L/KG/BB/BD, luvas em P=par, papel em PT…). Não entram em nenhum CHECK.
@@ -316,7 +326,7 @@ SAZONALIDADE_MIN_MESES = 12  # perfil sazonal só a partir de 1 ciclo anual
 # v5.3.0 (F4a) — Vocabulário de cadastro / filtros (centralizado da UI)
 # ══════════════════════════════════════════════════════════════════════════════
 # Listas de opções que estavam inline no topo do app.py. Valores IDÊNTICOS — apenas
-# centralizados para as páginas migradas (Saldo em Estoque, Gerenciar Itens, Controle
+# centralizados para as páginas migradas (Saldo em Estoque, Cadastro de Itens, Controle
 # de SC) e os blocos ainda inline consumirem de um único lugar. LIVRES na operação
 # (o cadastro aceita tipo/setor livres); aqui são só sugestões/atalhos de UI.
 

@@ -38,7 +38,7 @@ ROTAS: dict[str, Rota] = {
     "Dashboard": Rota("bar-chart-fill", dashboard.render),  # F4a
     "Saldo em Estoque": Rota("box-seam", saldo_estoque.render),  # F4a
     "Ficha 360": Rota("card-image", ficha_360.render),  # F4b
-    "Gerenciar Itens": Rota("plus-circle", gerenciar_itens.render),  # F4a
+    "Cadastro de Itens": Rota("plus-circle", gerenciar_itens.render),  # F4a (renomeado na v5.9.0)
     "Movimentação": Rota("arrow-repeat", movimentacao.render),  # F4b
     "Controle de SC": Rota("receipt", controle_sc.render),  # F4a
     "SCM Integrado": Rota("cloud-check", scm_integrado.render),  # F3 — consulta unificada

@@ -631,14 +631,19 @@ def setor_dominante_por_item(item_ids=None, conn=None):
     no mapa (o chamador aplica o fallback, ex.: '—'). UMA única query — evita N
     consultas por render. Substitui o `inventario.setor_responsavel` (98% 'Improdutivo',
     inútil) como base do "Setor" no Dashboard de Comprador (Setores em aberto) e no
-    Assistente de Reposição (coluna/filtro Setor)."""
+    Assistente de Reposição (coluna/filtro Setor).
+
+    v5.9.0 — o setor é normalizado com `UPPER(TRIM(...))`. O mesmo setor chega grafado
+    de formas diferentes ('ADAPTADOR' e 'ADAPTADOR ', 'TI' e 'ti', 'Almoxarifado' e
+    'ALMOXARIFADO'): 68 valores distintos que são 59 setores reais. Sem isso o mesmo
+    setor aparecia duas vezes nos rankings, cada uma com parte do total."""
     with transaction(conn) as c:
         rows = c.execute(f"""
-            SELECT item_id, setor, COUNT(*) AS n
+            SELECT item_id, UPPER(TRIM(setor)) AS setor, COUNT(*) AS n
             FROM movimentacoes
             WHERE {SAIDA_REAL_WHERE}
               AND setor IS NOT NULL AND TRIM(setor) <> ''
-            GROUP BY item_id, setor
+            GROUP BY item_id, UPPER(TRIM(setor))
         """).fetchall()
     filtro = set(item_ids) if item_ids is not None else None
     por_item = {}
@@ -1326,7 +1331,35 @@ def _calcular_status_requisicao(conn, req_id):
     return "Parcial"
 
 
-def _baixar_item_requisicao(conn, req, item_req_id, item_id, quantidade, agora):
+def validar_data_saida(data_saida, agora=None):
+    """v5.9.0 — Normaliza a data REAL da saída do material. Devolve `(valor, erro)`.
+
+    Retroagir é livre (é a data de verdade do consumo — decisão do usuário); o FUTURO é
+    recusado. Data futura envenenaria todas as janelas `datetime('now','-N days')` que
+    calculam consumo, giro, ABC e cobertura, além da ordenação do ledger.
+
+    `None` significa "material saindo agora" e passa direto — quem chama usa `agora`."""
+    if data_saida is None:
+        return None, None
+    if isinstance(data_saida, datetime):
+        data_saida = data_saida.strftime("%Y-%m-%d %H:%M:%S")
+    data_saida = str(data_saida).strip()
+    if not data_saida:
+        return None, None
+    try:
+        dt = datetime.strptime(data_saida[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        try:
+            dt = datetime.strptime(data_saida[:10], "%Y-%m-%d")
+        except ValueError:
+            return None, f"Data de saída inválida: {data_saida!r}."
+    limite = datetime.strptime(agora, "%Y-%m-%d %H:%M:%S") if agora else datetime.now()
+    if dt > limite:
+        return None, "A data da saída não pode estar no futuro."
+    return dt.strftime("%Y-%m-%d %H:%M:%S"), None
+
+
+def _baixar_item_requisicao(conn, req, item_req_id, item_id, quantidade, agora, data_saida=None):
     """v5.7.0 — A baixa real de UM item de requisição, do jeito que a v4.7.0 já fazia na
     entrega: movimentação `saida` amarrada à requisição (`requisicao_id`), `UPDATE` do
     saldo, acúmulo em `quantidade_atendida` e recálculo de consumo/ruptura.
@@ -1335,7 +1368,19 @@ def _baixar_item_requisicao(conn, req, item_req_id, item_id, quantidade, agora):
     caminho — sem isto haveria duas escritas de estoque a manter em sincronia, e o ledger
     da Padrão nasceria diferente do da Digital. Recusa quantidade maior que o saldo
     (contrato da entrega); a Padrão nunca esbarra nisso porque já entra com
-    `min(solicitada, estoque)`. Não abre transação: quem chama é o dono dela."""
+    `min(solicitada, estoque)`. Não abre transação: quem chama é o dono dela.
+
+    v5.9.0 — `data_saida` (já validada por `validar_data_saida`) é a data REAL em que o
+    material saiu, quando o lançamento é retroativo; `agora` continua sendo o instante do
+    LANÇAMENTO. Só a movimentação retroage: `inventario.data_atualizacao` registra quando
+    o cadastro foi tocado, e a numeração da requisição deriva da data dela — retroagir
+    qualquer um dos dois quebraria auditoria e numeração.
+
+    Limitação registrada: `saldo_apos` é o saldo no instante do lançamento, não no
+    instante retroagido; com lançamento retroativo ele deixa de ser monotônico na ordem de
+    data. Nenhum cálculo do sistema lê `saldo_apos` (é coluna de auditoria visual), mas
+    quem ler o extrato precisa saber — por isso o instante do lançamento vai na
+    observação."""
     r_est = conn.execute(
         "SELECT estoque_atual, part_number FROM inventario WHERE id=?", (item_id,)
     ).fetchone()
@@ -1343,6 +1388,10 @@ def _baixar_item_requisicao(conn, req, item_req_id, item_id, quantidade, agora):
         pn = r_est["part_number"] if r_est else "Item"
         raise Exception(f"Estoque insuficiente para {pn} (disp.: {r_est['estoque_atual'] if r_est else 0}).")
     novo_saldo = r_est["estoque_atual"] - quantidade
+    saida_em = data_saida or agora
+    observacao = f"Req {req['numero_requisicao']}"
+    if data_saida and data_saida != agora:
+        observacao += f" · saída retroativa (lançada em {agora})"
     conn.execute(
         "INSERT INTO movimentacoes (item_id,tipo,quantidade,saldo_apos,data_hora,centro_custo,setor,solicitante,emitente,observacao,requisicao_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (
@@ -1350,12 +1399,12 @@ def _baixar_item_requisicao(conn, req, item_req_id, item_id, quantidade, agora):
             "saida",
             quantidade,
             novo_saldo,
-            agora,
+            saida_em,
             req["centro_custo"],
             req["setor"],
             req["emitente"],
             req["emitente"],
-            f"Req {req['numero_requisicao']}",
+            observacao,
             req["id"],
         ),
     )
@@ -1383,6 +1432,7 @@ def criar_requisicao_com_baixa(
     sesmt_responsavel,
     itens,
     observacoes="",
+    data_saida=None,
 ):
     """v5.7.0 — **Requisição Padrão** (decisões nº1 e nº2 da entrevista de 27/07/2026): o
     fluxo real do balcão, em que o material sai na hora. Cria o pedido e baixa o estoque na
@@ -1410,6 +1460,9 @@ def criar_requisicao_com_baixa(
     if sesmt and not (sesmt_responsavel and str(sesmt_responsavel).strip()):
         return False, "Material SESMT: informe o responsável do SESMT."
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    data_saida, erro = validar_data_saida(data_saida, agora)
+    if erro:
+        return False, erro
     try:
         with transaction() as conn:
             req_id, num = _inserir_requisicao(
@@ -1441,7 +1494,9 @@ def criar_requisicao_com_baixa(
                 disponivel = float(it["estoque_atual"] or 0)
                 atendida = min(solicitada, disponivel)
                 if atendida > 0:
-                    _baixar_item_requisicao(conn, req, it["id"], it["item_id"], atendida, agora)
+                    _baixar_item_requisicao(
+                        conn, req, it["id"], it["item_id"], atendida, agora, data_saida=data_saida
+                    )
                 if atendida < solicitada:
                     faltas.append(
                         {
@@ -1461,7 +1516,13 @@ def criar_requisicao_com_baixa(
 
 
 def entregar_requisicao(
-    req_id, entregas, autorizador_tipo, autorizador_nome, sesmt=False, sesmt_responsavel=""
+    req_id,
+    entregas,
+    autorizador_tipo,
+    autorizador_nome,
+    sesmt=False,
+    sesmt_responsavel="",
+    data_saida=None,
 ):
     """v4.7.0 — Registra a ENTREGA (baixa) de itens de uma requisição Aberta/Parcial.
 
@@ -1471,6 +1532,10 @@ def entregar_requisicao(
     o status (Parcial/Entregue). Atômico: qualquer falha reverte tudo.
 
     Regras: exige autorizador (material só sai autorizado); se `sesmt`, exige o responsável.
+
+    v5.9.0 — `data_saida` opcional: a data/hora REAL em que o material saiu, para o
+    lançamento retroativo ("Material saindo agora" desmarcado na tela). `None` = agora,
+    que é o comportamento de sempre — a assinatura segue retrocompatível.
     """
     if not autorizador_nome or not str(autorizador_nome).strip():
         return False, "Informe o autorizador (gestor) para liberar a entrega."
@@ -1480,6 +1545,9 @@ def entregar_requisicao(
     if not entregas:
         return False, "Informe ao menos um item com quantidade a entregar."
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    data_saida, erro = validar_data_saida(data_saida, agora)
+    if erro:
+        return False, erro
     try:
         with transaction() as conn:
             req = conn.execute(
@@ -1498,7 +1566,7 @@ def entregar_requisicao(
                 ).fetchone()
                 if not ir:
                     raise Exception("Item da requisição não encontrado.")
-                _baixar_item_requisicao(conn, req, ir["id"], ir["item_id"], q, agora)
+                _baixar_item_requisicao(conn, req, ir["id"], ir["item_id"], q, agora, data_saida=data_saida)
             novo_status = _calcular_status_requisicao(conn, req_id)
             conn.execute(
                 """UPDATE requisicoes SET status=?, autorizador_tipo=?, autorizador_nome=?,

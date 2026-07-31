@@ -16,7 +16,7 @@ DataFrame). O consumo real usa o fragmento canônico SAIDA_REAL_WHERE.
 
 import pandas as pd
 from datetime import date, timedelta
-from services.constants import SAIDA_REAL_WHERE, PREVISAO_RUPTURA_SEM_RISCO
+from services.constants import ENTRADA_REAL_WHERE, SAIDA_REAL_WHERE, PREVISAO_RUPTURA_SEM_RISCO
 from services.db_functions import transaction, listar_inventario
 from services.dashboards import montar_visao_compras_mro, _faixa_cobertura
 
@@ -112,7 +112,9 @@ def rows_mov_periodo(tipo="entrada", periodo="hoje"):
         cond, arg = "substr(m.data_hora,1,10) >= ?", (hoje - timedelta(days=7)).strftime("%Y-%m-%d")
     else:
         cond, arg = "substr(m.data_hora,1,10) >= ?", (hoje - timedelta(days=30)).strftime("%Y-%m-%d")
-    where_tipo = "m.tipo='entrada'" if tipo == "entrada" else SAIDA_REAL_WHERE
+    # Mesmos predicados do view-model (services/constants.py) — o drill precisa
+    # devolver exatamente as linhas que o card contou, ajustes fora dos dois lados.
+    where_tipo = ENTRADA_REAL_WHERE if tipo == "entrada" else SAIDA_REAL_WHERE
 
     with transaction() as conn:
         rows = conn.execute(
@@ -327,28 +329,14 @@ def rows_scs_status(status):
     return _df_scs([s for s in _scs_ano() if (s.get("status") or "—") == status])
 
 
-def rows_scs_comprador(comprador):
-    """SCs atribuídas a um comprador (compõe 'Itens por comprador')."""
-    return _df_scs([s for s in _scs_ano() if (s.get("comprador") or "—") == comprador])
-
-
 def rows_scs_mes(ym):
     """SCs abertas num mês (YYYY-MM) — compõe 'Itens/SCs por mês'."""
     return _df_scs([s for s in _scs_ano() if (s.get("data_abertura") or "")[:7] == ym])
 
 
-def rows_scs_itens_faixa(faixa):
-    """SCs por faixa de nº de itens (compõe 'Itens por Pedido')."""
-
-    def _fx(n):
-        n = int(n or 0)
-        return (
-            None
-            if n <= 0
-            else ("1 item" if n == 1 else ("2-5" if n <= 5 else ("6-10" if n <= 10 else "11+")))
-        )
-
-    return _df_scs([s for s in _scs_ano() if _fx(s.get("n_itens")) == faixa])
+# v5.9.0 — `rows_scs_comprador` e `rows_scs_itens_faixa` saíram junto com os gráficos
+# que as chamavam ("Itens por comprador" e "Itens por Pedido"), removidos do Dashboard
+# do Comprador. Ficaram sem nenhum chamador.
 
 
 def rows_criticos_reposicao():

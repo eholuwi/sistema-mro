@@ -14,7 +14,6 @@ cacheadas (Dashboard, Saldo, sidebar) não exibam contagem/estoque velhos.
 
 from __future__ import annotations
 
-import io
 import math
 import time
 import urllib.parse
@@ -26,15 +25,12 @@ import streamlit as st
 from services.constants import PREVISAO_RUPTURA_SEM_RISCO, STATUS_SC
 from services.db_functions import (
     GUARDA_CHUVA_ESTAGIOS,
-    atualizar_guarda_chuva,
     atualizar_sc,
     carregar_planilha_livre,
-    criar_guarda_chuva,
     criar_sc,
     importar_relatorio_scs,
     importar_solicitacoes_protheus,
     itens_com_sc_aberta,
-    listar_guarda_chuva,
     listar_inventario,
     listar_itens_sc,
     listar_recebimentos_sc,
@@ -42,15 +38,25 @@ from services.db_functions import (
     listar_valores,
     obter_cadastro_mro_para_cruzamento,
     obter_fornecedores_por_item,
-    obter_guarda_chuva,
-    registrar_recebimento_guarda_chuva,
-    remover_guarda_chuva,
-    saldo_total_por_material,
     salvar_planilha_livre,
     setor_dominante_por_item,
     sincronizar_monitor_sc,
 )
+from services.guarda_chuva import (
+    MESES_ACORDO_MAX,
+    MESES_ACORDO_MIN,
+    adicionar_item_gc,
+    atualizar_itens_gc,
+    atualizar_pedido_gc,
+    criar_pedido_gc,
+    exportar_guarda_chuva_df,
+    listar_pedidos_gc,
+    obter_pedido_gc,
+    remover_item_gc,
+    remover_pedido_gc,
+)
 from services.monitor_cruzamento import cruzar_scm_sc7, preparar_df
+from services.scm_pedido import buscar_pedido
 from services.planejamento import (
     agrupar_por_tipo_material,
     buscar_sc_id_por_numero,
@@ -60,6 +66,7 @@ from services.planejamento import (
     sugestao_para_item_sc,
 )
 from ui.cache import invalidar_leituras
+from ui.componentes.exportar import botoes_export
 from ui.componentes.selecao import sel_material
 from ui.componentes.status import divergencia_recebimento
 from ui.componentes.tabela import chave_editor
@@ -86,11 +93,11 @@ def render() -> None:
     )
 
     # ══════════════════════════════════════════════════════════════════════════════
-    # ☂️ GUARDA-CHUVA (controle manual — v4.9.0)
+    # ☂️ GUARDA-CHUVA (controle manual por PEDIDO DE COMPRA — v5.9.0)
     # ══════════════════════════════════════════════════════════════════════════════
     with aba_gc:
         _render_guarda_chuva_controle()
-        if st.session_state.get("_gc_manual_edit"):
+        if st.session_state.get("_gc_pedido_edit"):
             _dialog_guarda_chuva()
     # ══════════════════════════════════════════════════════════════════════════════
     # 📡 MONITOR DE COMPRAS
@@ -355,25 +362,13 @@ def render() -> None:
                 "Qtd Sugerida = **Máximo** cadastrado do material · Setor = consumo real."
             )
 
-            _df_export = pd.DataFrame([_linha_rep(s) for s in filtradas])
-            buf_rep = io.BytesIO()
-            with pd.ExcelWriter(buf_rep, engine="openpyxl") as w:
-                _df_export.to_excel(w, index=False, sheet_name="Sugestões")
-            exp1, exp2 = st.columns(2)
-            exp1.download_button(
-                "⬇️ Exportar sugestões (Excel)",
-                data=buf_rep.getvalue(),
-                file_name=f"reposicao_mro_{date.today():%d-%m-%Y}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            botoes_export(
+                pd.DataFrame([_linha_rep(s) for s in filtradas]),
+                "reposicao_mro",
                 key="rep_export",
-                width="stretch",
-            )
-            exp2.download_button(
-                "⬇️ Exportar sugestões (CSV)",
-                data=_df_export.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"reposicao_mro_{date.today():%d-%m-%Y}.csv",
-                mime="text/csv",
-                key="rep_export_csv",
+                sheet_name="Sugestões",
+                label_excel="⬇️ Exportar sugestões (Excel)",
+                label_csv="⬇️ Exportar sugestões (CSV)",
                 width="stretch",
             )
 
@@ -982,215 +977,259 @@ def render() -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+def _gc_estado_busca():
+    """Resultado da busca na API entre reruns (prévia → confirmação)."""
+    return st.session_state.get("_gc_busca")
+
+
 def _render_guarda_chuva_controle():
-    """v4.9.0 — Guarda-Chuva MANUAL: acordos de congelamento de preço por (produto +
-    fornecedor) com entregas parciais. Controle 100% manual e desacoplado das SCs
-    importadas (tabela `guarda_chuva`). Fluxo: adicionar produto (busca por PN/descrição)
-    → adicionar código de fornecedor → kanban dos 4 estágios (editável) → 'Saldo total de
-    todos os fornecedores' por material."""
-    st.markdown("### :material/umbrella: Guarda-Chuva — saldo por fornecedor (controle manual)")
+    """v5.9.0 — Guarda-Chuva POR PEDIDO DE COMPRA.
+
+    Reescrito: até a v5.8.0 o acordo era (material × fornecedor) e `numero_po` era texto
+    decorativo; um pedido real tem N itens e não existia como entidade. Fluxo novo:
+    **Adicionar Pedido → buscar os itens na API do SCM → completar manualmente**, com
+    tabela editável por item e recebimentos mês a mês (1 a 12 colunas).
+
+    Continua sendo CONTROLE, não ledger: abate o saldo do acordo e **não toca estoque
+    nem histórico de movimentações**.
+    """
+    st.markdown("### :material/umbrella: Guarda-Chuva — acordos por Pedido de Compra")
     st.caption(
-        "Acordo com o fornecedor para **congelar o preço** de um produto e fazer um pedido "
-        "com **entregas parciais** (ideal: X por mês, para não faturar tudo de uma vez). "
-        "É um **controle manual**: cadastre o produto e o(s) fornecedor(es) e mova os cards "
-        "pelos estágios. Serve para saber **quanto ainda temos de saldo** daquele material "
-        "com **quais fornecedores**."
+        "Acordo com o fornecedor para **congelar o preço** de um pedido e receber em "
+        "**parcelas mês a mês**. Informe o nº do Pedido e o sistema busca os itens na API "
+        "do SCM; o que não vier (ou não for material MRO) você completa à mão. "
+        "**Controle manual — abate o saldo do acordo. NÃO mexe no estoque nem no "
+        "histórico de movimentações.**"
     )
 
-    # ── Adicionar produto + código de fornecedor ──────────────────────────────
-    with st.expander(":material/add: Adicionar um produto ao Guarda-Chuva", expanded=False):
-        # v5.6.0 — busca única: o próprio select filtra por PN, nome OU descrição (o rótulo
-        # inclui a descrição), eliminando o campo de pesquisa separado que travava o select
-        # até alguém digitar e truncava silenciosamente em 50 itens. Mesmo padrão da v3.3.0
-        # em "Fornecedores & Cotação".
-        _, _item_gc, _ = sel_material(
-            "Material (busque por PN, nome ou descrição)", "gc_sel_add", incluir_descricao=True
+    _render_gc_adicionar_pedido()
+
+    pedidos = listar_pedidos_gc()
+    if not pedidos:
+        st.info("Nenhum pedido no Guarda-Chuva ainda. Use **Adicionar Pedido** acima.")
+        return
+
+    _render_gc_kanban(pedidos)
+
+    # ── Exportação da planilha completa ──────────────────────────────────────
+    st.divider()
+    st.markdown("##### :material/download: Exportar planilha do Guarda-Chuva")
+    st.caption("Uma linha por item, com uma coluna para cada mês de recebimento.")
+    botoes_export(
+        exportar_guarda_chuva_df(),
+        "guarda_chuva_mro",
+        key="gc_export",
+        sheet_name="Guarda-Chuva",
+        label_excel="⬇️ Exportar Guarda-Chuva (Excel)",
+        label_csv="⬇️ Exportar Guarda-Chuva (CSV)",
+        width="stretch",
+    )
+
+
+def _render_gc_adicionar_pedido():
+    """Expander 'Adicionar Pedido': busca na API com fallback manual."""
+    with st.expander(":material/add: Adicionar Pedido ao Guarda-Chuva", expanded=False):
+        c1, c2, c3 = st.columns([2, 1, 1])
+        numero = c1.text_input("Nº do Pedido de Compra *", key="gc_novo_num", placeholder="Ex.: F63955")
+        meses = c2.number_input(
+            "Meses do acordo",
+            min_value=MESES_ACORDO_MIN,
+            max_value=MESES_ACORDO_MAX,
+            value=2,
+            step=1,
+            key="gc_novo_meses",
+            help="Define quantas colunas de recebimento a tabela do pedido terá (1 a 12).",
         )
-        with st.form("form_gc_add", clear_on_submit=True):
-            st.markdown("**Adicionar código de fornecedor**")
-            f1, f2 = st.columns(2)
-            _cod = f1.text_input("Código do fornecedor *", key="gc_add_cod")
-            _nome = f2.text_input("Nome do fornecedor (opcional)", key="gc_add_nome")
-            f3, f4, f5 = st.columns(3)
-            _qneg = f3.number_input("Qtd negociada", min_value=0.0, step=1.0, key="gc_add_qneg")
-            _preco = f4.number_input("Preço congelado (R$)", min_value=0.0, step=0.01, key="gc_add_preco")
-            _ideal = f5.number_input("Ideal por mês", min_value=0.0, step=1.0, key="gc_add_ideal")
-            _add = st.form_submit_button(
-                ":material/add: Adicionar ao Guarda-Chuva", type="primary", width="stretch"
-            )
-        if _add:
-            _item_id = _item_gc["id"] if _item_gc else None
-            if not _item_id:
-                st.error("Selecione um material (busque por PN, nome ou descrição).")
-            elif not (_cod or "").strip():
-                st.error("Informe o código do fornecedor.")
+        if c3.button(":material/cloud_download: Buscar na API", width="stretch", key="gc_buscar"):
+            if not (numero or "").strip():
+                st.warning("Informe o número do pedido.")
             else:
-                ok, res = criar_guarda_chuva(
-                    _item_id,
-                    _cod,
-                    fornecedor_nome=(_nome or None),
-                    qtd_negociada=_qneg,
-                    preco_congelado=(_preco or None),
-                    qtd_ideal_mes=(_ideal or None),
+                ok, res = buscar_pedido(numero)
+                st.session_state["_gc_busca"] = {"ok": ok, "res": res, "numero": numero.strip()}
+                st.rerun()
+
+        busca = _gc_estado_busca()
+        if busca and busca.get("numero") == (numero or "").strip():
+            if busca["ok"]:
+                _render_gc_previa_api(busca["res"], meses)
+            else:
+                st.warning(f":material/cloud_off: {busca['res']}")
+
+        # Fallback manual — sempre disponível, mesmo com a API fora do ar.
+        st.markdown("---")
+        st.markdown("**Cadastro manual** (se a API não trouxer o pedido)")
+        m1, m2, m3 = st.columns(3)
+        f_sc = m1.text_input("SC (opcional)", key="gc_novo_sc")
+        f_cod = m2.text_input("Código do fornecedor", key="gc_novo_cod")
+        f_nome = m3.text_input("Nome do fornecedor", key="gc_novo_nome")
+        if st.button(":material/add: Criar pedido manualmente", key="gc_criar_manual", width="stretch"):
+            if not (numero or "").strip():
+                st.warning("Informe o número do pedido.")
+            else:
+                ok, res = criar_pedido_gc(
+                    numero,
+                    numero_sc=f_sc,
+                    fornecedor_codigo=f_cod,
+                    fornecedor_nome=f_nome,
+                    meses_acordo=meses,
+                    origem="manual",
                 )
                 if ok:
                     invalidar_leituras()
-                    st.success(":material/check_circle: Acordo adicionado ao Guarda-Chuva.")
+                    st.session_state.pop("_gc_busca", None)
+                    st.success(":material/check_circle: Pedido criado. Abra-o para lançar os itens.")
                     st.rerun()
                 else:
                     st.error(f":material/cancel: {res}")
 
-    # ── Foco por material + saldo total de todos os fornecedores ──────────────
-    _todos = listar_guarda_chuva()
-    if not _todos:
-        st.info("Nenhum acordo guarda-chuva cadastrado ainda. Use **Adicionar um produto** acima.")
-        return
 
-    _mats = {}
-    for g in _todos:
-        _mats.setdefault(g["item_id"], f"{g['part_number']} — {g['nome_item']}")
-    _rotulos = {v: k for k, v in _mats.items()}
-    _foco = st.selectbox("Material em foco", ["Todos"] + sorted(_rotulos.keys()), key="gc_foco")
-    _foco_id = _rotulos.get(_foco)
-    _linhas = _todos if _foco == "Todos" else [g for g in _todos if g["item_id"] == _foco_id]
-    _un = (_linhas[0].get("unidade") or "") if _linhas else ""
+def _render_gc_previa_api(dados, meses):
+    """Prévia dos itens encontrados na API + confirmação."""
+    cab = dados["cabecalho"]
+    mro, descartados = dados["itens_mro"], dados["descartados"]
 
-    if _foco_id is not None:
-        st.metric("Saldo total de todos os fornecedores", f"{saldo_total_por_material(_foco_id):g} {_un}")
+    st.success(
+        f":material/cloud_done: Pedido **{cab['numero_pedido']}** encontrado · "
+        f"fornecedor **{cab.get('fornecedor_codigo') or '—'} · {cab.get('fornecedor_nome') or '—'}**"
+        + (f" · SC **{cab['numero_sc']}**" if cab.get("numero_sc") else "")
+    )
+    if mro:
+        st.markdown(f"**{len(mro)} item(ns) de material MRO:**")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "PN": it["part_number"],
+                        "Produto": it["nome_item"],
+                        "Qtd": it["quantidade"],
+                        "Un": it["unidade"],
+                        "Preço": it["preco_unitario"],
+                    }
+                    for it in mro
+                ]
+            ),
+            width="stretch",
+            hide_index=True,
+        )
     else:
-        _tot = sum(max(float(g.get("saldo_residual") or 0), 0.0) for g in _todos)
-        st.metric("Saldo total de todos os fornecedores (todos os materiais)", f"{_tot:g}")
+        st.warning("Nenhum item deste pedido está no inventário MRO.")
 
-    # ── Kanban dos 4 estágios (editável) ──────────────────────────────────────
-    st.markdown("##### :material/view_kanban: Kanban de acordos (manual)")
-    _cols = st.columns(len(GUARDA_CHUVA_ESTAGIOS))
-    for _col, _nome in zip(_cols, GUARDA_CHUVA_ESTAGIOS):
-        with _col:
-            _grupo = [g for g in _linhas if (g.get("estagio") or "Pedido Colocado") == _nome]
-            st.markdown(f"**{_nome}** · {len(_grupo)}")
-            for g in _grupo:
-                with st.container(border=True):
-                    _u = g.get("unidade") or ""
-                    st.caption(f"`{g.get('part_number') or '—'}`")
-                    st.markdown(
-                        f"**Forn. {g.get('fornecedor_codigo') or '—'}**"
-                        + (f" · {g.get('fornecedor_nome')}" if g.get("fornecedor_nome") else "")
-                    )
-                    st.caption(
-                        f"Neg. {(g.get('qtd_negociada') or 0):g} · "
-                        f"Receb. {(g.get('qtd_recebida') or 0):g} · "
-                        f"Saldo {(g.get('saldo_residual') or 0):g} {_u}"
-                    )
-                    if g.get("preco_congelado"):
-                        st.caption(f":material/sell: R$ {float(g['preco_congelado']):.2f} congelado")
-                    if st.button(":material/edit: Editar", key=f"gc_m_edit_{g['id']}", width="stretch"):
-                        st.session_state["_gc_manual_edit"] = int(g["id"])
-                        st.rerun()
+    if descartados:
+        # Descartados são LISTADOS, não silenciados: o comprador precisa saber que o
+        # pedido tinha mais linhas do que as que entraram no acordo.
+        with st.expander(f":material/filter_alt: {len(descartados)} item(ns) fora do inventário MRO"):
+            st.dataframe(
+                pd.DataFrame([{"PN": it["part_number"], "Descrição": it["descricao"]} for it in descartados]),
+                width="stretch",
+                hide_index=True,
+            )
 
-    # ── Tabela: saldo por fornecedor ─────────────────────────────────────────
-    st.markdown("##### :material/inventory: Saldo por fornecedor")
-    _agg = {}
-    for g in _linhas:
-        _k = (g.get("fornecedor_codigo") or "—", g.get("fornecedor_nome") or "")
-        _d = _agg.setdefault(_k, {"n": 0, "saldo": 0.0})
-        _d["n"] += 1
-        _d["saldo"] += max(float(g.get("saldo_residual") or 0), 0.0)
-    if _agg:
-        _df_gc = pd.DataFrame(
-            [
+    if st.button(
+        ":material/check: Confirmar e criar pedido", type="primary", key="gc_confirmar", width="stretch"
+    ):
+        ok, res = criar_pedido_gc(
+            cab["numero_pedido"],
+            numero_sc=cab.get("numero_sc"),
+            fornecedor_codigo=cab.get("fornecedor_codigo"),
+            fornecedor_nome=cab.get("fornecedor_nome"),
+            meses_acordo=meses,
+            origem="api",
+            itens=[
                 {
-                    "Fornecedor (código)": k[0],
-                    "Nome": k[1],
-                    "Acordos": v["n"],
-                    f"Saldo pendente ({_un})": round(v["saldo"], 2),
+                    "item_id": it["item_id"],
+                    "qtd_negociada": it["quantidade"],
+                    "preco_congelado": it["preco_unitario"],
                 }
-                for k, v in _agg.items()
-            ]
-        )
-        st.dataframe(_df_gc, width="stretch", hide_index=True)
-
-
-def _clear_gc_manual_edit():
-    st.session_state.pop("_gc_manual_edit", None)
-
-
-@st.dialog("Acordo — Guarda-Chuva", width="large", on_dismiss=_clear_gc_manual_edit)
-def _dialog_guarda_chuva():
-    """v4.9.0 — Edita um acordo guarda-chuva (manual) e registra recebimento parcial. Relê
-    do banco a cada render (`obter_guarda_chuva`). Controle manual: não toca estoque."""
-    gc_id = st.session_state.get("_gc_manual_edit")
-    g = obter_guarda_chuva(gc_id) if gc_id else None
-    if not g:
-        st.info("Acordo não encontrado (pode ter sido removido).")
-        return
-    un = g.get("unidade") or ""
-    saldo = float(g.get("saldo_residual") or 0)
-    st.markdown(f"`{g.get('part_number') or '—'}` — **{g.get('nome_item') or '—'}**")
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Negociada", f"{(g.get('qtd_negociada') or 0):g} {un}")
-    m2.metric("Recebida", f"{(g.get('qtd_recebida') or 0):g} {un}")
-    m3.metric("Saldo", f"{saldo:g} {un}")
-
-    with st.form("form_gc_manual"):
-        st.markdown("##### :material/edit: Dados do acordo")
-        c1, c2 = st.columns(2)
-        cod = c1.text_input("Código do fornecedor", value=g.get("fornecedor_codigo") or "")
-        nome = c2.text_input("Nome do fornecedor", value=g.get("fornecedor_nome") or "")
-        qneg = c1.number_input(
-            "Qtd negociada", min_value=0.0, step=1.0, value=float(g.get("qtd_negociada") or 0)
-        )
-        preco = c2.number_input(
-            "Preço congelado (R$)", min_value=0.0, step=0.01, value=float(g.get("preco_congelado") or 0)
-        )
-        ideal = c1.number_input(
-            "Ideal por mês", min_value=0.0, step=1.0, value=float(g.get("qtd_ideal_mes") or 0)
-        )
-        _est_idx = (
-            list(GUARDA_CHUVA_ESTAGIOS).index(g["estagio"])
-            if g.get("estagio") in GUARDA_CHUVA_ESTAGIOS
-            else 0
-        )
-        estagio = c2.selectbox("Estágio", GUARDA_CHUVA_ESTAGIOS, index=_est_idx)
-        po = c1.text_input("Nº PO (opcional)", value=g.get("numero_po") or "")
-        obs = st.text_area("Observação", value=g.get("observacao") or "")
-        salvar = st.form_submit_button(":material/save: Salvar dados", type="primary", width="stretch")
-    if salvar:
-        ok, msg = atualizar_guarda_chuva(
-            gc_id,
-            {
-                "fornecedor_codigo": cod,
-                "fornecedor_nome": nome,
-                "qtd_negociada": qneg,
-                "preco_congelado": preco,
-                "qtd_ideal_mes": ideal,
-                "estagio": estagio,
-                "numero_po": po,
-                "observacao": obs,
-            },
+                for it in mro
+            ],
         )
         if ok:
             invalidar_leituras()
-            st.success(f":material/check_circle: {msg}")
+            st.session_state.pop("_gc_busca", None)
+            st.success(":material/check_circle: Pedido adicionado ao Guarda-Chuva.")
             st.rerun()
         else:
-            st.error(f":material/cancel: {msg}")
+            st.error(f":material/cancel: {res}")
 
-    # ── Recebimento parcial (manual) ──────────────────────────────────────────
-    if saldo > 0:
-        with st.form("form_gc_manual_receber"):
-            st.markdown("##### :material/download: Registrar recebimento (parcial)")
-            st.caption(
-                "Controle manual — abate o saldo do acordo. NÃO mexe no estoque nem no "
-                "histórico de movimentações."
+
+def _render_gc_kanban(pedidos):
+    """Kanban dos 4 estágios, agora no nível do PEDIDO (era por acordo material×fornecedor)."""
+    st.markdown("##### :material/view_kanban: Pedidos por estágio")
+    cols = st.columns(len(GUARDA_CHUVA_ESTAGIOS))
+    for col, nome in zip(cols, GUARDA_CHUVA_ESTAGIOS):
+        with col:
+            grupo = [p for p in pedidos if (p.get("estagio") or GUARDA_CHUVA_ESTAGIOS[0]) == nome]
+            st.markdown(f"**{nome}** · {len(grupo)}")
+            for p in grupo:
+                with st.container(border=True):
+                    st.markdown(f"**{p['numero_pedido']}**")
+                    st.caption(
+                        f"{p.get('fornecedor_nome') or p.get('fornecedor_codigo') or '—'}"
+                        + (f" · SC {p['numero_sc']}" if p.get("numero_sc") else "")
+                    )
+                    st.caption(
+                        f"{p['n_itens']} item(ns) · Neg. {float(p['qtd_negociada'] or 0):g} · "
+                        f"Receb. {float(p['qtd_recebida'] or 0):g} · "
+                        f"Saldo {float(p['saldo_residual'] or 0):g}"
+                    )
+                    if st.button(":material/edit: Abrir", key=f"gc_open_{p['id']}", width="stretch"):
+                        st.session_state["_gc_pedido_edit"] = int(p["id"])
+                        st.rerun()
+
+
+def _clear_gc_pedido_edit():
+    st.session_state.pop("_gc_pedido_edit", None)
+
+
+@st.dialog("Pedido — Guarda-Chuva", width="large", on_dismiss=_clear_gc_pedido_edit)
+def _dialog_guarda_chuva():
+    """v5.9.0 — Edita um pedido do Guarda-Chuva: cabeçalho + tabela editável de itens
+    com os recebimentos mês a mês. Relê do banco a cada render (`obter_pedido_gc`).
+
+    Controle manual: NÃO toca estoque nem movimentações."""
+    pedido_id = st.session_state.get("_gc_pedido_edit")
+    p = obter_pedido_gc(pedido_id) if pedido_id else None
+    if not p:
+        st.info("Pedido não encontrado (pode ter sido removido).")
+        return
+
+    meses = p["meses_acordo"]
+    st.markdown(f"### Pedido `{p['numero_pedido']}`")
+
+    # ── Cabeçalho ────────────────────────────────────────────────────────────
+    with st.form("form_gc_pedido_cab"):
+        c1, c2, c3, c4 = st.columns(4)
+        f_sc = c1.text_input("SC", value=p.get("numero_sc") or "")
+        f_cod = c2.text_input("Código do fornecedor", value=p.get("fornecedor_codigo") or "")
+        f_nome = c3.text_input("Nome do fornecedor", value=p.get("fornecedor_nome") or "")
+        _idx = (
+            list(GUARDA_CHUVA_ESTAGIOS).index(p["estagio"])
+            if p.get("estagio") in GUARDA_CHUVA_ESTAGIOS
+            else 0
+        )
+        f_est = c4.selectbox("Estágio", GUARDA_CHUVA_ESTAGIOS, index=_idx)
+        c5, c6 = st.columns([1, 3])
+        f_meses = c5.number_input(
+            "Meses do acordo",
+            min_value=MESES_ACORDO_MIN,
+            max_value=MESES_ACORDO_MAX,
+            value=int(meses),
+            step=1,
+            help="Nº de colunas de recebimento da tabela abaixo.",
+        )
+        f_obs = c6.text_input("Observação", value=p.get("observacao") or "")
+        if st.form_submit_button(":material/save: Salvar cabeçalho", type="primary", width="stretch"):
+            ok, msg = atualizar_pedido_gc(
+                pedido_id,
+                {
+                    "numero_sc": f_sc,
+                    "fornecedor_codigo": f_cod,
+                    "fornecedor_nome": f_nome,
+                    "estagio": f_est,
+                    "meses_acordo": f_meses,
+                    "observacao": f_obs,
+                },
             )
-            qtd = st.number_input(
-                f"Qtd a receber ({un})", min_value=0.0, max_value=saldo, value=saldo, step=1.0
-            )
-            receber = st.form_submit_button(
-                ":material/download: Confirmar recebimento", type="primary", width="stretch"
-            )
-        if receber:
-            ok, msg = registrar_recebimento_guarda_chuva(gc_id, float(qtd))
             if ok:
                 invalidar_leituras()
                 st.success(f":material/check_circle: {msg}")
@@ -1198,12 +1237,107 @@ def _dialog_guarda_chuva():
             else:
                 st.error(f":material/cancel: {msg}")
 
+    # ── Tabela editável: itens × recebimento por mês ─────────────────────────
+    st.markdown("##### :material/table_rows: Itens do acordo")
+    st.caption(
+        "**PN** e **Produto** vêm do cadastro e não são editáveis. As colunas de mês são "
+        "o quanto já foi recebido — controle do acordo, sem efeito no estoque."
+    )
+    if not p["itens"]:
+        st.info("Nenhum material neste pedido ainda. Use **Adicionar material** abaixo.")
+    else:
+        cols_mes = [f"{m}º mês" for m in range(1, meses + 1)]
+        df = pd.DataFrame(
+            [
+                {
+                    "_id": it["id"],
+                    "PN": it["part_number"],
+                    "Produto": it["nome_item"],
+                    "Qtd Negociada": float(it.get("qtd_negociada") or 0),
+                    "Qtd prevista/mês": (
+                        float(it["qtd_prevista_mes"]) if it.get("qtd_prevista_mes") is not None else None
+                    ),
+                    "Preço congelado": (
+                        float(it["preco_congelado"]) if it.get("preco_congelado") is not None else None
+                    ),
+                    **{rot: float(it["recebimentos"].get(m, 0.0)) for m, rot in enumerate(cols_mes, start=1)},
+                    "Saldo": it["saldo_residual"],
+                }
+                for it in p["itens"]
+            ]
+        )
+        edit = st.data_editor(
+            df,
+            width="stretch",
+            hide_index=True,
+            num_rows="fixed",
+            # A key precisa mudar quando muda o CONJUNTO de linhas/colunas, senão o
+            # data_editor reaplica edições antigas sobre dados novos (ver chave_editor).
+            key=chave_editor("gc_itens", pedido_id, meses, [i["id"] for i in p["itens"]]),
+            column_config={
+                "_id": None,
+                "PN": st.column_config.TextColumn(disabled=True),
+                "Produto": st.column_config.TextColumn(disabled=True),
+                "Saldo": st.column_config.NumberColumn(disabled=True, format="%.2f"),
+                "Preço congelado": st.column_config.NumberColumn(format="R$ %.2f"),
+            },
+        )
+        if st.button(":material/save: Salvar itens", type="primary", width="stretch", key="gc_salvar_itens"):
+            linhas = [
+                {
+                    "id": int(r["_id"]),
+                    "qtd_negociada": r["Qtd Negociada"],
+                    "qtd_prevista_mes": r["Qtd prevista/mês"],
+                    "preco_congelado": r["Preço congelado"],
+                    "recebimentos": {m: r[rot] for m, rot in enumerate(cols_mes, start=1)},
+                }
+                for r in edit.to_dict("records")
+            ]
+            ok, msg = atualizar_itens_gc(pedido_id, linhas)
+            if ok:
+                invalidar_leituras()
+                st.success(f":material/check_circle: {msg}")
+                st.rerun()
+            else:
+                st.error(f":material/cancel: {msg}")
+
+    # ── Inclusão / remoção manual de material ────────────────────────────────
+    with st.expander(":material/add_circle: Adicionar material ao pedido"):
+        _, item_gc, _ = sel_material(
+            "Material (busque por PN, nome ou descrição)", "gc_add_item", incluir_descricao=True
+        )
+        qn = st.number_input("Qtd negociada", min_value=0.0, step=1.0, key="gc_add_qtd")
+        if st.button(":material/add: Adicionar ao pedido", key="gc_add_btn", width="stretch"):
+            if not item_gc:
+                st.warning("Selecione um material.")
+            else:
+                ok, msg = adicionar_item_gc(pedido_id, item_gc["id"], qtd_negociada=qn)
+                if ok:
+                    invalidar_leituras()
+                    st.success(f":material/check_circle: {msg}")
+                    st.rerun()
+                else:
+                    st.error(f":material/cancel: {msg}")
+
+    if p["itens"]:
+        with st.expander(":material/remove_circle: Remover material do pedido"):
+            _rot = {f"{i['part_number']} — {i['nome_item']}": i["id"] for i in p["itens"]}
+            alvo = st.selectbox("Material", list(_rot), key="gc_rm_item")
+            if st.button(":material/delete: Remover material", key="gc_rm_btn"):
+                ok, msg = remover_item_gc(_rot[alvo])
+                if ok:
+                    invalidar_leituras()
+                    st.success(f":material/check_circle: {msg}")
+                    st.rerun()
+                else:
+                    st.error(f":material/cancel: {msg}")
+
     st.divider()
-    if st.button(":material/delete: Remover este acordo", key="gc_manual_remover"):
-        ok, msg = remover_guarda_chuva(gc_id)
+    if st.button(":material/delete_forever: Remover este pedido do Guarda-Chuva", key="gc_rm_pedido"):
+        ok, msg = remover_pedido_gc(pedido_id)
         if ok:
             invalidar_leituras()
-            _clear_gc_manual_edit()
+            _clear_gc_pedido_edit()
             st.rerun()
         else:
             st.error(f":material/cancel: {msg}")
@@ -1370,15 +1504,14 @@ def _render_cruzamento_upload_fallback():
                     "Saldo": st.column_config.NumberColumn(format="%.0f"),
                 },
             )
-            _buf_cz = io.BytesIO()
-            with pd.ExcelWriter(_buf_cz, engine="openpyxl") as _w_cz:
-                _df_cruz.to_excel(_w_cz, index=False, sheet_name="Cruzamento")
-            st.download_button(
-                ":material/download: Baixar cruzamento (Excel)",
-                data=_buf_cz.getvalue(),
-                file_name="monitor_sc_2_cruzamento.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            botoes_export(
+                _df_cruz,
+                "monitor_sc_2_cruzamento",
                 key="cruz_download",
+                sheet_name="Cruzamento",
+                csv=False,
+                label_excel=":material/download: Baixar cruzamento (Excel)",
+                sufixo="",
             )
         if _res["orfaos"]:
             with st.expander(f":material/warning: Órfãos — {len(_res['orfaos'])} PO(s) do SC7 sem SC no MRO"):

@@ -13,7 +13,6 @@ exibiam estoque velho após uma baixa). Regra de negócio preservada 1:1.
 
 from __future__ import annotations
 
-import io
 import time
 from datetime import date, datetime
 
@@ -54,6 +53,7 @@ from services.db_functions import (
 from ui.cache import invalidar_leituras
 from ui.tema import paleta_atual
 from ui.formatos import fmt
+from ui.componentes.exportar import botoes_export
 from ui.componentes.graficos import _barv
 from ui.componentes.selecao import sel_material
 from ui.componentes.status import divergencia_recebimento
@@ -278,7 +278,7 @@ def _render_receber_material():
                 st.warning(
                     ":material/warning: Este item é comprado em unidade diferente da de estoque e ainda "
                     "**não tem fator de conversão** definido — o recebimento somará a "
-                    "quantidade crua. Cadastre o fator em **Gerenciar Itens → Conversão "
+                    "quantidade crua. Cadastre o fator em **Cadastro de Itens → Conversão "
                     "de unidades** antes de receber."
                 )
 
@@ -504,6 +504,27 @@ def _fila_visao_almoxarife(autorizadores_lista):
     if f_sesmt:
         f_sesmt_resp = st.text_input("Responsável SESMT *", key=f"sesmt_r_{req_id}")
 
+    # v5.9.0 — data REAL da saída. Material que saiu ontem e só foi lançado hoje era
+    # contabilizado no dia errado, distorcendo consumo médio, ABC, giro e cobertura.
+    f_data_saida = None
+    if st.checkbox("Material saindo agora", value=True, key=f"agora_{req_id}"):
+        st.caption(":material/schedule: A saída será registrada com a data e hora deste momento.")
+    else:
+        cd1, cd2 = st.columns(2)
+        _d = cd1.date_input(
+            "Data real da saída",
+            value=date.today(),
+            max_value=date.today(),
+            key=f"dt_saida_{req_id}",
+            help="Quando o material saiu de fato do almoxarifado. Não aceita data futura.",
+        )
+        _h = cd2.time_input("Hora real da saída", value=datetime.now().time(), key=f"hr_saida_{req_id}")
+        f_data_saida = datetime.combine(_d, _h)
+        st.caption(
+            f":material/history: Saída lançada para **{f_data_saida:%d/%m/%Y %H:%M}** — "
+            "é esta data que entra no consumo do item."
+        )
+
     if st.button(
         ":material/local_shipping: REGISTRAR ENTREGA",
         type="primary",
@@ -513,7 +534,15 @@ def _fila_visao_almoxarife(autorizadores_lista):
         if not entregas:
             st.warning("Informe ao menos um item com quantidade a entregar.")
         else:
-            ok, res = entregar_requisicao(req_id, entregas, f_aut_tipo, f_aut_nome, f_sesmt, f_sesmt_resp)
+            ok, res = entregar_requisicao(
+                req_id,
+                entregas,
+                f_aut_tipo,
+                f_aut_nome,
+                f_sesmt,
+                f_sesmt_resp,
+                data_saida=f_data_saida,
+            )
             if ok:
                 invalidar_leituras()  # F4b: entrega baixa estoque
                 st.success(f":material/check_circle: Entrega registrada. Status: **{res}**.")
@@ -1370,21 +1399,17 @@ def render() -> None:
                             "Nada será cortado: a planilha sai inteira do jeito que está."
                         )
 
-                    buf = io.BytesIO()
-                    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-                        df_exp_mov.to_excel(w, index=False, sheet_name="Movimentacoes")
-
                     _sufixo = (
-                        f"_{d_ini_exp:%d-%m-%Y}_a_{d_fim_exp:%d-%m-%Y}"
-                        if (d_ini_exp and d_fim_exp)
-                        else f"_{date.today():%d-%m-%Y}"
+                        f"_{d_ini_exp:%d-%m-%Y}_a_{d_fim_exp:%d-%m-%Y}" if (d_ini_exp and d_fim_exp) else None
                     )
-                    st.download_button(
-                        label="⬇️ Baixar planilha Excel do Relatório de Movimentações",
-                        data=buf.getvalue(),
-                        file_name=f"movimentacoes{_sufixo}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    botoes_export(
+                        df_exp_mov,
+                        "movimentacoes",
                         key="btn_exp_mov",
+                        sheet_name="Movimentacoes",
+                        csv=False,
+                        label_excel="⬇️ Baixar planilha Excel do Relatório de Movimentações",
+                        sufixo=_sufixo,
                     )
 
     # === TAB 3: DASHBOARD MOVIMENTAÇÕES (VOLUME + DIVERGÊNCIAS + RUPTURA) ===

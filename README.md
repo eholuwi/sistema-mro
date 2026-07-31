@@ -69,7 +69,7 @@ changelog/             um arquivo por versão
 
 ## Páginas
 
-Dashboard · Saldo em Estoque · Gerenciar Itens · Movimentação · Ficha 360 ·
+Dashboard · Saldo em Estoque · Cadastro de Itens · Movimentação · Ficha 360 ·
 Controle de SC · SCM Integrado · Configurações · Ajuda
 
 ---

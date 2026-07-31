@@ -569,6 +569,74 @@ def criar_banco():
     """)
     c.execute("CREATE INDEX IF NOT EXISTS idx_guarda_chuva_item ON guarda_chuva(item_id)")
 
+    # v5.9.0 — GUARDA-CHUVA POR PEDIDO. O modelo da v4.9.0 acima trata o acordo como
+    # (material × fornecedor) e `numero_po` é texto decorativo que nada lê; um pedido
+    # real tem N itens e não existia como entidade. Estas 3 tabelas são ADITIVAS: a
+    # `guarda_chuva` antiga fica intacta (só deixa de ser exibida), então nada migra e
+    # nenhum dado se perde.
+    #
+    # A mesma invariante da v4.9.0 vale aqui: é CONTROLE, não ledger — abate o saldo do
+    # acordo e NÃO toca `inventario.estoque_atual` nem `movimentacoes`.
+    #
+    # Cuidado com o nome: "guarda-chuva" tem três sentidos no código — este acordo
+    # manual, o pedido sobre `itens_sc` (v4.5.7, `atualizar_pedido_guarda_chuva`) e o
+    # `estoque_em_transito` de planejamento.py.
+    #
+    # Backup UMA vez, só na criação real das tabelas e só se já houver dados: a regra do
+    # projeto é "nenhuma alteração de schema sem backup". O `commit()` vem ANTES do
+    # `_backup_db` porque os CREATE/ALTER acima deixam transação aberta e o
+    # `wal_checkpoint(TRUNCATE)` devolveria BUSY, gravando um .bak incompleto.
+    _tem_gc_pedido = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='guarda_chuva_pedido'"
+    ).fetchone()
+    if not _tem_gc_pedido and c.execute("SELECT 1 FROM inventario LIMIT 1").fetchone():
+        conn.commit()
+        _backup_db("guarda-chuva-pedido-v590")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS guarda_chuva_pedido (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            numero_pedido     TEXT NOT NULL UNIQUE,
+            numero_sc         TEXT,
+            fornecedor_codigo TEXT,
+            fornecedor_nome   TEXT,
+            meses_acordo      INTEGER DEFAULT 2,
+            estagio           TEXT DEFAULT 'Pedido Colocado',
+            origem            TEXT,
+            observacao        TEXT,
+            criado_em         TEXT,
+            atualizado_em     TEXT
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS guarda_chuva_item (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            pedido_id        INTEGER NOT NULL REFERENCES guarda_chuva_pedido(id) ON DELETE CASCADE,
+            item_id          INTEGER NOT NULL REFERENCES inventario(id),
+            qtd_negociada    REAL DEFAULT 0,
+            qtd_prevista_mes REAL,
+            preco_congelado  REAL,
+            observacao       TEXT,
+            criado_em        TEXT,
+            atualizado_em    TEXT,
+            UNIQUE(pedido_id, item_id)
+        )
+    """)
+    # Tabela filha do recebimento: permite as 1..12 colunas DINÂMICAS de mês sem 12
+    # colunas mortas na linha do item. O saldo residual segue derivado na leitura
+    # (qtd_negociada − SUM(quantidade)), como já era na v4.9.0.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS guarda_chuva_recebimento (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            gc_item_id    INTEGER NOT NULL REFERENCES guarda_chuva_item(id) ON DELETE CASCADE,
+            mes_seq       INTEGER NOT NULL,
+            quantidade    REAL DEFAULT 0,
+            atualizado_em TEXT,
+            UNIQUE(gc_item_id, mes_seq)
+        )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_gc_item_pedido ON guarda_chuva_item(pedido_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_gc_receb_item ON guarda_chuva_recebimento(gc_item_id)")
+
     # v5.1.0 (F2) — Itens de SC cujo PN NÃO está no inventário MRO. Antes eram
     # simplesmente descartados na ingestão (Excel e API); agora ficam registrados aqui,
     # ligados à SC, para visibilidade completa do ciclo SC→PO e futura "promoção" ao

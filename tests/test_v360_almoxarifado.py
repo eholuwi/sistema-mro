@@ -19,21 +19,27 @@ def _req(numero="R1", setor="SMT"):
         return cur.lastrowid
 
 
-def _mov(item_id, tipo, qtd, dias_atras=0, requisicao_id=None, setor=""):
+def _mov(item_id, tipo, qtd, dias_atras=0, requisicao_id=None, setor="", sc_item_id=None):
     dt = (date.today() - timedelta(days=dias_atras)).strftime("%Y-%m-%d") + " 08:00:00"
     with database.transaction() as c:
         c.execute(
             "INSERT INTO movimentacoes (item_id,tipo,quantidade,saldo_apos,data_hora,"
-            "centro_custo,setor,solicitante,emitente,observacao,requisicao_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (item_id, tipo, qtd, None, dt, "CC", setor, "x", "x", "t", requisicao_id),
+            "centro_custo,setor,solicitante,emitente,observacao,requisicao_id,sc_item_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (item_id, tipo, qtd, None, dt, "CC", setor, "x", "x", "t", requisicao_id, sc_item_id),
         )
 
 
-def test_almox_estrutura_e_agregados(db, make_item):
+def test_almox_estrutura_e_agregados(db, make_item, make_sc):
     it = make_item("PN-A", estoque=2, minimo=10)  # abaixo do mínimo
     rid = _req(setor="SMT")
-    _mov(it, "entrada", 5, dias_atras=2)
+    # v5.9.0: entrada só conta como recebimento com `sc_item_id` (ENTRADA_REAL_WHERE),
+    # senão é ajuste. Por isso a entrada aqui nasce ligada a um item de SC.
+    sc_id = make_sc(numero_sc="SC-ALMOX", item_id=it)
+    conn = database.get_connection()
+    sc_item = conn.execute("SELECT id FROM itens_sc WHERE sc_id=?", (sc_id,)).fetchone()["id"]
+    conn.close()
+    _mov(it, "entrada", 5, dias_atras=2, sc_item_id=sc_item)
     _mov(it, "saida", 3, dias_atras=1, requisicao_id=rid, setor="SMT")
 
     vm = montar_visao_almoxarifado()
@@ -52,7 +58,7 @@ def test_almox_estrutura_e_agregados(db, make_item):
     }
     assert vm["kpis"]["itens_cadastrados"] == 1
     assert vm["kpis"]["estoque_baixo"] == 1
-    assert vm["entradas"]["semana"]["n"] >= 1
+    assert vm["entradas"]["semana"]["n"] == 1
     assert vm["saidas"]["semana"]["n"] == 1
     assert any(s["setor"] == "SMT" for s in vm["setores"])
     assert any(x["pn"] == "PN-A" for x in vm["mais_consumidos"])

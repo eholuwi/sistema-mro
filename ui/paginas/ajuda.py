@@ -127,7 +127,7 @@ def render() -> None:
                         "—",
                         "Dashboard",
                         "Saldo em Estoque",
-                        "Gerenciar Itens",
+                        "Cadastro de Itens",
                         "Movimentação",
                         "Controle de SC",
                         "Configurações",

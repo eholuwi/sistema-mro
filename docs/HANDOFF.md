@@ -18,6 +18,39 @@
   `requirements.txt` **sem pin** — descartado por decisão do Luis, nada a resgatar. As duas branches
   agora apontam para o mesmo commit; quem clonar o repositório cai no estado atual.
 
+- **v5.9.0 IMPLEMENTADA, gate verde (688 testes), ⏳ AGUARDANDO VALIDAÇÃO NO APP REAL E OK DO
+  LUIS PARA COMMIT** (regra inviolável nº6). Ver `changelog/5.9.0.md`. Sete entregas: Dashboard do
+  Comprador enxuto (4 cards + 5 gráficos), "Cadastro de Itens", bug do SelectBox, card Entradas,
+  Guarda-Chuva por Pedido, componente de exportação e data real da saída.
+  - **Migração de schema:** 3 tabelas novas e **aditivas** (`guarda_chuva_pedido`,
+    `guarda_chuva_item`, `guarda_chuva_recebimento`); a `guarda_chuva` da v4.9.0 fica intacta.
+    Provada sobre cópia do `mro.db` real: `.bak` de 4,76 MB, FKs e contagens preservadas.
+  - **Três números MUDAM à vista do usuário, de propósito:** card "Entradas" do Almoxarifado cai de
+    93 → 33 no mês (428 das 566 entradas do banco eram ajuste de inventário) e os 4 cards do
+    Comprador passam a contar ITEM, não SC. É correção — **avisar o almoxarifado**.
+  - **O que conferir no app:** trocar de item em Cadastro de Itens atualiza TODOS os campos e salva
+    no item certo; Guarda-Chuva adiciona pedido pela API e cai no manual quando ela falha; entrega
+    com "Material saindo agora" desmarcado grava a data informada.
+  - **🔴 PENDENTE — "Material saindo agora" falta na Requisição Padrão** (retorno do Luis,
+    31/07/2026). Hoje o checkbox existe só na **fila do almoxarife**
+    (`ui/paginas/movimentacao.py:510`, `_fila_visao_almoxarife`) — que **fica como está**. Falta o
+    mesmo checkbox na tela de **Nova Requisição → Requisição Padrão**, que é onde o material sai na
+    hora e, portanto, onde a data retroativa mais importa.
+    **O serviço já está pronto e testado:** `criar_requisicao_com_baixa` já aceita `data_saida=None`
+    e `tests/test_v590_data_saida.py::test_requisicao_padrao_respeita_a_data_de_saida` já cobre os
+    dois caminhos. **É só UI** — replicar o bloco do checkbox e passar `data_saida=` na chamada.
+  - **Achado que mudou o plano (§3):** a correção prevista era *remover* os `key=` dos widgets de
+    edição. Medido: isso quebraria a página com `StreamlitDuplicateElementId`, porque as duas abas
+    têm widgets de mesmo rótulo/opções e os ids colidem quando o item está no valor padrão
+    (`UNIDADES[0]` = "UN"). As keys ficaram; quem devolve a identidade ao item é
+    `resetar_campos_ao_trocar`.
+  - **Achado que mudou o plano (§5):** o plano supunha um campo `C7_NUMSC` no pedido da API — **não
+    existe**. O elo com a SC é o `C7_XPEDSCM` (código da cotação) → `solicitacoes_compra.cotacao_codigo`.
+    O payload real foi capturado da API antes de escrever o parser (passo 0 do roadmap, cumprido).
+  - **Correção de dado descoberta no caminho:** `setor_dominante_por_item` agora normaliza o setor
+    com `UPPER(TRIM(...))`. Havia 68 valores distintos para 59 setores reais (`'ADAPTADOR'` vs
+    `'ADAPTADOR '`, `'TI'` vs `'ti'`), o que partia o total do mesmo setor em duas linhas do ranking.
+
 - **v5.8.0 COMMITADA (`015a5cf`), gate verde (641 testes locais), ✅ VALIDADA NO APP REAL
   (31/07/2026) e EM PRODUÇÃO.** Ver `changelog/5.8.0.md`. Duas entregas: backup sob demanda na tela
   (`services/backup.py` + bloco em Configurações) e pacote portátil (`scripts/portatil.py` →
@@ -64,6 +97,16 @@ de banco estão no `CLAUDE.md`; estas são as de domínio e de Streamlit.
   quebrava — no total o item sai da lista, o nº de linhas muda e a assinatura muda junto. Corrigido
   com chave versionada (`ui/componentes/tabela.chave_editor`). **Se aparecer bug parecido em
   qualquer `data_editor` com `key`, é aqui que se olha primeiro.**
+- **Widget com `key=` fixo NÃO se atualiza quando o dado de origem muda** (v5.9.0). Havendo `key`,
+  ela vira a **identidade principal** do widget e `options`/`index`/`value` saem do cálculo do id
+  (`key_as_main_identity`, `streamlit/elements/lib/utils.py:232-243`). `index=`/`value=` só valem na
+  1ª renderização. Em tela do tipo "escolhe item → mostra campos do item" isso faz o formulário
+  exibir **e gravar** os dados do item anterior. Remédio: `resetar_campos_ao_trocar`
+  (`ui/componentes/selecao.py`). **Sintoma clássico: "troquei o item e a tela não mudou".**
+- **Tirar o `key=` não é a saída óbvia:** sem key a identidade passa a incluir todos os kwargs, e
+  dois widgets de mesmo rótulo/opções na mesma página (típico de abas espelhadas "Cadastrar" ×
+  "Editar") colidem em **`StreamlitDuplicateElementId`** — a página inteira cai. `st.tabs` **não**
+  isola ids; só sidebar × main entra no cálculo (`active_dg_root_container`).
 - **`st.stop()` NÃO pode ser usado dentro de uma aba** — mata as abas seguintes. Usar guarda
   `if/elif/else`.
 - **`st.tabs` é *eager*** — renderiza TODOS os corpos a cada rerun.
@@ -76,6 +119,19 @@ de banco estão no `CLAUDE.md`; estas são as de domínio e de Streamlit.
   (`planejamento.py`) **prioriza o manual**. `FATOR_ESTOQUE_SEGURANCA=1.5` em `constants.py`.
 - **Consumo real** = saída por requisição (`SAIDA_REAL_WHERE` = `tipo='saida' AND requisicao_id IS
   NOT NULL`) — usado por ABC, giro e consumo. **Ajustes físicos NÃO entram.**
+- **Recebimento real** = `ENTRADA_REAL_WHERE` = `tipo='entrada' AND sc_item_id IS NOT NULL`
+  (v5.9.0, simétrico ao de cima). Não existe `tipo='AJUSTE'` no schema, então contagem física,
+  conferência, ajuste por edição e entrada avulsa **são todos gravados como `entrada`**; só
+  `registrar_recebimento_sc` preenche `sc_item_id`. Medido: **428 das 566 entradas do banco eram
+  ajuste** (418 de `INVENTÁRIO`).
+- **A API do SCM não devolve o nº da SC no pedido** (v5.9.0, verificado em produção). O elo é
+  `C7_XPEDSCM` (código da cotação, `CTxxxxx`) → `solicitacoes_compra.cotacao_codigo`. O payload de
+  `/Pedidos/ByNumero` é uma **lista achatada** de campos `C7_*` com padding de espaços, cabeçalho
+  repetido em cada linha. Shape real fixado em `tests/test_v590_scm_pedido.py`.
+- **`movimentacoes.setor` tem o mesmo setor grafado de várias formas** — 68 valores distintos para
+  59 setores reais (`'ADAPTADOR'` vs `'ADAPTADOR '`, `'TI'` vs `'ti'`). `setor_dominante_por_item`
+  normaliza com `UPPER(TRIM(...))` desde a v5.9.0; **qualquer agregação nova por setor precisa
+  fazer o mesmo**, senão o total do setor sai partido em duas linhas.
 - **Fornecedores MRO** vêm de `itens_sc.fornecedor_item` + `solicitacoes_compra.fornecedor`
   (~34 reais), **NÃO** da tabela `fornecedores` SA1 (~3,6k = empresa toda).
   `precos_historico.fornecedor` tem lixo ("1.0"/"2.0"); `_nome_fornecedor_valido` filtra.

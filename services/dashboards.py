@@ -19,6 +19,7 @@ from services.constants import (
     AGING_CRITICO_DIAS,
     CC_GENERICOS,
     PREVISAO_RUPTURA_SEM_RISCO,
+    ENTRADA_REAL_WHERE,
     SAIDA_REAL_WHERE,
 )
 from services.db_functions import (
@@ -122,8 +123,8 @@ def montar_visao_comprador(top_n=12, hoje=None):
 # 🛒 DASHBOARD COMPRAS MRO (§1) — analytics de COMPRAS sobre o Relatório de SCs
 # ══════════════════════════════════════════════════════════════════════════════
 
-AGING_FAIXAS = ["0-7", "8-15", "16-30", "31-60", "60+"]
-SCPO_FAIXAS = ["1 dia", "2-5", "6-10", "11-20", "20+"]
+# v5.9.0 — saíram daqui, com os blocos que os usavam: AGING_FAIXAS, SCPO_FAIXAS,
+# _faixa_aging, _faixa_sc_po e _iso_week (aging, SC→PO e evolução semanal).
 
 
 def _dias_entre(iso1, iso2):
@@ -139,40 +140,14 @@ def _dias_entre(iso1, iso2):
     return (b - a).days if (a and b) else None
 
 
-def _faixa_aging(d):
-    if d is None:
-        return None
-    if d <= 7:
-        return "0-7"
-    if d <= 15:
-        return "8-15"
-    if d <= 30:
-        return "16-30"
-    if d <= 60:
-        return "31-60"
-    return "60+"
+def _po_do_item(r):
+    """Nº do Pedido de Compra de uma linha de item de SC, ou "" se ainda não tem.
 
-
-def _faixa_sc_po(d):
-    if d is None:
-        return None
-    if d <= 1:
-        return "1 dia"
-    if d <= 5:
-        return "2-5"
-    if d <= 10:
-        return "6-10"
-    if d <= 20:
-        return "11-20"
-    return "20+"
-
-
-def _iso_week(iso):
-    """Semana ISO (1-53) de uma data ISO. None se não parsear."""
-    try:
-        return datetime.strptime(str(iso).strip()[:10], "%Y-%m-%d").isocalendar()[1]
-    except (ValueError, TypeError, AttributeError):
-        return None
+    O PO aparece em dois lugares e nem sempre nos dois: `itens_sc.numero_po` (grão
+    do item, chega pelo Relatório de SCs) e `solicitacoes_compra.numero_po` (grão da
+    SC). Uma SC pode render vários POs, então o campo do item manda quando existe —
+    é ele que separa pedidos distintos dentro da mesma SC."""
+    return str(r.get("po_item") or "").strip() or str(r.get("po_sc") or "").strip()
 
 
 def montar_visao_compras_mro(hoje=None):
@@ -181,7 +156,7 @@ def montar_visao_compras_mro(hoje=None):
     fornecedores, departamentos e solicitantes. PURO (DT-3): monta números/listas;
     o `app.py` só desenha. WK por ISO week (`date.isocalendar`)."""
     from collections import defaultdict
-    from services.db_functions import _normalizar_txt, _nome_fornecedor_valido
+    from services.db_functions import _nome_fornecedor_valido
 
     hoje = hoje or date.today()
     hoje_iso = hoje.strftime("%Y-%m-%d")
@@ -190,10 +165,6 @@ def montar_visao_compras_mro(hoje=None):
     ano_f = str(hoje.year)
 
     with transaction() as conn:
-        dep_por_solic = {}
-        for r in conn.execute("SELECT nome, departamento FROM solicitantes_mro"):
-            dep_por_solic[_normalizar_txt(r["nome"])] = (r["departamento"] or "").strip() or "—"
-
         scs = [
             dict(r)
             for r in conn.execute(
@@ -233,16 +204,20 @@ def montar_visao_compras_mro(hoje=None):
             ).fetchall()
         ]
 
-        # Item-level: o nome do fornecedor válido é escolhido no Python porque o
-        # fornecedor_item às vezes traz lixo numérico ("1.0"/"2.0") junto do valor,
-        # enquanto o nome real está em sc.fornecedor (ou vice-versa).
-        forn_rows = [
+        # Base ITEM-LEVEL do ano — uma linha por item de SC. Alimenta os 4 cards, o
+        # dispêndio (mensal e por setor) e os fornecedores por valor, sem query nova.
+        # O nome do fornecedor válido é escolhido no Python porque o fornecedor_item
+        # às vezes traz lixo numérico ("1.0"/"2.0") junto do valor, enquanto o nome
+        # real está em sc.fornecedor (ou vice-versa).
+        itens_rows = [
             dict(r)
             for r in conn.execute(
                 """
             SELECT sc.id AS sc_id, i.fornecedor_item AS fi, sc.fornecedor AS sf,
                    COALESCE(i.valor_total, 0) AS valor,
-                   sc.data_abertura AS da, sc.data_po AS dp
+                   sc.data_abertura AS da, sc.data_po AS dp,
+                   sc.status AS status, i.item_id AS item_id,
+                   i.numero_po AS po_item, sc.numero_po AS po_sc
             FROM itens_sc i JOIN solicitacoes_compra sc ON sc.id = i.sc_id
             WHERE substr(sc.data_abertura, 1, 4) = ?
         """,
@@ -255,36 +230,28 @@ def montar_visao_compras_mro(hoje=None):
         ).fetchone()
         ultima_atualizacao = row["dh"] if row else None
 
-    def _dep(solic):
-        return dep_por_solic.get(_normalizar_txt(solic), "—")
+    # ── Os 4 cards (v5.9.0) — todos contados no grão de ITEM de SC ────────────
+    # Antes contavam SC onde o rótulo dizia item: "Em cotação" usava len(em_cotacao)
+    # (SCs) e "POs emitidos" usava len(com_po) (SCs com PO, não pedidos distintos).
+    itens_cotacao = [r for r in itens_rows if "Cota" in (r["status"] or "")]
+    itens_em_aberto = len(itens_cotacao)
+    scs_em_aberto = len({r["sc_id"] for r in itens_cotacao})
 
-    def _aging_sc(s):
-        atend = s.get("data_po") or s.get("data_aprovacao")
-        return _dias_entre(s["data_abertura"], atend or hoje_iso)
-
-    abertas = [s for s in scs if s["status"] not in ("Recebido", "Cancelado") and (s["n_pendentes"] or 0) > 0]
-    em_cotacao = [s for s in abertas if "Cota" in (s["status"] or "")]
-    com_po = [s for s in scs if (s["numero_po"] or "").strip()]
-
-    agings = [a for a in (_aging_sc(s) for s in scs) if a is not None and a >= 0]
-    aging_medio = round(sum(agings) / len(agings), 1) if agings else None
-
-    scpo = [
-        d for d in (_dias_entre(s["data_abertura"], s["data_po"]) for s in com_po) if d is not None and d >= 0
-    ]
-    scpo_hist = {f: 0 for f in SCPO_FAIXAS}
-    for d in scpo:
-        scpo_hist[_faixa_sc_po(d)] += 1
-    scpo_medio = round(sum(scpo) / len(scpo), 1) if scpo else None
+    itens_com_po = 0
+    pos_distintos = set()
+    for r in itens_rows:
+        po = _po_do_item(r)
+        if po:
+            itens_com_po += 1
+            pos_distintos.add(po)
 
     # Painel de Prioridades — itens abertos, mais velho primeiro (a fila do dia).
+    # Não é desenhado como bloco próprio desde a v5.9.0, mas segue no view-model:
+    # `drill_down.rows_itens_em_aberto` (drill do card "SCs em Aberto") o consome.
     # v3.7.0 (A1): sem a coluna "Setor" (setor_responsavel era 98% "Improdutivo").
     painel = []
-    itens_criticos = 0
     for it in itens_abertos:
         aging = _dias_entre(it["data_abertura"], hoje_iso)
-        if (it.get("estoque_atual") or 0) <= (it.get("estoque_minimo") or 0):
-            itens_criticos += 1
         painel.append(
             {
                 "aging": aging if aging is not None else -1,
@@ -296,43 +263,6 @@ def montar_visao_compras_mro(hoje=None):
         )
     painel.sort(key=lambda x: x["aging"], reverse=True)
 
-    # Distribuição do aging — v3.7.0 (A1): base APROVAÇÃO → hoje (definição do Luis);
-    # itens sem data de aprovação ficam fora das faixas.
-    aging_dist = {f: 0 for f in AGING_FAIXAS}
-    for it in itens_abertos:
-        d = _dias_entre(it.get("data_aprovacao"), hoje_iso)
-        fx = _faixa_aging(d if (d is not None and d >= 0) else None)
-        if fx:
-            aging_dist[fx] += 1
-
-    comp = defaultdict(lambda: {"itens": 0, "pos": set(), "valor": 0.0, "agings": []})
-    for s in scs:
-        c = s.get("comprador")
-        if not c:
-            continue
-        d = comp[c]
-        d["itens"] += int(s["n_itens"] or 0)
-        if (s["numero_po"] or "").strip():
-            d["pos"].add(s["numero_po"])
-        d["valor"] += float(s["valor"] or 0)
-        a = _aging_sc(s)
-        if a is not None and a >= 0:
-            d["agings"].append(a)
-    por_comprador = sorted(
-        [
-            {
-                "comprador": c,
-                "itens": v["itens"],
-                "pos": len(v["pos"]),
-                "valor": round(v["valor"], 2),
-                "aging_medio": round(sum(v["agings"]) / len(v["agings"]), 1) if v["agings"] else None,
-            }
-            for c, v in comp.items()
-        ],
-        key=lambda x: x["valor"],
-        reverse=True,
-    )
-
     # Demanda "em aberto" (D3): só SCs em COTAÇÃO e AINDA sem PO (com saldo pendente).
     # Setor = setor DOMINANTE derivado do consumo real (não o setor_responsavel).
     itens_d3 = [
@@ -340,31 +270,56 @@ def montar_visao_compras_mro(hoje=None):
         for it in itens_abertos
         if "Cota" in (it.get("status") or "") and not (it.get("numero_po") or "").strip()
     ]
-    setor_dom = setor_dominante_por_item([it["item_id"] for it in itens_d3])
-    dep_cont, sol_cont = Counter(), Counter()
+
+    # ── Dispêndio (v5.9.0) — valor do item no MÊS DO PO (decisão do usuário) ──
+    # `data_po` é quando o dinheiro foi de fato comprometido; `data_abertura` só diz
+    # quando alguém pediu. Item sem PO ainda não é dispêndio e fica de fora.
+    # Uma única chamada a `setor_dominante_por_item` serve o Ranking de Setor e a
+    # demanda em aberto (a função faz uma query só, então vale juntar os ids).
+    ids_com_valor = {r["item_id"] for r in itens_rows if float(r["valor"] or 0) > 0}
+    setor_dom = setor_dominante_por_item(list({it["item_id"] for it in itens_d3} | ids_com_valor))
+
+    disp_mes, disp_setor = Counter(), Counter()
+    for r in itens_rows:
+        v = float(r["valor"] or 0)
+        if v <= 0:
+            continue
+        mes_po = (r["dp"] or "")[:7]
+        if mes_po:
+            disp_mes[mes_po] += v
+        # Item sem consumo real não tem setor dominante — fica fora do ranking em
+        # vez de virar balde "—" (mesma regra que a demanda em aberto já usa).
+        _setor = setor_dom.get(r["item_id"])
+        if _setor:
+            disp_setor[_setor] += v
+
+    _meses_disp = sorted(disp_mes)
+    dispendio_mensal = {
+        "meses": _meses_disp,
+        "valores": [round(disp_mes[m], 2) for m in _meses_disp],
+    }
+    dispendio_setor = [{"setor": s, "valor": round(v, 2)} for s, v in disp_setor.most_common(10)]
+
+    dep_cont = Counter()
     for it in itens_d3:
         # v3.10.0: item sem setor nomeado no consumo real fica FORA de Setores
-        # (nada de balde "—"); Solicitantes mantém o fallback.
+        # (nada de balde "—").
         _setor = setor_dom.get(it["item_id"])
         if _setor:
             dep_cont[_setor] += 1
-        sol_cont[(it["solicitante"] or "—").title()] += 1
     por_departamento = [{"departamento": k, "n": v} for k, v in dep_cont.most_common()]
-    por_solicitante = [{"solicitante": k, "n": v} for k, v in sol_cont.most_common(10)]
 
-    # Fornecedor válido por SC (resolve o lixo "1.0"/"2.0"): usado no valor e no lead time.
+    # Fornecedor válido (resolve o lixo "1.0"/"2.0" em fornecedor_item).
     def _forn_valido(fi, sf):
         return next((c.strip() for c in (fi, sf) if c and _nome_fornecedor_valido(c)), None)
 
-    forn_por_sc = {}
     forn_agg = defaultdict(lambda: {"valor": 0.0, "itens": 0})
-    for r in forn_rows:
+    for r in itens_rows:
         nome = _forn_valido(r["fi"], r["sf"])
         if not nome:
             continue
         forn_agg[nome]["valor"] += float(r["valor"] or 0)
         forn_agg[nome]["itens"] += 1
-        forn_por_sc.setdefault(r["sc_id"], nome)
     fornecedores_top = sorted(
         [
             {"fornecedor": k, "valor": round(v["valor"], 2), "itens": v["itens"]}
@@ -374,37 +329,6 @@ def montar_visao_compras_mro(hoje=None):
         key=lambda x: x["valor"],
         reverse=True,
     )[:10]
-
-    # Lead time por fornecedor (Emissão → PO), por SC (dedupe) — bom para negociação.
-    lt = defaultdict(list)
-    for s in com_po:
-        nome = forn_por_sc.get(s["id"])
-        d = _dias_entre(s["data_abertura"], s["data_po"])
-        if nome and d is not None and d >= 0:
-            lt[nome].append(d)
-    lead_time_fornecedor = sorted(
-        [{"fornecedor": n, "dias": round(sum(v) / len(v), 1), "pos": len(v)} for n, v in lt.items()],
-        key=lambda x: x["dias"],
-        reverse=True,
-    )[:12]
-
-    # Evolução semanal (WK): itens aprovados × POs emitidos — compras acompanha a demanda?
-    aprov_wk, po_wk = Counter(), Counter()
-    for s in scs:
-        if s["data_aprovacao"]:
-            w = _iso_week(s["data_aprovacao"])
-            if w:
-                aprov_wk[w] += int(s["n_itens"] or 0)
-        if s["data_po"]:
-            w = _iso_week(s["data_po"])
-            if w:
-                po_wk[w] += 1
-    weeks = sorted(set(aprov_wk) | set(po_wk))
-    evolucao_semanal = {
-        "weeks": weeks,
-        "aprovados": [aprov_wk.get(w, 0) for w in weeks],
-        "pos": [po_wk.get(w, 0) for w in weeks],
-    }
 
     # Volume mensal: Itens / SCs / POs por mês (YYYY-MM).
     mes_itens, mes_scs, mes_pos = Counter(), Counter(), Counter()
@@ -423,46 +347,31 @@ def montar_visao_compras_mro(hoje=None):
         "pos": [mes_pos.get(m, 0) for m in meses],
     }
 
-    # v4.5.5 — agregações extras para espelhar o Dashboard SCM WK29 (só MRO).
-    status_pos = dict(Counter((s["status"] or "—") for s in scs))
-    _ipp = Counter()
-    for s in scs:
-        n = int(s["n_itens"] or 0)
-        if n <= 0:
-            continue
-        _ipp["1 item" if n == 1 else ("2-5" if n <= 5 else ("6-10" if n <= 10 else "11+"))] += 1
-    itens_por_pedido = {f: _ipp.get(f, 0) for f in ("1 item", "2-5", "6-10", "11+") if _ipp.get(f, 0)}
-    # v4.5.6 — removidos os agregados "aging_por_departamento" e "comparativo_semanal"
-    # (UI extinta a pedido do usuário). weeks/aprov_wk/po_wk seguem alimentando o
-    # gráfico "evolucao_semanal", que permanece.
-
+    # v5.9.0 — a aba foi reduzida a 4 cards + 5 gráficos (pedido do usuário). Saíram
+    # daqui os agregados que só alimentavam blocos redundantes ou extintos:
+    # aging_dist, scpo_hist, por_comprador, por_solicitante, lead_time_fornecedor,
+    # evolucao_semanal, status_pos, itens_por_pedido — e os KPIs itens_criticos,
+    # valor_comprado, aging_medio e scpo_medio.
+    # `painel_prioridades` e `por_departamento` PERMANECEM: não são desenhados como
+    # bloco, mas `drill_down.rows_itens_em_aberto` e `rows_setores_demanda_aberta`
+    # os consomem para compor os drills.
     ano, wk, _ = hoje.isocalendar()
     return {
         "ultima_atualizacao": ultima_atualizacao,
         "wk": wk,
         "ano": ano,
         "kpis": {
-            "itens_abertos": len(em_cotacao),
-            "itens_criticos": itens_criticos,
-            "scs_abertas": len(abertas),
-            "pos_emitidos": len(com_po),
-            "valor_comprado": round(sum(float(s["valor"] or 0) for s in scs), 2),
-            "aging_medio": aging_medio,
-            "scpo_medio": scpo_medio,
+            "itens_abertos": itens_em_aberto,
+            "scs_abertas": scs_em_aberto,
+            "pos_emitidos": len(pos_distintos),
+            "itens_com_po": itens_com_po,
         },
         "painel_prioridades": painel,
-        "aging_dist": aging_dist,
-        "scpo_hist": scpo_hist,
-        "por_comprador": por_comprador,
         "por_departamento": por_departamento,
-        "por_solicitante": por_solicitante,
         "fornecedores_top": fornecedores_top,
-        "lead_time_fornecedor": lead_time_fornecedor,
-        "evolucao_semanal": evolucao_semanal,
         "volume_mensal": volume_mensal,
-        # v4.5.5 — SCM WK29
-        "status_pos": status_pos,
-        "itens_por_pedido": itens_por_pedido,
+        "dispendio_mensal": dispendio_mensal,
+        "dispendio_setor": dispendio_setor,
     }
 
 
@@ -648,9 +557,9 @@ def montar_visao_almoxarifado(hoje=None):
             return {"n": r["n"], "q": round(r["q"], 1)}
 
         entradas = {
-            "hoje": _periodo("tipo='entrada'", hoje_iso, dia=True),
-            "semana": _periodo("tipo='entrada'", sem_ini),
-            "mes": _periodo("tipo='entrada'", mes_ini),
+            "hoje": _periodo(ENTRADA_REAL_WHERE, hoje_iso, dia=True),
+            "semana": _periodo(ENTRADA_REAL_WHERE, sem_ini),
+            "mes": _periodo(ENTRADA_REAL_WHERE, mes_ini),
         }
         saidas = {
             "hoje": _periodo(SAIDA_REAL_WHERE, hoje_iso, dia=True),
@@ -664,10 +573,10 @@ def montar_visao_almoxarifado(hoje=None):
         top_recebidos = [
             dict(r)
             for r in conn.execute(
-                """
+                f"""
             SELECT inv.part_number pn, inv.nome_item item, SUM(m.quantidade) q
             FROM movimentacoes m JOIN inventario inv ON inv.id=m.item_id
-            WHERE m.tipo='entrada' AND substr(m.data_hora,1,10) >= ?
+            WHERE {ENTRADA_REAL_WHERE} AND substr(m.data_hora,1,10) >= ?
             GROUP BY m.item_id ORDER BY q DESC LIMIT 10
         """,
                 (mes_ini,),
@@ -695,10 +604,10 @@ def montar_visao_almoxarifado(hoje=None):
         ]
         hist = [
             dict(r)
-            for r in conn.execute("""
+            for r in conn.execute(f"""
             SELECT substr(data_hora,1,7) ym,
-                   ROUND(SUM(CASE WHEN tipo='entrada' THEN quantidade ELSE 0 END),1) ent,
-                   ROUND(SUM(CASE WHEN tipo='saida' AND requisicao_id IS NOT NULL THEN quantidade ELSE 0 END),1) sai
+                   ROUND(SUM(CASE WHEN {ENTRADA_REAL_WHERE} THEN quantidade ELSE 0 END),1) ent,
+                   ROUND(SUM(CASE WHEN {SAIDA_REAL_WHERE} THEN quantidade ELSE 0 END),1) sai
             FROM movimentacoes GROUP BY ym ORDER BY ym
         """).fetchall()
         ]

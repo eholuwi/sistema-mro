@@ -57,7 +57,7 @@ Você **decide e cria as SCs**. O sistema **recomenda**, você confirma — nunc
 **2. Cotar — abas de SC e Fornecedores** — melhor fornecedor (menor último preço), lead
 time e **rascunho de e-mail** de cotação.
 
-**3. Curar conversão — `:material/add: Gerenciar Itens`** — quando compra em unidade diferente da de
+**3. Curar conversão — `:material/add: Cadastro de Itens`** — quando compra em unidade diferente da de
 estoque (ex.: GL × L), cadastre a **unidade de compra** e o **fator** (o sistema sugere).
 
 **4. Ler a demanda — `:material/badge: Ficha 360` / `:material/assignment: Saldo em Estoque`** — **Padrão de demanda** e **XYZ**
@@ -330,7 +330,7 @@ MANUAL = [
         ],
     },
     {
-        "tela": ":material/add: Gerenciar Itens",
+        "tela": ":material/add: Cadastro de Itens",
         "intro": "Cadastro e edição de itens, incluindo a curadoria da conversão de unidades.",
         "itens": [
             _item(

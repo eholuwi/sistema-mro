@@ -41,7 +41,7 @@ def test_rotas_migradas_sao_as_com_render():
             "Configurações",
             "SCM Integrado",
             "Saldo em Estoque",
-            "Gerenciar Itens",
+            "Cadastro de Itens",  # v5.9.0 — era "Gerenciar Itens"
             "Dashboard",
             "Controle de SC",
             "Ficha 360",
