@@ -11,11 +11,12 @@
 
 ## STATUS ATUAL — atualizado em 31/07/2026
 
-- **Branch de trabalho: `feat/v5.0.0`.** Não é a `main`.
+- **Branch de trabalho: `feat/v5.0.0`.**
   **Primeiro comando de qualquer sessão:** `git fetch --all --prune` e `git checkout feat/v5.0.0`.
-  A `main` está 47 commits atrás e contém um commit órfão (`21fc73e`) com uma versão **anterior**
-  do `scm_client.py` e um `requirements.txt` **sem pin** — não há nada a resgatar nele. A promoção
-  da `feat/v5.0.0` para a `main` segue pendente de decisão.
+  **Em 31/07/2026 a `main` foi realinhada** (`git branch -f` + force-push): estava 47 commits atrás
+  e carregava um commit órfão (`21fc73e`) com uma versão **anterior** do `scm_client.py` e um
+  `requirements.txt` **sem pin** — descartado por decisão do Luis, nada a resgatar. As duas branches
+  agora apontam para o mesmo commit; quem clonar o repositório cai no estado atual.
 
 - **v5.8.0 COMMITADA (`015a5cf`), gate verde (641 testes locais), PENDENTE de validação no app real.**
   Ver `changelog/5.8.0.md`. Duas entregas: backup sob demanda na tela (`services/backup.py` +
