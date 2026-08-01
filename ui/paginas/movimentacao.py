@@ -1,9 +1,11 @@
-"""Página Movimentação (v5.4.0 / F4b) — a página que mais escreve estoque.
+"""Página Movimentação (v6.0.0) — a página que mais escreve estoque.
 
-Migrada do bloco inline do `app.py` (migração FIEL). Agrega 5 abas: Dashboard de
-movimentações, Receber Material (Por Material / Por SC), Requisição (Nova / Fila /
-Histórico), Ajuste Rápido e Histórico Completo. Os 3 fluxos maiores vivem em helpers
-module-level (`_receber_por_sc`, `_render_receber_material`, `_render_requisicao`).
+Migrada do bloco inline do `app.py` (migração FIEL). Agrega 4 abas: Receber Material
+(Por Material / Por SC), Requisição (Nova / Fila / Histórico), Ajuste Rápido e
+Histórico Completo. Os 3 fluxos maiores vivem em helpers module-level
+(`_receber_por_sc`, `_render_receber_material`, `_render_requisicao`).
+
+v6.0.0 — a aba "Dashboard movimentações" saiu daqui; ver a docstring de `render()`.
 
 F4b: toda ESCRITA (recebimento, entrada avulsa, criar/entregar/ajustar requisição,
 ajuste de saldo) passa a chamar `invalidar_leituras()` antes do rerun — era a única
@@ -28,7 +30,6 @@ from services.db_functions import (
     listar_scs,
     listar_itens_sc,
     buscar_scs_por_item,
-    exportar_inventario_df,
     listar_valores,
     listar_setores_conhecidos,
     sincronizar_setores_config,
@@ -42,13 +43,7 @@ from services.db_functions import (
     cancelar_requisicao,
     listar_requisicoes_abertas,
     listar_emitentes_requisicao,
-    obter_analitico_movimentacoes,
-    obter_analitico_divergencias,
-    obter_analitico_rupturas,
     exportar_movimentacoes_df,
-    obter_valor_imobilizado,
-    obter_evolucao_valor_imobilizado,
-    obter_abc_valor,
 )
 from ui.cache import invalidar_leituras
 from ui.tema import paleta_atual
@@ -823,6 +818,27 @@ def _req_nova_padrao(autorizadores_lista, PAL):
     aut_tipo = ca1.selectbox("Tipo de Autorizador *", autorizadores_lista)
     aut_nome = ca2.text_input("Nome do Autorizador (gestor) *")
 
+    # v5.9.0 — mesma data REAL da saída da Fila (`_fila_visao_almoxarife`). Aqui pesa ainda
+    # mais: é o fluxo do balcão, onde o material já saiu e só depois é lançado no sistema.
+    f_data_saida = None
+    if st.checkbox("Material saindo agora", value=True, key="pad_agora"):
+        st.caption(":material/schedule: A saída será registrada com a data e hora deste momento.")
+    else:
+        cd1, cd2 = st.columns(2)
+        _d = cd1.date_input(
+            "Data real da saída",
+            value=date.today(),
+            max_value=date.today(),
+            key="pad_dt_saida",
+            help="Quando o material saiu de fato do almoxarifado. Não aceita data futura.",
+        )
+        _h = cd2.time_input("Hora real da saída", value=datetime.now().time(), key="pad_hr_saida")
+        f_data_saida = datetime.combine(_d, _h)
+        st.caption(
+            f":material/history: Saída lançada para **{f_data_saida:%d/%m/%Y %H:%M}** — "
+            "é esta data que entra no consumo do item."
+        )
+
     st.markdown("##### 5. Observações e Envio")
     obs_req = st.text_area(
         "Observações Gerais da Requisição",
@@ -861,6 +877,7 @@ def _req_nova_padrao(autorizadores_lista, PAL):
                     sesmt_responsavel=sesmt_resp,
                     itens=st.session_state.itens_req,
                     observacoes=obs_req,
+                    data_saida=f_data_saida,
                 )
             if ok:
                 invalidar_leituras()  # a Padrão escreve estoque
@@ -1186,16 +1203,22 @@ def _render_requisicao():
 
 
 def render() -> None:
-    """Movimentacao (v3.8.0+): 5 abas - Dashboard, Receber, Requisicao,
-    Ajuste Rapido e Historico Completo. Migrada do elif inline (F4b)."""
+    """Movimentacao (v6.0.0): 4 abas - Receber, Requisicao, Ajuste Rapido e
+    Historico Completo. Migrada do elif inline (F4b).
+
+    v6.0.0 — a aba "Dashboard movimentações" saiu. Tendência de Consumo, Top Capital
+    Parado, Maior Valor em Estoque, Top Itens com Divergências e Ruptura de Estoque
+    migraram para o **Dashboard › Almoxarifado** (painel operacional único). Volume de
+    Movimentações (redundante com o Histórico mensal do Almoxarifado), a Evolução do
+    valor imobilizado e a Curva ABC 90d foram descontinuadas — decisão registrada no
+    plano de refatoração de UX. As funções de service seguem intactas."""
     st.title(":material/sync: Movimentação")
 
-    # v3.8.0 — Requisição e Receber Material aninhados aqui (abas), ao lado de Analytics,
+    # v3.8.0 — Requisição e Receber Material aninhados aqui (abas), ao lado de
     # Ajuste Rápido e Histórico. Os corpos vivem em _render_receber_material /
     # _render_requisicao (module-level) — sem duplicar nem mover blocos indentados.
-    tab_dash, tab_rec, tab_req, tab_ajuste, tab_hist = st.tabs(
+    tab_rec, tab_req, tab_ajuste, tab_hist = st.tabs(
         [
-            ":material/bar_chart: Dashboard movimentações",
             ":material/inventory_2: Receber Material",
             ":material/assignment: Requisição",
             ":material/balance: Ajuste Rápido",
@@ -1276,6 +1299,7 @@ def render() -> None:
 
     # === TAB 2: HISTÓRICO COMPLETO ===
     with tab_hist:
+        PAL = paleta_atual()
         with st.container(border=True):
             st.subheader(":material/history: Histórico de Movimentações")
 
@@ -1334,14 +1358,16 @@ def render() -> None:
                 ]
 
                 # Estilização por tipo
+                # v6.0.0 — cores semânticas do tema (services/tema.py), não hex solto.
+                _CORES_TIPO = {
+                    "entrada": PAL["positivo"],
+                    "saida": PAL["negativo"],
+                    "devolucao": PAL["info"],
+                }
+
                 def colorir_tipo(val):
-                    if val == "entrada":
-                        return "color: #2ecc71; font-weight: bold;"
-                    if val == "saida":
-                        return "color: #e74c3c; font-weight: bold;"
-                    if val == "devolucao":
-                        return "color: #3498db; font-weight: bold;"
-                    return ""
+                    cor = _CORES_TIPO.get(val)
+                    return f"color: {cor}; font-weight: bold;" if cor else ""
 
                 st.dataframe(
                     df_exib.style.map(colorir_tipo, subset=["Tipo"]),  # Mantém a cor original do tipo banco
@@ -1411,288 +1437,3 @@ def render() -> None:
                         label_excel="⬇️ Baixar planilha Excel do Relatório de Movimentações",
                         sufixo=_sufixo,
                     )
-
-    # === TAB 3: DASHBOARD MOVIMENTAÇÕES (VOLUME + DIVERGÊNCIAS + RUPTURA) ===
-    with tab_dash:
-        st.subheader(":material/bar_chart: Dashboard movimentações")
-
-        # v4.1.0 — Tendência de consumo (comparação 30d vs. 30d anteriores)
-        with st.container(border=True):
-            st.markdown("#### :material/psychology: Tendência de consumo")
-            st.caption("Compara o consumo dos últimos 30 dias com os 30 dias anteriores, item a item.")
-            try:
-                df_series = exportar_inventario_df()
-            except Exception as e:
-                df_series = pd.DataFrame()
-                st.error(f"Erro ao calcular indicadores: {e}")
-            if df_series.empty:
-                st.caption("Sem dados suficientes.")
-            else:
-                if "Tendência" in df_series.columns:
-                    vc = df_series["Tendência"].value_counts()
-                    tca = st.columns(3)
-                    tca[0].metric(
-                        "🔺 Em alta",
-                        int(vc.get("Alta", 0)),
-                        help="Itens cujo consumo dos últimos 30 dias está mais de 15% ACIMA "
-                        "dos 30 dias anteriores (demanda aumentando vs. o mês passado).",
-                    )
-                    tca[1].metric(
-                        "🔻 Em queda",
-                        int(vc.get("Queda", 0)),
-                        help="Itens cujo consumo dos últimos 30 dias está mais de 15% ABAIXO "
-                        "dos 30 dias anteriores (demanda diminuindo vs. o mês passado).",
-                    )
-                    tca[2].metric(
-                        ":material/remove: Estável",
-                        int(vc.get("Estável", 0)),
-                        help="Itens cujo consumo dos últimos 30 dias variou menos de 15% "
-                        "em relação aos 30 dias anteriores (demanda estável).",
-                    )
-
-        st.markdown("---")
-
-        # v2.3.0 — 💰 Financeiro: valor imobilizado · ABC por valor · evolução de preço
-        with st.container(border=True):
-            st.markdown("#### :material/payments: Financeiro (Valoração — estimativas rotuladas)")
-            st.caption(
-                "Valores são **estimativas** baseadas no **último preço** conhecido "
-                "(SCM; na falta, último preço de PO/SC7). Não substituem o custo contábil."
-            )
-            try:
-                vi = obter_valor_imobilizado()
-            except Exception as e:
-                vi = None
-                st.error(f"Erro ao calcular valoração: {e}")
-
-            if vi:
-                k1, k2, k3 = st.columns(3)
-                k1.metric(
-                    ":material/payments: Valor imobilizado (BRL)",
-                    f"R$ {vi['total_brl']:,.2f}",
-                    help="Σ (estoque atual × preço de valoração) dos itens em BRL. "
-                    "Estimativa pelo último preço.",
-                )
-                k2.metric(
-                    ":material/check_circle: Itens valorados",
-                    vi["itens_valorados"],
-                    help="Itens com preço de referência conhecido (SCM ou histórico).",
-                )
-                k3.metric(
-                    ":material/warning: Sem preço",
-                    vi["itens_sem_preco"],
-                    help="Itens COM estoque mas SEM preço conhecido — subestimam o total. "
-                    "Aparecem quando o material ainda não foi comprado via SCM/SC7.",
-                )
-                if vi["itens_nao_brl"]:
-                    st.caption(
-                        f":material/language: {vi['itens_nao_brl']} item(ns) com moeda ≠ BRL "
-                        f"(≈ {vi['total_nao_brl']:,.2f} na moeda original) somados à parte — "
-                        "sem conversão cambial nesta versão."
-                    )
-
-            fa, fb = st.columns(2)
-
-            # Evolução do valor imobilizado (fotos diárias)
-            with fa:
-                st.markdown("**:material/trending_up: Evolução do valor imobilizado**")
-                st.caption("Soma diária de (estoque × preço) — capital parado ao longo do tempo.")
-                try:
-                    ev = obter_evolucao_valor_imobilizado(dias=180)
-                except Exception:
-                    ev = {"serie": [], "n_snapshots": 0}
-                if ev["serie"]:
-                    df_ev = pd.DataFrame(ev["serie"]).set_index("data")
-                    st.line_chart(df_ev["valor"], height=240)
-                    st.caption(f"Baseado em {ev['n_snapshots']} foto(s) de estoque.")
-                else:
-                    st.info("Ainda sem fotos suficientes — a série amadurece a cada import diário.")
-
-            # Curva ABC por valor
-            with fb:
-                st.markdown("**:material/bar_chart: Curva ABC por valor (últimos 90d)**")
-                st.caption("Ranking pelo valor consumido = qtd saída × preço. A=80% · B=95% · C=resto.")
-                try:
-                    abc = obter_abc_valor(dias=90, limit=15)
-                except Exception:
-                    abc = []
-                if abc:
-                    df_abc_v = pd.DataFrame(abc)
-                    df_abc_v["Item"] = (
-                        df_abc_v["part_number"] + " • " + df_abc_v["nome_item"].astype(str).str.slice(0, 18)
-                    )
-                    st.dataframe(
-                        df_abc_v[["Item", "classe", "valor", "pct_acumulado", "origem"]].rename(
-                            columns={
-                                "classe": "Classe",
-                                "valor": "Valor (R$)",
-                                "pct_acumulado": "% Acum.",
-                                "origem": "Origem",
-                            }
-                        ),
-                        hide_index=True,
-                        width="stretch",
-                        height=280,
-                        column_config={
-                            "Valor (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
-                            "% Acum.": st.column_config.NumberColumn(format="%.1f%%"),
-                        },
-                    )
-                else:
-                    st.info("Sem saídas valorizáveis no período.")
-
-            # Top capital parado (valor alto + giro 0) — alvo de redução de imobilizado
-            if (
-                not df_series.empty
-                and "Valor em Estoque" in df_series.columns
-                and "Giro(anual)" in df_series.columns
-            ):
-                st.markdown("**:material/ac_unit: Top capital parado (maior valor em estoque, giro 0)**")
-                st.caption("Dinheiro parado sem saída no período — candidatos a reduzir/realocar.")
-                _cols_cap = [
-                    c
-                    for c in ["PN", "Nome", "UN", "Estoque Atual", "Valor em Estoque"]
-                    if c in df_series.columns
-                ]
-                parado_val = df_series[
-                    (df_series["Giro(anual)"] == 0) & (df_series["Valor em Estoque"] > 0)
-                ].nlargest(8, "Valor em Estoque")[_cols_cap]
-                if not parado_val.empty:
-                    st.dataframe(
-                        parado_val,
-                        hide_index=True,
-                        width="stretch",
-                        column_config={"Valor em Estoque": st.column_config.NumberColumn(format="R$ %.2f")},
-                    )
-                else:
-                    st.success(":material/check_circle: Nenhum item de valor relevante totalmente parado.")
-
-        st.markdown("---")
-
-        # --- LINHA 1: VOLUME E DIVERGÊNCIAS (Lado a Lado) ---
-        c_vol, c_div = st.columns(2)
-
-        # 1. VOLUME DE ENTRADAS E SAÍDAS
-        with c_vol:
-            with st.container(border=True):
-                st.markdown("#### :material/inventory_2: Volume de Movimentações")
-                periodo_sel = st.selectbox(
-                    "Agrupar por:", ["Mensal", "Semanal", "Diário"], index=0, key="sel_periodo_vol"
-                )
-                periodo_map = {"Mensal": "mensal", "Semanal": "semanal", "Diário": "diario"}
-                df_anal = obter_analitico_movimentacoes(periodo=periodo_map[periodo_sel])
-
-                if df_anal.empty:
-                    st.caption("Sem dados no período.")
-                else:
-                    try:
-                        df_pivot = df_anal.pivot_table(
-                            index="periodo",
-                            columns="tipo",
-                            values="vol_unidades",
-                            aggfunc="sum",
-                            fill_value=0,
-                        )
-                        for col in ["entrada", "saida", "devolucao"]:
-                            if col not in df_pivot.columns:
-                                df_pivot[col] = 0
-
-                        df_pivot = df_pivot.rename(
-                            columns={"entrada": "Entradas", "saida": "Saídas", "devolucao": "Dev"}
-                        )
-                        df_pivot = df_pivot.sort_index(ascending=True)
-
-                        t1, t2 = st.columns(2)
-                        t1.metric("Total Entradas", f"{df_pivot['Entradas'].sum():,.0f}")
-                        t2.metric("Total Saídas", f"{df_pivot['Saídas'].sum():,.0f}")
-
-                        st.bar_chart(df_pivot[["Entradas", "Saídas"]], color=["#2ecc71", "#e74c3c"])
-                    except Exception as e:
-                        st.error(f"Erro ao processar volume: {e}")
-
-        # 2. DIVERGÊNCIAS DE INVENTÁRIO
-        with c_div:
-            with st.container(border=True):
-                st.markdown("#### :material/balance: Top Itens com Divergências")
-                st.caption("Ajustes manuais frequentes (sem Req/SC) indicam erro de processo.")
-
-                df_div = obter_analitico_divergencias(days=90)
-
-                if df_div.empty:
-                    st.success(":material/check_circle: Nenhuma divergência significativa.")
-                else:
-                    df_div_display = df_div.copy()
-                    df_div_display.columns = ["PN", "Item", "Nº Ajustes", "Vol. Ajustado"]
-
-                    st.dataframe(
-                        df_div_display,
-                        width="stretch",
-                        hide_index=True,
-                        height=320,
-                        column_config={
-                            "Nº Ajustes": st.column_config.ProgressColumn(
-                                "Freq.",
-                                format="%d",
-                                min_value=0,
-                                max_value=int(df_div_display["Nº Ajustes"].max()),
-                                color="#F7941E",
-                            ),
-                            "Vol. Ajustado": st.column_config.NumberColumn(format="%.2f"),
-                        },
-                    )
-
-        st.markdown("---")
-
-        # --- LINHA 2: RUPTURA DE ESTOQUE (Destaque Total) ---
-        with st.container(border=True):
-            st.markdown("#### :material/emergency: Ruptura de Estoque (Impacto na Operação)")
-            st.caption(
-                "Itens que zeraram o estoque durante uma requisição nos últimos 90 dias. Indica falha de abastecimento."
-            )
-
-            df_rup = obter_analitico_rupturas(days=90)
-
-            if df_rup.empty:
-                st.success(
-                    ":material/check_circle: **Operação Fluida:** Nenhuma ruptura registrada no período. O estoque atendeu todas as requisições."
-                )
-            else:
-                # Formatar data para exibição
-                df_rup["ultima_ocorrencia"] = df_rup["ultima_ocorrencia"].apply(fmt)
-
-                # Renomear colunas
-                df_rup_display = df_rup.rename(
-                    columns={
-                        "part_number": "PN",
-                        "nome_item": "Item Crítico",
-                        "qtd_rupturas": "Qtd. Rupturas",
-                        "ultima_ocorrencia": "Última Falha",
-                    }
-                )
-
-                # Estilização: Vermelho para alta frequência
-                def highlight_ruptura(val):
-                    if isinstance(val, (int, float)) and val >= 3:
-                        return "color: #e74c3c; font-weight: bold;"
-                    return ""
-
-                st.dataframe(
-                    df_rup_display.style.map(highlight_ruptura, subset=["Qtd. Rupturas"]),
-                    width="stretch",
-                    hide_index=True,
-                    height=250,
-                    column_config={
-                        "Qtd. Rupturas": st.column_config.ProgressColumn(
-                            "Freq. Ruptura",
-                            format="%d",
-                            min_value=0,
-                            max_value=int(df_rup_display["Qtd. Rupturas"].max()),
-                            color="#e74c3c",  # Vermelho para alertar
-                        ),
-                        "Última Falha": st.column_config.TextColumn(width="small"),
-                    },
-                )
-
-                st.warning(
-                    ":material/lightbulb: **Ação Recomendada:** Revise o **Estoque Mínimo** e o **Lead Time** destes itens imediatamente para evitar paradas de linha."
-                )

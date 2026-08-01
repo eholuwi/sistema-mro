@@ -31,15 +31,44 @@ from services.db_functions import (
 from services import scm_sync
 from services import backup
 from ui.cache import invalidar_leituras
+from ui.paginas import ajuda
 from ui.tema import paleta_atual
 
 
 def render() -> None:
-    pal = paleta_atual()
+    """Configurações em 6 abas (v6.0.0). Antes eram 8 blocos empilhados num scroll só;
+    cada seção virou uma aba, as 5 Listas Mestras foram agrupadas em uma, e a Central de
+    Ajuda entrou como aba (deixou de ser item do menu lateral)."""
     st.title(":material/settings: Configurações do Sistema")
-    st.caption("Gestão de Listas Mestras e Parâmetros Globais.")
+    st.caption("Parâmetros globais, listas mestras, backup e a Central de Ajuda.")
 
-    # ── Aparência / Tema (v2.11.0) ────────────────────────────────────────────
+    aba_apar, aba_bkp, aba_imp, aba_sol, aba_listas, aba_ajuda = st.tabs(
+        [
+            ":material/palette: Aparência",
+            ":material/backup: Backup",
+            ":material/download: Importar Base",
+            ":material/badge: Solicitantes MRO",
+            ":material/list: Listas Mestras",
+            ":material/help: Ajuda",
+        ]
+    )
+    with aba_apar:
+        _secao_aparencia()
+    with aba_bkp:
+        _secao_backup()
+    with aba_imp:
+        _secao_importar_base()
+    with aba_sol:
+        _secao_solicitantes_mro()
+    with aba_listas:
+        _secao_listas_mestras()
+    with aba_ajuda:
+        ajuda.conteudo()
+
+
+def _secao_aparencia() -> None:
+    """Aparência / Tema (v2.11.0)."""
+    pal = paleta_atual()
     with st.container(border=True):
         st.subheader(":material/palette: Aparência")
         _tema_txt = ":material/dark_mode: Escuro" if pal["tipo"] == "dark" else ":material/light_mode: Claro"
@@ -53,10 +82,13 @@ def render() -> None:
         )
         st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Backup do banco (v5.8.0) ──────────────────────────────────────────────
-    # Os .bak automáticos só cobrem migração e o sync diário da API. Este é o backup
-    # sob demanda + o único caminho para quem usa o sistema pela REDE tirar uma cópia
-    # do servidor (o download_button entrega o arquivo na máquina de quem clicou).
+
+def _secao_backup() -> None:
+    """Backup do banco (v5.8.0).
+
+    Os .bak automáticos só cobrem migração e o sync diário da API. Este é o backup sob
+    demanda + o único caminho para quem usa o sistema pela REDE tirar uma cópia do
+    servidor (o download_button entrega o arquivo na máquina de quem clicou)."""
     with st.container(border=True):
         st.subheader(":material/backup: Backup do Banco")
         st.caption(
@@ -136,7 +168,9 @@ def render() -> None:
                     )
         st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Importação da base do Neidson — Tipo, Mínimo, Máximo, Lead Time (Item 1) ──
+
+def _secao_importar_base() -> None:
+    """Importação da base do Neidson — Tipo, Mínimo, Máximo, Lead Time (Item 1)."""
     with st.container(border=True):
         st.subheader(":material/download: Importar Base (Tipo/Categoria, Mínimo, Máximo, Lead Time)")
         st.caption(
@@ -194,7 +228,9 @@ def render() -> None:
                             st.error(res_a.get("erro", "Falha na importação."))
         st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Solicitantes MRO (SCM) — escopo do sync da API (v5.1.0 / F2) ──────────
+
+def _secao_solicitantes_mro() -> None:
+    """Solicitantes MRO (SCM) — escopo do sync da API (v5.1.0 / F2)."""
     with st.container(border=True):
         st.subheader(":material/badge: Solicitantes MRO (SCM)")
         st.caption(
@@ -270,73 +306,85 @@ def render() -> None:
                 st.error(f"Não foi possível resolver via API: {e}")
         st.markdown("<br>", unsafe_allow_html=True)
 
-    # Definição das categorias de listas
-    LISTAS_CONFIG = {
-        "centro_custo": ":material/work: Centros de Custo",
-        "local": ":material/location_on: Locais de Armazenagem",
-        "fornecedor": ":material/factory: Fornecedores",
-        "autorizador": ":material/key: Tipos de Autorizador",
-        "setor": ":material/apartment: Setores Solicitantes",  # Adicionado setor se necessário
-    }
 
-    for tipo_lista, titulo in LISTAS_CONFIG.items():
-        with st.container(border=True):
-            st.subheader(titulo)
+# Definição das categorias de listas
+LISTAS_CONFIG = {
+    "centro_custo": ":material/work: Centros de Custo",
+    "local": ":material/location_on: Locais de Armazenagem",
+    "fornecedor": ":material/factory: Fornecedores",
+    "autorizador": ":material/key: Tipos de Autorizador",
+    "setor": ":material/apartment: Setores Solicitantes",  # Adicionado setor se necessário
+}
 
-            # 1. Visualização da Lista Atual (Grid)
-            valores = listar_valores(tipo_lista)
 
-            if valores:
-                # Cria colunas dinâmicas (4 por linha)
-                cols = st.columns(4)
-                for i, val in enumerate(valores):
-                    with cols[i % 4]:
-                        # Card simples para cada item
-                        with st.container(border=True):
-                            c_txt, c_btn = st.columns([3, 1])
-                            c_txt.markdown(f"**{val}**")
-                            if c_btn.button(":material/close:", key=f"rm_{tipo_lista}_{i}", help="Remover"):
-                                remover_valor_lista(tipo_lista, val)
-                                invalidar_leituras()
-                                st.rerun()
-            else:
-                st.info(f"Nenhum {titulo.split(' ')[-1].lower()} cadastrado.")
+def _secao_listas_mestras() -> None:
+    """As 5 listas mestras. v6.0.0: agrupadas numa aba só, com sub-navegação por lista —
+    cinco abas de 1º nível para o mesmo tipo de coisa era o oposto de simplificar."""
+    sub = st.tabs(list(LISTAS_CONFIG.values()))
+    for aba, (tipo_lista, titulo) in zip(sub, LISTAS_CONFIG.items()):
+        with aba:
+            _lista_mestra(tipo_lista, titulo)
 
-            st.divider()
 
-            # v3.3.0 — atalho: semear a lista com o cadastro mestre de fornecedores
-            if tipo_lista == "fornecedor":
-                if st.button(
-                    ":material/sync: Sincronizar do Relatório de SCs",
-                    key="sync_forn",
-                    help="Adiciona os Nomes Fantasia do cadastro mestre (importado no "
-                    "Relatório de SCs) que ainda não estão na lista.",
-                ):
-                    _add, _tot = sincronizar_fornecedores_lista()
-                    invalidar_leituras()
-                    st.success(f"{_add} fornecedor(es) adicionado(s) — {_tot} no cadastro mestre.")
-                    time.sleep(1.0)
-                    st.rerun()
+def _lista_mestra(tipo_lista, titulo) -> None:
+    """Grade + remoção + adição de UMA lista mestra (corpo original do laço)."""
+    with st.container(border=True):
+        st.subheader(titulo)
 
-            # 2. Formulário de Adição
-            with st.form(f"form_add_{tipo_lista}", clear_on_submit=True):
-                c_input, c_btn = st.columns([3, 1])
-                novo_valor = c_input.text_input(
-                    f"Adicionar novo {titulo.split(' ', 1)[1].lower()}",
-                    placeholder="Digite e pressione Adicionar...",
-                    label_visibility="collapsed",
-                )
-                submitted = c_btn.form_submit_button(":material/add: Adicionar", width="stretch")
+        # 1. Visualização da Lista Atual (Grid)
+        valores = listar_valores(tipo_lista)
 
-                if submitted:
-                    if novo_valor.strip():
-                        ok, msg = adicionar_valor_lista(tipo_lista, novo_valor.strip())
-                        if ok:
+        if valores:
+            # Cria colunas dinâmicas (4 por linha)
+            cols = st.columns(4)
+            for i, val in enumerate(valores):
+                with cols[i % 4]:
+                    # Card simples para cada item
+                    with st.container(border=True):
+                        c_txt, c_btn = st.columns([3, 1])
+                        c_txt.markdown(f"**{val}**")
+                        if c_btn.button(":material/close:", key=f"rm_{tipo_lista}_{i}", help="Remover"):
+                            remover_valor_lista(tipo_lista, val)
                             invalidar_leituras()
-                            st.success(msg)
-                            time.sleep(0.5)
                             st.rerun()
-                        else:
-                            st.error(msg)
+        else:
+            st.info(f"Nenhum {titulo.split(' ')[-1].lower()} cadastrado.")
+
+        st.divider()
+
+        # v3.3.0 — atalho: semear a lista com o cadastro mestre de fornecedores
+        if tipo_lista == "fornecedor":
+            if st.button(
+                ":material/sync: Sincronizar do Relatório de SCs",
+                key="sync_forn",
+                help="Adiciona os Nomes Fantasia do cadastro mestre (importado no "
+                "Relatório de SCs) que ainda não estão na lista.",
+            ):
+                _add, _tot = sincronizar_fornecedores_lista()
+                invalidar_leituras()
+                st.success(f"{_add} fornecedor(es) adicionado(s) — {_tot} no cadastro mestre.")
+                time.sleep(1.0)
+                st.rerun()
+
+        # 2. Formulário de Adição
+        with st.form(f"form_add_{tipo_lista}", clear_on_submit=True):
+            c_input, c_btn = st.columns([3, 1])
+            novo_valor = c_input.text_input(
+                f"Adicionar novo {titulo.split(' ', 1)[1].lower()}",
+                placeholder="Digite e pressione Adicionar...",
+                label_visibility="collapsed",
+            )
+            submitted = c_btn.form_submit_button(":material/add: Adicionar", width="stretch")
+
+            if submitted:
+                if novo_valor.strip():
+                    ok, msg = adicionar_valor_lista(tipo_lista, novo_valor.strip())
+                    if ok:
+                        invalidar_leituras()
+                        st.success(msg)
+                        time.sleep(0.5)
+                        st.rerun()
                     else:
-                        st.warning("O campo não pode estar vazio.")
+                        st.error(msg)
+                else:
+                    st.warning("O campo não pode estar vazio.")

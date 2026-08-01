@@ -1,5 +1,9 @@
-"""Página Ajuda (v5.0.0) — Central de Ajuda: guias por perfil, Manual do Sistema
+"""Ajuda (v6.0.0) — Central de Ajuda: guias por perfil, Manual do Sistema
 (tela a tela), canal de feedback e backlog.
+
+v6.0.0 — deixou de ser item do menu lateral e virou **aba de Configurações** (pedido do
+usuário: menu mais curto). O corpo foi extraído para `conteudo()`, que é o que a aba
+chama; `render()` segue montando a página inteira.
 
 Migrada de app.py na fundação da refatoração (F1). Comportamento idêntico ao bloco
 `elif pagina == "Ajuda"` anterior — mesmos widgets e mesmas `key=` (preservar chaves
@@ -38,7 +42,14 @@ STATUS_FEEDBACK = ["Novo", "Em análise", "Planejado", "Em andamento", "Concluí
 
 
 def render() -> None:
+    """Página completa (título + corpo). Desde a v6.0.0 a Ajuda é uma ABA de
+    Configurações, que chama `conteudo()`."""
     st.title(":material/help: Central de Ajuda")
+    conteudo()
+
+
+def conteudo() -> None:
+    """Corpo da Central de Ajuda, SEM título — reusável dentro de uma aba (v6.0.0)."""
     st.caption(
         "Guias por perfil, o **Manual do Sistema** (tela a tela) e o canal de feedback. "
         ":material/lightbulb: Tema claro/escuro: botão **Tema** na barra lateral."

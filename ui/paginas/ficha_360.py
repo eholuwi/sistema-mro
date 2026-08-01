@@ -1,9 +1,14 @@
-"""Página Ficha 360 do Material (v5.4.0 / F4b) — a vida útil do item em uma tela.
+"""Página Ficha 360 do Material (v6.0.0) — a vida útil do item em uma tela.
 
 Migrada do bloco inline do `app.py` (migração FIEL). Read-only: a única escrita é a
 imagem do produto (`salvar_imagem_item`/`remover_imagem_item`), que não entra nas
 leituras cacheadas (inventário/dashboards) — logo NÃO chama `invalidar_leituras()`.
 Todo o conteúdo é montado por `services.ficha.montar_ficha_360`.
+
+v6.0.0 — duas mudanças de UX, ambas sem tocar em cálculo: (1) a **recomendação
+automática de reposição** saiu da tela (a decisão de compra vive no Assistente de
+Reposição, mesmo motor); (2) a **Evolução de preço** deixou o `st.line_chart` cru e
+passou a usar o dado que a query já trazia (moeda, fornecedor, PO, SC).
 
 Removido na migração o `_render_ficha_guarda_chuva` (código morto desde a v4.9.0 — a
 sub-aba Guarda-Chuva virou controle próprio em "Controle de SC → ☂️ Guarda-Chuva").
@@ -23,16 +28,111 @@ from services.ficha import (
     remover_imagem_item,
 )
 from ui.tema import paleta_atual
-from ui.formatos import fmt
-from ui.componentes.graficos import _barv, _mes_label
+from ui.formatos import fmt, fmt_brl, fmt_moeda
+from ui.componentes.graficos import _barv, _linha_valor, _mes_label
 from ui.componentes.selecao import sel_material
+
+
+def _hover_preco(linha):
+    """Linhas extras do tooltip de um ponto da evolução de preço: fornecedor, PO e SC.
+
+    Devolve string pronta (já com as quebras do Plotly) — vazia quando o histórico não
+    trouxe nenhum dos três, para o tooltip não ficar com rótulos órfãos."""
+    partes = [
+        (rot, str(linha.get(campo) or "").strip())
+        for rot, campo in (("Fornecedor", "fornecedor"), ("PO", "numero_po"), ("SC", "numero_sc"))
+    ]
+    return "".join(f"<br>{rot}: {val}" for rot, val in partes if val)
+
+
+def _render_evolucao_preco(ep):
+    """Evolução de preço (v6.0.0) — antes um `st.line_chart` cru que só usava a coluna
+    `preco_unitario` e descartava moeda/fornecedor/PO/SC que a query já trazia.
+
+    Mesma query (`obter_evolucao_preco`), mesmo dado: só o desenho mudou. Com um único
+    ponto o gráfico de linha não diz nada, então vira métrica. Quando o histórico mistura
+    moedas, o eixo não pode somar tudo em R$ — a tabela substitui o gráfico."""
+    if not ep:
+        return
+
+    st.markdown("##### :material/trending_up: Evolução de preço")
+    df_ep = pd.DataFrame(ep)
+    df_ep["data"] = pd.to_datetime(df_ep["data"], errors="coerce")
+    df_ep = df_ep.dropna(subset=["data"]).sort_values("data")
+    if df_ep.empty:
+        st.caption("Histórico de preços sem data utilizável.")
+        return
+
+    moedas = {str(m).strip().upper() for m in df_ep["moeda"].dropna() if str(m).strip()}
+    if len(moedas) > 1:
+        st.caption(
+            f":material/language: Histórico em mais de uma moeda ({', '.join(sorted(moedas))}) — "
+            "sem conversão cambial, os preços vão em tabela para não somar moedas diferentes."
+        )
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Data": fmt(str(r["data"].date())),
+                        "Preço": fmt_moeda(r["preco_unitario"], r.get("moeda") or "R$"),
+                        "Fornecedor": r.get("fornecedor") or "—",
+                        "PO": r.get("numero_po") or "—",
+                        "SC": r.get("numero_sc") or "—",
+                        "Origem": r.get("origem") or "—",
+                    }
+                    for _, r in df_ep.iterrows()
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+        return
+
+    _moeda = next(iter(moedas), "R$")
+    _prefixo = "R$ " if _moeda in ("", "R$", "BRL") else f"{_moeda} "
+    primeiro = float(df_ep["preco_unitario"].iloc[0])
+    ultimo = float(df_ep["preco_unitario"].iloc[-1])
+
+    m1, m2, m3 = st.columns(3)
+    _var = ((ultimo - primeiro) / primeiro * 100) if primeiro else None
+    m1.metric(
+        "Último preço",
+        fmt_moeda(ultimo, _prefixo.strip()),
+        delta=(f"{_var:+.1f}% vs. o 1º registro".replace(".", ",") if _var is not None else None),
+        delta_color="inverse",  # preço subindo é ruim para o comprador
+        help=f"Registro mais recente ({fmt(str(df_ep['data'].iloc[-1].date()))}).",
+    )
+    m2.metric("Menor preço", fmt_moeda(df_ep["preco_unitario"].min(), _prefixo.strip()))
+    m3.metric(
+        "Registros",
+        len(df_ep),
+        help="Preços vindos do Relatório de SCs (SCM/SC7) — um por compra conhecida.",
+    )
+
+    if len(df_ep) < 2:
+        st.caption(
+            ":material/info: Um único preço no histórico — a curva aparece quando houver "
+            "uma segunda compra registrada."
+        )
+        return
+
+    st.plotly_chart(
+        _linha_valor(
+            list(df_ep["data"]),
+            [float(v) for v in df_ep["preco_unitario"]],
+            hover=[_hover_preco(r) for _, r in df_ep.iterrows()],
+            prefixo=_prefixo,
+        ),
+        width="stretch",
+        config={"displayModeBar": False},
+    )
+    st.caption("Passe o mouse em cada ponto para ver fornecedor, PO e SC daquela compra.")
 
 
 def _render_ficha_visao_geral(ficha):
     """Corpo original da Ficha 360 (v4.4.0: extraido para a 1a aba \"Visao Geral\")."""
     PAL = paleta_atual()
     it = ficha["item"]
-    rep = ficha["reposicao"]
     mat = ficha["maturidade"]
 
     def _g(v):  # número curto e seguro (None -> 0)
@@ -117,32 +217,12 @@ def _render_ficha_visao_geral(ficha):
             f"de estoque = **{_fat_f:g} {_uc_f}** (fator {_fat_f:g})."
         )
 
-    # ── Recomendação de reposição (read-only, reusa v2.5) ─────────────
+    # v6.0.0 — a RECOMENDAÇÃO AUTOMÁTICA de reposição saiu desta tela (pedido do
+    # usuário): a decisão de comprar se dá no **Controle de SC › Assistente de
+    # Reposição**, que usa o MESMO motor (`services/planejamento.py`). A chave
+    # `reposicao` segue no view-model de `montar_ficha_360` — nada de cálculo mudou,
+    # só deixou de ser desenhada aqui.
     un = it.get("unidade") or "UN"
-    if it.get("sem_movimentacao"):
-        st.info(
-            "⚪ **Sem movimentação** — item sem consumo real; fora da lista "
-            "de compra. Revise no **Assistente de Reposição** (opção "
-            '"Mostrar itens sem movimentação") se for um spare a manter em estoque.'
-        )
-    elif rep["precisa"] and rep["qtd_sugerida"] > 0:
-        st.warning(
-            f":material/shopping_cart: **{rep['prioridade']}** — repor **{rep['qtd_sugerida']} "
-            f"{un}**. {rep['justificativa']}"
-        )
-    elif rep["precisa"]:
-        # v2.7.1: gatilho ativo mas qtd = 0 → o saldo residual já cobre o alvo
-        # (antes aparecia "repor 0", confuso).
-        st.info(
-            f"🟡 **{rep['prioridade']}** — **sem compra agora**: o saldo residual "
-            f"(**{_g(it.get('estoque_em_transito'))} {un}** já negociados) "
-            f"cobre o alvo de **{_g(rep['alvo'])} {un}**. Reavaliar quando o material chegar."
-        )
-    else:
-        st.success(
-            ":material/check_circle: Sem necessidade de reposição no momento "
-            "(estoque + saldo residual cobrem o horizonte)."
-        )
 
     # ── Estoque / cobertura / giro ────────────────────────────────────
     st.divider()
@@ -242,13 +322,15 @@ def _render_ficha_visao_geral(ficha):
                 "**consumido no ano** (estimado pelo último preço de compra)."
             )
             vc = ficha["valor"]["valor_consumido"]
-            st.metric("Valor em estoque", f"R$ {ficha['valor']['valor_estoque']:,.2f}")
+            st.metric("Valor em estoque", fmt_brl(ficha["valor"]["valor_estoque"]))
             # v2.7.1: valor unitário (preço de referência) logo abaixo
             _preco_un = vc.get("preco") or 0
-            st.caption(f"Valor unitário: **{vc['moeda']} {_preco_un:,.2f}** / {un} · origem {vc['origem']}")
+            st.caption(
+                f"Valor unitário: **{fmt_moeda(_preco_un, vc['moeda'])}** / {un} · origem {vc['origem']}"
+            )
             st.metric(
                 f"Valor consumido (YTD {date.today().year})",
-                f"{vc['moeda']} {vc['valor']:,.2f}",
+                fmt_moeda(vc["valor"], vc["moeda"]),
                 help=f"Estimativa (último preço, origem {vc['origem']}). "
                 f"Acumulado de 01/01/{date.today().year} até hoje.",
             )
@@ -259,12 +341,7 @@ def _render_ficha_visao_geral(ficha):
                 )
 
     # ── Evolução de preço ─────────────────────────────────────────────
-    ep = ficha["evolucao_preco"]
-    if ep:
-        st.markdown("##### :material/trending_up: Evolução de preço")
-        df_ep = pd.DataFrame(ep)
-        df_ep["data"] = pd.to_datetime(df_ep["data"], errors="coerce")
-        st.line_chart(df_ep.dropna(subset=["data"]).set_index("data")["preco_unitario"])
+    _render_evolucao_preco(ficha["evolucao_preco"])
 
     # ── Quem consome (departamentos / centros de custo) ───────────────
     st.markdown("##### :material/group: Quem consome (últimos 180 dias)")

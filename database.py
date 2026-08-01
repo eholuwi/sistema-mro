@@ -6,6 +6,10 @@ import logging
 from datetime import datetime
 from contextlib import contextmanager
 
+# `services.constants` não importa nada do projeto (só `re`), então não há ciclo:
+# database continua sendo a camada mais baixa que TOCA o banco.
+from services.constants import VERSAO
+
 # v5.5.0 (F5) — caminho do banco resolvido de forma ABSOLUTA e sobrescrevível por env.
 # Sem MRO_DB_PATH (dev do Luis): resolve p/ o mro.db ao lado deste arquivo — o mesmo lugar
 # onde o antigo "mro.db" relativo já caía quando o Streamlit roda a partir de sistema-mro/.
@@ -841,7 +845,9 @@ def criar_banco():
 
     conn.execute("PRAGMA optimize;")
     conn.close()
-    logger.info("Banco de dados criado/verificado com sucesso. Versão 5.7.0")
+    # v6.0.0 — a versão vem de services/constants (fonte única). Este log dizia 5.7.0
+    # com o app na 5.9.0, porque era um literal que ninguém lembrava de bumpar.
+    logger.info("Banco de dados criado/verificado com sucesso. Versão %s", VERSAO)
 
 
 def _migrar(conn):

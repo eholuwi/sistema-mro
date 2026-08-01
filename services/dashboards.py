@@ -483,7 +483,12 @@ def montar_visao_almoxarifado(hoje=None):
     """View-model do Dashboard do Almoxarifado (§2): saúde do estoque, prioridades do dia,
     entradas/saídas por período, materiais mais movimentados, setores, consumo e histórico
     mensal. PURO (DT-3). Fora (dependem de dados que não existem): Mapa do Almoxarifado
-    (exige modelo de localização/prateleira) e itens de requisição digital."""
+    (exige modelo de localização/prateleira) e itens de requisição digital.
+
+    v6.0.0 — ganha o bloco `ytd` (Consumido no Ano, Requisições Atendidas no Ano, Itens
+    Movimentados no Ano e Consumo por Tipo de Material), herdado do extinto KPI Mensal.
+    Nada é recalculado: reusa `_consumo_ytd_por_item`, `_n_requisicoes_ytd` e
+    `_composicao_por_tipo` — as MESMAS funções que `montar_visao_executiva` consome."""
     from datetime import timedelta
 
     hoje = hoje or date.today()
@@ -625,6 +630,19 @@ def montar_visao_almoxarifado(hoje=None):
         "saidas": [h["sai"] for h in hist],
     }
 
+    # ── YTD (v6.0.0, herdado do KPI Mensal) — ano corrente, 1º/jan até hoje ─────
+    # Consumo = saída REAL por requisição (ajuste de inventário não entra), valorado
+    # pelo preço de referência. Uma varredura alimenta os três indicadores + o donut.
+    ano = hoje.year
+    consumo_itens = _consumo_ytd_por_item(ano)
+    ytd = {
+        "ano": ano,
+        "valor_consumido": _total_consumido(consumo_itens),
+        "n_requisicoes": _n_requisicoes_ytd(ano),
+        "itens_movimentados": len(consumo_itens),
+        "composicao_tipo": _composicao_por_tipo(consumo_itens),
+    }
+
     return {
         "kpis": {
             "itens_cadastrados": total,
@@ -644,6 +662,7 @@ def montar_visao_almoxarifado(hoje=None):
         "distribuicao": dist,
         "cobertura_faixa": cob_faixa,
         "abc": abc,
+        "ytd": ytd,
         "entradas": entradas,
         "saidas": saidas,
         "top_recebidos": top_recebidos,
@@ -712,6 +731,14 @@ def _classificar_abc(itens_consumo):
         x["pct_acumulado"] = round((acc / total * 100.0) if total else 0.0, 1)
         x["classe"] = "A" if prev < ABC_LIMIAR_A else ("B" if prev < ABC_LIMIAR_B else "C")
     return itens, round(total, 2)
+
+
+def _total_consumido(itens_consumo):
+    """Valor total (R$) consumido no ano — soma da lista de `_consumo_ytd_por_item`.
+
+    É o indicador **Consumido no Ano** (YTD). Bate com o total do ABC porque
+    `_classificar_abc` só descarta itens de valor 0, que somam 0. v6.0.0."""
+    return round(sum(x["valor"] for x in itens_consumo), 2)
 
 
 def _composicao_por_tipo(itens_consumo, top=8):

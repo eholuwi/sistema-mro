@@ -28,7 +28,7 @@ def test_menu_opcoes_e_icones_alinhados():
     # option_menu recebe options e icons na mesma ordem/tamanho — desalinhar quebra o menu.
     assert len(opcoes_menu()) == len(icones_menu()) == len(ROTAS)
     assert opcoes_menu()[0] == "Dashboard"  # 1º item (default_index=0)
-    assert {"Ajuda", "Configurações"} <= set(opcoes_menu())
+    assert "Configurações" in opcoes_menu()
 
 
 def test_rotas_migradas_sao_as_com_render():
@@ -37,9 +37,7 @@ def test_rotas_migradas_sao_as_com_render():
     assert ROTAS_MIGRADAS == frozenset(ROTAS)
     assert ROTAS_MIGRADAS == frozenset(
         {
-            "Ajuda",
             "Configurações",
-            "SCM Integrado",
             "Saldo em Estoque",
             "Cadastro de Itens",  # v5.9.0 — era "Gerenciar Itens"
             "Dashboard",
@@ -50,6 +48,18 @@ def test_rotas_migradas_sao_as_com_render():
     )
     for nome in ROTAS_MIGRADAS:
         assert ROTAS[nome].render is not None
+
+
+def test_menu_v600_nao_tem_mais_ajuda_nem_scm_integrado():
+    """v6.0.0 — as duas telas saíram do MENU, mas NÃO do sistema: viraram abas
+    (SCM Integrado → Controle de SC; Ajuda → Configurações). O teste protege as duas
+    metades: sumiram da navegação E continuam chamáveis por `conteudo()`."""
+    from ui.paginas import ajuda, scm_integrado
+
+    assert {"Ajuda", "SCM Integrado"}.isdisjoint(set(opcoes_menu()))
+    assert len(opcoes_menu()) == 7
+    assert callable(ajuda.conteudo)
+    assert callable(scm_integrado.conteudo)
 
 
 def test_render_pagina_recusa_pagina_inexistente():

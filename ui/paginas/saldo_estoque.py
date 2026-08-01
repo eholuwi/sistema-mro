@@ -4,6 +4,9 @@ Migrada do bloco inline do `app.py`. Padroniza os filtros/tabela para
 `barra_filtros`/`tabela_paginada` (decisão F4a). O read quente do inventário usa
 `inventario_cached()`; toda escrita da contagem física chama `invalidar_leituras()`.
 Regra de negócio (ajuste físico / conferência / movimentação) preservada 1:1.
+
+v6.0.0 — os filtros rápidos passaram de 3 para os 5 pedidos pela operação: A Comprar,
+Atenção, OK, Parada de Linha e Não Inventariado (ver `_FILTROS_RAPIDOS`).
 """
 
 from __future__ import annotations
@@ -70,10 +73,30 @@ def _pill_nao_inventariado(df):
     return ~(df["data_inventario"].fillna("").astype(str).str.strip().str.len() > 0)
 
 
+def _pill_importancia(valor):
+    """Fábrica de predicado: linhas cuja `importancia` é exatamente `valor`
+    (ex.: 'Parada de Linha'). Comparação sem espaços e sem caixa."""
+
+    def _pred(df):
+        if "importancia" not in df.columns:
+            return pd.Series(True, index=df.index)
+        return df["importancia"].fillna("").astype(str).str.strip().str.casefold() == valor.casefold()
+
+    return _pred
+
+
+# v6.0.0 — os 5 filtros pedidos pelo usuário. Continuam sendo PILLS de múltipla escolha
+# (contrato de `barra_filtros`): cada pill é um predicado independente sobre uma coluna
+# que já existe, combinados por AND. Não há categoria única nem ordem de precedência —
+# um item "Parada de Linha" que também está "A Comprar" aparece nos dois filtros, que é
+# o que a operação espera ao filtrar. Nenhuma regra de negócio nova foi criada aqui:
+# `status_material` e `importancia` vêm de `listar_inventario()` como sempre.
 _FILTROS_RAPIDOS = {
-    "🔴 A comprar": _pill_status_contem("COMPRAR"),
+    "🔴 A Comprar": _pill_status_contem("COMPRAR"),
     "🟡 Atenção": _pill_status_contem("ATENÇÃO"),
-    "Não inventariados": _pill_nao_inventariado,
+    "🟢 OK": _pill_status_contem("OK"),
+    "⛔ Parada de Linha": _pill_importancia("Parada de Linha"),
+    "🔎 Não Inventariado": _pill_nao_inventariado,
 }
 _AVANCADOS = {
     "multiselect": [

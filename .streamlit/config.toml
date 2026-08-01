@@ -1,12 +1,35 @@
-# Tema da marca — MRO Inventus Power (v4.0.0 — redesign)
+# Tema da marca — MRO Inventus Power (v6.0.0 — alinhado a docs/template_moderno.html)
 # Padrão CLARO + cor de marca (laranja). A troca claro/escuro é feita por um BOTÃO na
 # barra lateral do app (não pelo menu ☰), que reaplica services/tema.paleta() no CSS
 # global, no option_menu e nos gráficos. As tabelas nativas (st.dataframe) seguem este
 # tema base — por isso o padrão claro fica 100% consistente.
+#
+# ⚠️ Os valores abaixo espelham `services/tema.py` (`ACCENT` e o bloco "light"). Mudou lá,
+# mude aqui: o config serve os widgets NATIVOS (tabelas, chips, foco) e o módulo serve o
+# CSS/os gráficos — só ficam coerentes se os dois contarem a mesma história.
 [theme]
 base = "light"
-primaryColor = "#F36F21"
-backgroundColor = "#F6F7F9"
-secondaryBackgroundColor = "#FFFFFF"
-textColor = "#1A1D21"
+primaryColor = "#F58220"             # --primary
+backgroundColor = "#F5F5F5"          # --bg
+secondaryBackgroundColor = "#FFFFFF"  # --surface
+textColor = "#2B2B2B"                # --text
+borderColor = "#E5E5E5"              # --border
 font = "sans serif"
+
+# Semânticas do template — badges, texto colorido (:red[...]) e sparklines nativos.
+redColor = "#DC2626"                 # --negative
+greenColor = "#16A34A"               # --positive
+orangeColor = "#F58220"              # --primary
+blueColor = "#1D4ED8"                # --po-entr
+grayColor = "#7A7F87"                # --muted
+
+# Série categórica dos gráficos nativos (st.bar_chart etc.). MESMA ordem de
+# `services.tema.SERIE_CATEGORICA`: laranja → azul → vermelho antes de qualquer verde,
+# porque laranja e verde ficam indistinguíveis em protanopia (nota do template).
+chartCategoricalColors = [
+  "#F58220", "#1D4ED8", "#B91C1C", "#5B5B5B",
+  "#7C3AED", "#0E7490", "#B45309", "#15803D", "#9CA3AF",
+]
+
+dataframeBorderColor = "#E5E5E5"
+dataframeHeaderBackgroundColor = "#EEF0F2"  # --gray-soft

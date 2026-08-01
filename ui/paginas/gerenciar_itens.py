@@ -58,9 +58,32 @@ CAMPOS_EDICAO = (
     "ed_lead",
     "ed_min",
     "ed_max",
+    "ed_tem_conv",  # v6.0.0 — o checkbox precisa reler o item novo ao trocar de item
     "ed_uc",
     "ed_fator",
 )
+
+# v6.0.0 — a conversão de unidades passou a ficar atrás de um checkbox nas DUAS abas
+# (Novo e Editar). Rótulo único para as duas (DRY) e o predicado que decide se o
+# checkbox nasce marcado na edição.
+LABEL_CONVERSAO = "Este material é comprado em uma unidade diferente da unidade de estoque"
+
+
+def tem_conversao(item):
+    """True se o item JÁ tem conversão de unidades curada — fator ≠ 1 **ou** unidade de
+    compra gravada e diferente da de estoque.
+
+    É o que faz o checkbox da edição nascer marcado. Sem isso, um item já curado abriria
+    com os campos escondidos e o salvamento devolveria fator 1 sem o gestor ver — o
+    recebimento passaria a somar a quantidade crua no estoque. Puro/testável."""
+    if not item:
+        return False
+    fator = float(item.get("fator_conversao") or 1.0)
+    if abs(fator - 1.0) > 1e-9:
+        return True
+    uc = (item.get("unidade_compra") or "").strip()
+    un = (item.get("unidade") or "").strip()
+    return bool(uc) and uc.casefold() != un.casefold()
 
 
 def render() -> None:
@@ -97,28 +120,39 @@ def render() -> None:
             est_ini_novo = c4.number_input("Estoque Inicial", min_value=0.0, value=0.0)
 
             # ── Conversão de unidades (curadoria v2.9.0) — opcional ──────────────
-            st.markdown("###### :material/sync: Conversão de unidades (se comprado em outra unidade)")
+            # v6.0.0: os campos só aparecem quando o usuário declara que há conversão.
+            # O caso comum (compra e estoque na mesma unidade) grava o padrão de sempre:
+            # unidade_compra=None e fator=FATOR_CONVERSAO_PADRAO.
+            st.markdown("###### :material/sync: Conversão de unidades")
             _sug_novo = sugerir_conversao(
                 {"nome_item": nome_novo, "descricao": desc_novo, "unidade": un_novo}
             )
-            cvn1, cvn2 = st.columns(2)
-            uc_novo = cvn1.text_input(
-                "Unidade de compra",
-                value=(_sug_novo["unidade_compra_sugerida"] or un_novo),
-                help="Unidade em que o fornecedor vende (L, KG, BB, par…). "
-                "Igual à de estoque se não houver diferença.",
+            tem_conv_novo = st.checkbox(
+                LABEL_CONVERSAO,
+                value=False,
+                key="novo_tem_conversao",
+                help="Marque só se o fornecedor vende numa unidade diferente da que você "
+                "controla no estoque (ex.: compra em GL, estoca em L).",
             )
-            fator_novo = cvn2.number_input(
-                "Fator de conversão",
-                min_value=0.0,
-                value=float(_sug_novo["fator_sugerido"] or 1.0),
-                step=1.0,
-                help="Quantas unidades de compra cabem em 1 de estoque. Ex.: 1 GL = 5 L → 5.",
-            )
-            if _sug_novo["fator_sugerido"]:
-                st.caption(
-                    f":material/lightbulb: Sugestão automática pelo nome do item: {_sug_novo['origem']}."
+            uc_novo, fator_novo = None, FATOR_CONVERSAO_PADRAO
+            if tem_conv_novo:
+                cvn1, cvn2 = st.columns(2)
+                uc_novo = cvn1.text_input(
+                    "Unidade de Compra",
+                    value=(_sug_novo["unidade_compra_sugerida"] or un_novo),
+                    help="Unidade em que o fornecedor vende (L, KG, BB, par…).",
                 )
+                fator_novo = cvn2.number_input(
+                    "Fator de Conversão",
+                    min_value=0.0,
+                    value=float(_sug_novo["fator_sugerido"] or 1.0),
+                    step=1.0,
+                    help="Quantas unidades de compra cabem em 1 de estoque. Ex.: 1 GL = 5 L → 5.",
+                )
+                if _sug_novo["fator_sugerido"]:
+                    st.caption(
+                        f":material/lightbulb: Sugestão automática pelo nome do item: {_sug_novo['origem']}."
+                    )
 
             if st.button(":material/save: Salvar Novo Item", type="primary", width="stretch"):
                 if not pn_novo or not nome_novo:
@@ -143,7 +177,9 @@ def render() -> None:
                             estoque_minimo=min_novo,
                             lead_time=lead_novo,
                             unidade_compra=(uc_novo or "").strip() or None,
-                            fator_conversao=fator_novo if fator_novo > 0 else FATOR_CONVERSAO_PADRAO,
+                            fator_conversao=(
+                                fator_novo if (tem_conv_novo and fator_novo > 0) else FATOR_CONVERSAO_PADRAO
+                            ),
                         )
                         if ok:
                             invalidar_leituras()
@@ -260,6 +296,9 @@ def render() -> None:
                     st.markdown(f"**Status:** `{item_sel['status_material']}`")
 
                 # ── Conversão de unidades (curadoria v2.9.0) ─────────────────────
+                # v6.0.0: escondida atrás de um checkbox. Ele NASCE MARCADO quando o item
+                # já tem conversão gravada — do contrário o gestor editaria sem ver os
+                # campos e o salvamento zeraria o fator sem ele perceber.
                 st.markdown("---")
                 st.markdown("##### :material/sync: Conversão de unidades (compra ↔ estoque)")
                 _sug = sugerir_conversao(item_sel)
@@ -275,33 +314,46 @@ def render() -> None:
                     if (_nao_curado and _sug["fator_sugerido"])
                     else _stored_fator
                 )
-                cvc1, cvc2 = st.columns([1, 1])
-                ed_uc = cvc1.text_input(
-                    "Unidade de compra",
-                    value=_def_uc,
-                    key="ed_uc",
-                    help="Unidade em que o fornecedor vende (L, KG, BB, par…). "
-                    "Deixe igual à de estoque se não houver diferença. "
-                    f"Sugestões: {', '.join(UNIDADES_COMPRA_SUGERIDAS[:10])}…",
+                ed_tem_conv = st.checkbox(
+                    LABEL_CONVERSAO,
+                    value=tem_conversao(item_sel),
+                    key="ed_tem_conv",
+                    help="Desmarque para voltar ao padrão (compra e estoque na mesma "
+                    "unidade, fator 1). Marque para definir a unidade de compra e o fator.",
                 )
-                ed_fator = cvc2.number_input(
-                    "Fator de conversão",
-                    min_value=0.0,
-                    value=float(_def_fator),
-                    step=1.0,
-                    key="ed_fator",
-                    help="Quantas unidades de COMPRA cabem em 1 unidade de ESTOQUE. "
-                    "Ex.: 1 GL = 5 L → fator 5. Fator 1 = mesma unidade (sem conversão).",
-                )
-                _uc_txt = (ed_uc or _un_est).strip() or _un_est
-                if abs(ed_fator - 1.0) > 1e-9 and _uc_txt.upper() != _un_est.upper():
-                    st.caption(
-                        f":material/straighten: **1 {_un_est}** de estoque = **{ed_fator:g} {_uc_txt}** de compra. "
-                        f"No recebimento, cada {ed_fator:g} {_uc_txt} recebidos viram 1 {_un_est} no estoque."
+                ed_uc, ed_fator = None, FATOR_CONVERSAO_PADRAO
+                if ed_tem_conv:
+                    cvc1, cvc2 = st.columns([1, 1])
+                    ed_uc = cvc1.text_input(
+                        "Unidade de Compra",
+                        value=_def_uc,
+                        key="ed_uc",
+                        help="Unidade em que o fornecedor vende (L, KG, BB, par…). "
+                        f"Sugestões: {', '.join(UNIDADES_COMPRA_SUGERIDAS[:10])}…",
                     )
+                    ed_fator = cvc2.number_input(
+                        "Fator de Conversão",
+                        min_value=0.0,
+                        value=float(_def_fator),
+                        step=1.0,
+                        key="ed_fator",
+                        help="Quantas unidades de COMPRA cabem em 1 unidade de ESTOQUE. "
+                        "Ex.: 1 GL = 5 L → fator 5. Fator 1 = mesma unidade (sem conversão).",
+                    )
+                    _uc_txt = (ed_uc or _un_est).strip() or _un_est
+                    if abs(ed_fator - 1.0) > 1e-9 and _uc_txt.upper() != _un_est.upper():
+                        st.caption(
+                            f":material/straighten: **1 {_un_est}** de estoque = **{ed_fator:g} {_uc_txt}** de compra. "
+                            f"No recebimento, cada {ed_fator:g} {_uc_txt} recebidos viram 1 {_un_est} no estoque."
+                        )
+                    else:
+                        st.caption(":material/straighten: Sem conversão (compra e estoque na mesma unidade).")
+                    st.caption(f":material/lightbulb: Sugestão do sistema: {_sug['origem']}.")
                 else:
-                    st.caption(":material/straighten: Sem conversão (compra e estoque na mesma unidade).")
-                st.caption(f":material/lightbulb: Sugestão do sistema: {_sug['origem']}.")
+                    st.caption(
+                        f":material/straighten: Compra e estoque na mesma unidade (**{_un_est}**), "
+                        "fator 1 — o recebimento soma a quantidade recebida como veio."
+                    )
 
                 if st.button(":material/check_circle: Atualizar Item", type="primary", width="stretch"):
                     dados_edicao = {
@@ -316,7 +368,9 @@ def render() -> None:
                         "estoque_minimo": ed_min,
                         "estoque_maximo": ed_max,
                         "unidade_compra": (ed_uc or "").strip() or None,
-                        "fator_conversao": ed_fator if ed_fator > 0 else FATOR_CONVERSAO_PADRAO,
+                        "fator_conversao": (
+                            ed_fator if (ed_tem_conv and ed_fator > 0) else FATOR_CONVERSAO_PADRAO
+                        ),
                     }
                     ok, msg = atualizar_item_inventario(item_sel["id"], dados_edicao)
                     if ok:

@@ -53,4 +53,14 @@ def test_config_servidor_toml_sanidade():
     assert cfg["server"]["port"] == 8501
     assert cfg["server"]["headless"] is True
     # Superset theme+server: o tema da marca continua presente.
-    assert cfg["theme"]["primaryColor"] == "#F36F21"
+    # v6.0.0 — compara com a FONTE (services/tema.ACCENT) em vez de repetir o hex aqui:
+    # o config de produção e o de dev precisam seguir o módulo, não uma cópia esquecida.
+    from services.tema import ACCENT
+
+    assert cfg["theme"]["primaryColor"] == ACCENT
+
+    dev = tomllib.loads((PROJ / ".streamlit" / "config.toml").read_text(encoding="utf-8"))
+    assert cfg["theme"]["primaryColor"] == dev["theme"]["primaryColor"]
+    assert cfg["theme"]["backgroundColor"] == dev["theme"]["backgroundColor"]
+    assert cfg["theme"]["textColor"] == dev["theme"]["textColor"]
+    assert cfg["theme"]["chartCategoricalColors"] == dev["theme"]["chartCategoricalColors"]

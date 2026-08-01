@@ -1,12 +1,19 @@
-"""Página Dashboard (v5.3.0 / F4a) — 3 abas por público (Comprador/Almoxarifado/Mensal).
+"""Página Dashboard (v6.0.0) — 2 abas por público (Comprador / Almoxarifado).
 
 Migrada do bloco inline do `app.py`. Os assemblers seguem puros em
 `services/dashboards.py`; aqui é só o desenho. Os construtores de gráfico foram para
 `ui/componentes/graficos.py` (compartilhados com Ficha 360/Movimentação na F4b).
 
+v6.0.0 — a aba **KPI Mensal** foi extinta (pedido do usuário: menos dashboards). O que
+sobreviveu dela migrou para o Almoxarifado: Consumido no Ano, Requisições Atendidas no
+Ano, Itens Movimentados no Ano e Consumo por Tipo de Material. O assembler
+`montar_visao_executiva()` PERMANECE em services/ (coberto por test_v320) — só perdeu o
+consumidor de UI. O Almoxarifado também herdou 5 blocos da aba Dashboard da Movimentação
+(tendência, capital parado, maior valor em estoque, divergências e ruptura).
+
 O cluster de DRILL-DOWN (modal + cards/seletores clicáveis) permanece nesta página:
 hoje o Dashboard é seu único consumidor — extrair p/ ui/componentes/ seria abstração
-antecipada. Se a Ficha 360/Movimentação precisarem dele na F4b, promove-se então.
+antecipada.
 
 Cache: os assemblers (caros) passam por `ui/cache.py`; toda escrita do app chama
 `invalidar_leituras()`, então o TTL de 120s é só rede de segurança.
@@ -20,9 +27,9 @@ import pandas as pd
 import streamlit as st
 
 from services.constants import PADROES_DEMANDA
-from services.dashboards import PUBLICO_COMPRADOR, PUBLICO_GESTAO, PUBLICO_EXECUTIVO
+from services.dashboards import PUBLICO_COMPRADOR, PUBLICO_GESTAO
 from services.db_functions import listar_requisicoes
-from ui.formatos import fmt
+from ui.formatos import fmt, fmt_brl, fmt_num, colunas_brl
 from ui.tema import paleta_atual
 from ui.cache import (
     inventario_cached,
@@ -30,9 +37,11 @@ from ui.cache import (
     visao_compras_cached,
     visao_almoxarifado_cached,
     dados_dashboard_cached,
+    inventario_indicadores_cached,
+    divergencias_cached,
+    rupturas_cached,
 )
 from ui.componentes.graficos import (
-    _barh,
     _donut,
     _barv,
     _barras_agrupadas,
@@ -51,51 +60,49 @@ def render() -> None:
 
     # v4.1.0 — a aba "Gestão" foi extinta; seu conteúdo (2 linhas de distribuição, Top 10
     # consumo, padrões de demanda, requisições por setor/emitente) migrou para o Almoxarifado.
-    tab_comp, tab_almox, tab_mensal = st.tabs(
+    # v6.0.0 — a aba "KPI Mensal" também foi extinta (ver docstring do módulo).
+    tab_comp, tab_almox = st.tabs(
         [
             f":material/person: {PUBLICO_COMPRADOR}",
             ":material/warehouse: Almoxarifado",
-            f":material/calendar_month: {PUBLICO_EXECUTIVO}",
         ]
     )
     with tab_comp:
         _render_dash_compras_mro(visao_compras_cached())
     with tab_almox:
         _render_dash_almoxarifado(visao_almoxarifado_cached(), dashboard_cached(PUBLICO_GESTAO))
-    with tab_mensal:
-        _render_dash_executivo(dashboard_cached(PUBLICO_EXECUTIVO))
 
     # v4.5.0 — modal de drill-down: abre quando um card/gráfico clicável marca o estado.
     if st.session_state.get("_drill_on"):
         _drill_modal()
 
 
-def _dash_fmt_brl(v):
-    """Formata número como R$ pt-BR (milhar com ponto, decimal com vírgula)."""
-    try:
-        return "R$ " + f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    except (ValueError, TypeError):
-        return "R$ —"
-
-
 def _render_dash_almoxarifado(vm, vm_gestao):
     """:material/warehouse: Dashboard do Almoxarifado (§2) — saúde do estoque, prioridades
     do dia, entradas/saídas por período, materiais mais movimentados, setores e histórico.
     v4.1.0: incorpora o conteúdo da antiga aba Gestão (2 linhas de distribuição, Top 10 de
-    consumo, padrões de demanda e requisições por setor/emitente)."""
+    consumo, padrões de demanda e requisições por setor/emitente).
+
+    v6.0.0 — vira o painel operacional único. SAÍRAM (pedido do usuário): Cobertura Média,
+    Distribuição de Itens por Status (donut), Cobertura em Dias e Curva ABC. ENTRARAM: os
+    indicadores do ano (KPI Mensal extinto) e 5 blocos da aba Dashboard da Movimentação."""
     from services.drill_down import (
         rows_inventario_filtro,
         rows_mov_periodo,
         rows_requisicoes_dia,
-        rows_cobertura_faixa,
         rows_padrao_demanda,
-        rows_abc_classe,
         rows_mov_mes,
         rows_saidas_item,
+        rows_consumo_ytd,
+        rows_requisicoes_ano,
+        rows_consumo_ytd_tipo,
     )
 
     PAL = paleta_atual()
     k = vm["kpis"]
+    # DF largo (giro, valoração, tendência) — UMA leitura cacheada serve os 3 blocos
+    # herdados da Movimentação (tendência, capital parado, maior valor em estoque).
+    df_ind = _indicadores_df()
     st.markdown("### :material/warehouse: Dashboard do Almoxarifado · Inventus Power")
     st.caption(
         ":material/ads_click: Clique no 🔍 de qualquer card — ou use o seletor **🔍 Ver itens de:** abaixo de cada gráfico — para abrir a tabela que compõe o número."
@@ -118,7 +125,7 @@ def _render_dash_almoxarifado(vm, vm_gestao):
     _card_drill(
         r1[2], "📤 Requisições hoje", k["requisicoes_hoje"], "alm_req_hoje", lambda: rows_requisicoes_dia()
     )
-    r2 = st.columns(4)
+    r2 = st.columns(3)
     _card_drill(
         r2[0],
         "🔴 Compra urgente",
@@ -135,12 +142,39 @@ def _render_dash_almoxarifado(vm, vm_gestao):
         "alm_valor",
         lambda: rows_inventario_filtro("com_valor"),
     )
+
+    # ── Ano corrente (YTD) — herdado do extinto KPI Mensal (v6.0.0) ──────────────
+    y = vm["ytd"]
+    st.divider()
+    st.markdown(f"#### :material/calendar_month: Ano corrente ({y['ano']})")
+    st.caption(
+        f"De 1º de janeiro de {y['ano']} até hoje. Consumo = **saídas reais por requisição** "
+        "(ajuste de inventário não entra), valorado pelo preço de referência."
+    )
+    a1, a2, a3 = st.columns(3)
     _card_drill(
-        r2[3],
-        "📊 Cobertura média",
-        f"{k['cobertura_media']}d" if k["cobertura_media"] is not None else "—",
-        "alm_cobmed",
-        lambda: rows_inventario_filtro("cobertura"),
+        a1,
+        ":material/shopping_cart: Consumido no Ano",
+        fmt_brl(y["valor_consumido"]),
+        "alm_ytd_valor",
+        lambda: rows_consumo_ytd(),
+        help="Valor total consumido no ano (saídas reais × preço de referência).",
+    )
+    _card_drill(
+        a2,
+        ":material/assignment: Requisições Atendidas no Ano",
+        fmt_num(y["n_requisicoes"], casas=0),
+        "alm_ytd_req",
+        lambda: rows_requisicoes_ano(),
+        help="Nº de requisições com consumo real atendidas no ano corrente.",
+    )
+    _card_drill(
+        a3,
+        ":material/inventory_2: Itens Movimentados no Ano",
+        y["itens_movimentados"],
+        "alm_ytd_itens",
+        lambda: rows_consumo_ytd(),
+        help="Quantos itens diferentes tiveram consumo real no ano.",
     )
 
     # ── Status dos itens (2 linhas migradas da antiga aba Gestão) ────────────────
@@ -254,70 +288,34 @@ def _render_dash_almoxarifado(vm, vm_gestao):
         help="Estoque atual = 0.",
     )
 
+    # ── Consumo por tipo (do KPI Mensal) + Tendência (da Movimentação) — v6.0.0 ──
+    # Colunas iguais e gráficos da MESMA altura: são duas leituras do consumo lado a lado.
     st.divider()
-    s1c, s2c, s3c = st.columns(3)
+    s1c, s2c = st.columns(2)
     with s1c:
         with st.container(border=True):
-            st.markdown("##### :material/donut_large: Distribuição de Itens por Status")
-            d = vm["distribuicao"]
-            _dlabels = ["OK", "Atenção", "Comprar", "Sem giro"]
-            st.plotly_chart(
-                _donut(_dlabels, [d["ok"], d["atencao"], d["comprar"], d["sem_mov"]]),
-                width="stretch",
-                config={"displayModeBar": False},
-            )
-            _dmap = {"OK": "ok", "Atenção": "atencao", "Comprar": "comprar", "Sem giro": "sem_mov"}
-            _drill_select(
-                "alm_ch_dist",
-                _dlabels,
-                lambda l: f"Distribuição · {l}",
-                lambda l: rows_inventario_filtro(_dmap.get(l, "todos")),
-            )
+            st.markdown("##### :material/donut_large: Consumo por Tipo de Material")
+            st.caption(f"Valor consumido em {y['ano']}, agregado por tipo/categoria do material.")
+            comp = y["composicao_tipo"]
+            if comp:
+                st.plotly_chart(
+                    _donut(
+                        [x["tipo"] for x in comp], [x["valor"] for x in comp], height=300, fmt=_brl_compact
+                    ),
+                    width="stretch",
+                    config={"displayModeBar": False},
+                )
+                _drill_select(
+                    "alm_ch_comp",
+                    [x["tipo"] for x in comp if x["tipo"] != "Outros"],
+                    lambda l: f"Consumo YTD · {l}",
+                    lambda l: rows_consumo_ytd_tipo(l),
+                )
+            else:
+                st.caption("Sem consumo valorado no ano.")
     with s2c:
         with st.container(border=True):
-            st.markdown("##### :material/timeline: Cobertura (dias)")
-            st.caption("Estoque atual ÷ consumo diário = quantos dias o estoque dura no ritmo atual.")
-            cf = vm["cobertura_faixa"]
-            _clabels = [f"{kk} dias" for kk in cf.keys()]
-            st.plotly_chart(
-                _barv(_clabels, [int(v) for v in cf.values()]),
-                width="stretch",
-                config={"displayModeBar": False},
-            )
-            _drill_select(
-                "alm_ch_cob",
-                list(cf.keys()),
-                lambda l: f"Cobertura · {l} dias",
-                lambda l: rows_cobertura_faixa(l),
-                display=_clabels,
-            )
-    with s3c:
-        with st.container(border=True):
-            st.markdown("##### :material/leaderboard: Curva ABC (valor)")
-            st.caption(
-                "Classe por valor consumido em 90 d: A = 80% do valor, B = próximos 15%, C = resto. "
-                "Rótulo = nº de itens · % do valor."
-            )
-            a = vm["abc"]
-            st.plotly_chart(
-                _barv(
-                    ["A", "B", "C"],
-                    [a["A"]["n"], a["B"]["n"], a["C"]["n"]],
-                    textos=[
-                        f"{a['A']['n']} · {a['A']['pct']}%",
-                        f"{a['B']['n']} · {a['B']['pct']}%",
-                        f"{a['C']['n']} · {a['C']['pct']}%",
-                    ],
-                ),
-                width="stretch",
-                config={"displayModeBar": False},
-            )
-            _drill_select(
-                "alm_ch_abc",
-                ["A", "B", "C"],
-                lambda l: f"Curva ABC · Classe {l}",
-                lambda l: rows_abc_classe(l),
-            )
+            _bloco_tendencia_consumo(df_ind)
 
     # ── Entradas / Saídas com o período explícito (hoje/semana/mês) ──────────────
     _hoje = date.today()
@@ -517,7 +515,7 @@ def _render_dash_almoxarifado(vm, vm_gestao):
                 if "setor" in df_r.columns and not df_r["setor"].isna().all():
                     dc = df_r["setor"].value_counts().head(7).reset_index()
                     dc.columns = ["Setor", "Qtd"]
-                    st.bar_chart(dc.set_index("Setor"), color="#F7941E", height=250)
+                    st.bar_chart(dc.set_index("Setor"), color=PAL["accent"], height=250)
                 else:
                     st.caption("Sem dados de setor preenchidos.")
             with colE:
@@ -535,7 +533,7 @@ def _render_dash_almoxarifado(vm, vm_gestao):
                                 format="%d",
                                 min_value=0,
                                 max_value=int(dc["Qtd"].max()) if not dc.empty else 100,
-                                color="#F7941E",
+                                color=PAL["accent"],
                             )
                         },
                     )
@@ -552,7 +550,7 @@ def _render_dash_almoxarifado(vm, vm_gestao):
             st.plotly_chart(
                 _barras_agrupadas(
                     [_mes_label(m) for m in h["meses"]],
-                    [("Entradas", h["entradas"], "#22c55e"), ("Saídas", h["saidas"], "#ef4444")],
+                    [("Entradas", h["entradas"], PAL["positivo"]), ("Saídas", h["saidas"], PAL["negativo"])],
                     mostrar_valores=True,
                 ),
                 width="stretch",
@@ -568,9 +566,213 @@ def _render_dash_almoxarifado(vm, vm_gestao):
         else:
             st.caption("Sem movimentações registradas.")
 
+    # ── Blocos herdados da aba Dashboard da Movimentação (v6.0.0) ───────────────
+    st.divider()
+    st.markdown("### :material/payments: Capital parado & falhas de abastecimento")
+    st.caption(
+        "Valores são **estimativas** pelo **último preço** conhecido (SCM; na falta, "
+        "último preço de PO/SC7) — não substituem o custo contábil."
+    )
+    cp1, cp2 = st.columns(2)
+    with cp1:
+        with st.container(border=True):
+            _bloco_capital_parado(df_ind)
+    with cp2:
+        with st.container(border=True):
+            _bloco_maior_valor_estoque(df_ind)
+
+    with st.container(border=True):
+        _bloco_divergencias()
+
+    with st.container(border=True):
+        _bloco_ruptura()
+
     st.caption(
         ":material/map: **Mapa do Almoxarifado** (prateleiras por status de cor) fica "
         "para quando houver um modelo de localização/posição — hoje o local é texto livre."
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Blocos herdados da aba Dashboard da Movimentação (v6.0.0)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Migração FIEL: mesmas fontes de dado (`exportar_inventario_df`,
+# `obter_analitico_divergencias`, `obter_analitico_rupturas`), mesmos textos e mesmos
+# recortes (90 d, giro 0, top 8). Só mudou o container que os hospeda e o cache —
+# como o Almoxarifado é a página mais visitada, as leituras passam por `ui/cache.py`.
+# São funções module-level para manter `_render_dash_almoxarifado` legível.
+
+_COLS_CAPITAL = ["PN", "Nome", "UN", "Estoque Atual", "Valor em Estoque"]
+
+
+def _indicadores_df():
+    """DF de indicadores do inventário (cacheado). DF vazio se o cálculo falhar —
+    um bloco financeiro não pode derrubar o dashboard inteiro."""
+    try:
+        return inventario_indicadores_cached()
+    except Exception as e:  # noqa: BLE001 — a falha é exibida, não engolida
+        st.error(f"Erro ao calcular indicadores do inventário: {e}")
+        return pd.DataFrame()
+
+
+def _tabela_valor(df, colunas):
+    """Tabela de ranking por valor, com o R$ já no padrão pt-BR (v6.0.0). A ordem vem
+    pronta do `nlargest`, então virar texto não custa ordenação útil."""
+    st.dataframe(
+        colunas_brl(df[colunas].copy(), "Valor em Estoque"),
+        hide_index=True,
+        width="stretch",
+        column_config={"Valor em Estoque": st.column_config.TextColumn("Valor em Estoque")},
+    )
+
+
+def _bloco_tendencia_consumo(df_ind, height=300):
+    """Tendência de consumo: 30 d vs. os 30 d anteriores, item a item (v4.1.0).
+
+    v6.0.0 — vira UM gráfico, com a mesma altura do donut de Consumo por Tipo ao lado.
+    Antes eram três `st.metric` soltos: ocupavam meia coluna e deixavam o resto vazio,
+    além de dar contagem sem proporção. Três barras coloridas resolvem as duas coisas —
+    e sem componente novo, é o `_barv` de sempre. Cálculo inalterado: a coluna
+    `Tendência` de `exportar_inventario_df()` (janelas de 30 d, faixa de ±15%)."""
+    PAL = paleta_atual()
+    st.markdown("##### :material/psychology: Tendência de Consumo")
+    st.caption("Consumo dos últimos 30 dias vs. os 30 anteriores, item a item (faixa de ±15%).")
+    if df_ind.empty or "Tendência" not in df_ind.columns:
+        st.caption("Sem dados suficientes.")
+        return
+
+    vc = df_ind["Tendência"].value_counts()
+    alta, estavel, queda = (int(vc.get(k, 0)) for k in ("Alta", "Estável", "Queda"))
+    total = alta + estavel + queda
+    if not total:
+        st.caption("Nenhum item com consumo nas duas janelas de 30 dias — sem tendência a comparar.")
+        return
+
+    valores = [alta, estavel, queda]
+    st.plotly_chart(
+        _barv(
+            ["Em alta", "Estável", "Em queda"],
+            valores,
+            textos=[f"{n} · {n / total * 100:.0f}%" for n in valores],
+            # Alta em vermelho: demanda subindo é o que pressiona a reposição.
+            cor=[PAL["negativo"], PAL["neutro"], PAL["positivo"]],
+            height=height,
+        ),
+        width="stretch",
+        config={"displayModeBar": False},
+    )
+    st.caption(f"{fmt_num(total, casas=0)} itens com consumo comparável nas duas janelas.")
+
+
+def _bloco_capital_parado(df_ind):
+    """Top capital parado: maior valor em estoque COM giro 0 — dinheiro sem saída."""
+    st.markdown("##### :material/ac_unit: Top Capital Parado")
+    st.caption("Maior valor em estoque **com giro 0** — dinheiro parado, candidato a reduzir/realocar.")
+    if df_ind.empty or not {"Valor em Estoque", "Giro(anual)"} <= set(df_ind.columns):
+        st.caption("Sem dados de valoração no período.")
+        return
+    cols = [c for c in _COLS_CAPITAL if c in df_ind.columns]
+    parado = df_ind[(df_ind["Giro(anual)"] == 0) & (df_ind["Valor em Estoque"] > 0)].nlargest(
+        8, "Valor em Estoque"
+    )
+    if parado.empty:
+        st.success(":material/check_circle: Nenhum item de valor relevante totalmente parado.")
+        return
+    _tabela_valor(parado, cols)
+
+
+def _bloco_maior_valor_estoque(df_ind):
+    """Maior valor em estoque: os itens que mais imobilizam capital hoje (com ou sem giro)."""
+    st.markdown("##### :material/savings: Maior Valor em Estoque")
+    st.caption("Itens que mais imobilizam capital hoje (estoque atual × preço de referência).")
+    if df_ind.empty or "Valor em Estoque" not in df_ind.columns:
+        st.caption("Sem dados de valoração no período.")
+        return
+    cols = [c for c in _COLS_CAPITAL if c in df_ind.columns]
+    top = df_ind[df_ind["Valor em Estoque"] > 0].nlargest(8, "Valor em Estoque")
+    if top.empty:
+        st.caption("Nenhum item com valor de estoque conhecido.")
+        return
+    _tabela_valor(top, cols)
+
+
+def _bloco_divergencias():
+    """Top itens com divergências: ajustes manuais frequentes (últimos 90 d)."""
+    PAL = paleta_atual()
+    st.markdown("#### :material/balance: Top Itens com Divergências")
+    st.caption("Ajustes manuais frequentes (sem Req/SC) indicam erro de processo. Últimos 90 dias.")
+    df_div = divergencias_cached(days=90)
+    if df_div.empty:
+        st.success(":material/check_circle: Nenhuma divergência significativa.")
+        return
+    vis = df_div.copy()
+    vis.columns = ["PN", "Item", "Nº Ajustes", "Vol. Ajustado"]
+    st.dataframe(
+        vis,
+        width="stretch",
+        hide_index=True,
+        height=320,
+        column_config={
+            "Nº Ajustes": st.column_config.ProgressColumn(
+                "Freq.", format="%d", min_value=0, max_value=int(vis["Nº Ajustes"].max()), color=PAL["accent"]
+            ),
+            "Vol. Ajustado": st.column_config.NumberColumn(format="%.2f"),
+        },
+    )
+
+
+def _bloco_ruptura():
+    """Ruptura de estoque: itens que zeraram durante uma requisição (últimos 90 d)."""
+    PAL = paleta_atual()
+    st.markdown("#### :material/emergency: Ruptura de Estoque (Impacto na Operação)")
+    st.caption(
+        "Itens que zeraram o estoque durante uma requisição nos últimos 90 dias. "
+        "Indica falha de abastecimento."
+    )
+    df_rup = rupturas_cached(days=90)
+    if df_rup.empty:
+        st.success(
+            ":material/check_circle: **Operação Fluida:** Nenhuma ruptura registrada no período. "
+            "O estoque atendeu todas as requisições."
+        )
+        return
+
+    vis = df_rup.copy()
+    vis["ultima_ocorrencia"] = vis["ultima_ocorrencia"].apply(fmt)
+    vis = vis.rename(
+        columns={
+            "part_number": "PN",
+            "nome_item": "Item Crítico",
+            "qtd_rupturas": "Qtd. Rupturas",
+            "ultima_ocorrencia": "Última Falha",
+        }
+    )
+
+    def _realce(val):
+        if isinstance(val, (int, float)) and val >= 3:
+            return f"color: {PAL['negativo']}; font-weight: bold;"
+        return ""
+
+    st.dataframe(
+        vis.style.map(_realce, subset=["Qtd. Rupturas"]),
+        width="stretch",
+        hide_index=True,
+        height=250,
+        column_config={
+            "Qtd. Rupturas": st.column_config.ProgressColumn(
+                "Freq. Ruptura",
+                format="%d",
+                min_value=0,
+                max_value=int(vis["Qtd. Rupturas"].max()),
+                color=PAL["negativo"],
+            ),
+            "Última Falha": st.column_config.TextColumn(width="small"),
+        },
+    )
+    st.warning(
+        ":material/lightbulb: **Ação Recomendada:** Revise o **Estoque Mínimo** e o "
+        "**Lead Time** destes itens imediatamente para evitar paradas de linha."
     )
 
 
@@ -676,8 +878,15 @@ def _render_dash_compras_mro(vm):
             st.markdown("##### :material/payments: Dispêndio Mensal MRO")
             dm = vm["dispendio_mensal"]
             if dm["meses"]:
+                # Rótulo compacto na barra ("R$ 34,0k") e valor cheio no hover — antes a
+                # barra escrevia o float cru ("34012.0").
                 st.plotly_chart(
-                    _barv([_mes_label(m) for m in dm["meses"]], dm["valores"]),
+                    _barv(
+                        [_mes_label(m) for m in dm["meses"]],
+                        dm["valores"],
+                        textos=[_brl_compact(v) for v in dm["valores"]],
+                        hover=[fmt_brl(v) for v in dm["valores"]],
+                    ),
                     width="stretch",
                     config={"displayModeBar": False},
                 )
@@ -693,7 +902,12 @@ def _render_dash_compras_mro(vm):
             ds = vm["dispendio_setor"]
             if ds:
                 st.plotly_chart(
-                    _barv([x["setor"] for x in ds], [x["valor"] for x in ds]),
+                    _barv(
+                        [x["setor"] for x in ds],
+                        [x["valor"] for x in ds],
+                        textos=[_brl_compact(x["valor"]) for x in ds],
+                        hover=[fmt_brl(x["valor"]) for x in ds],
+                    ),
                     width="stretch",
                     config={"displayModeBar": False},
                 )
@@ -807,323 +1021,3 @@ def _dialog_drill_down(df: pd.DataFrame, titulo: str = "Detalhes") -> None:
         mime="text/csv",
         key=f"download_{titulo}",
     )
-
-
-def _render_dash_executivo(vm):
-    """:material/insights: Mensal — panorama do ano corrente (YTD): KPIs em R$/serviço, séries, ABC e vários Top 10."""
-    from services.drill_down import (
-        rows_inventario_filtro,
-        rows_consumo_ytd,
-        rows_requisicoes_ano,
-        rows_criticos_reposicao,
-        rows_abc_ytd_classe,
-        rows_consumo_ytd_tipo,
-        rows_saidas_mes,
-        rows_padrao_demanda,
-    )
-
-    ano = vm["ano"]
-    st.subheader(f":material/insights: Panorama {ano} — visão executiva")
-    st.caption(
-        f"Tudo nesta tela é do **ano corrente ({ano})**, de 1º de janeiro até hoje. "
-        "Consumo = saídas reais por requisição (ajustes de inventário não entram). "
-        "Valores em R$ pela valoração de referência (último preço negociado)."
-    )
-
-    k = vm["kpis"]
-    vd = vm["valor_detalhe"]
-    # ── Faixa 1: financeiro / volume ──
-    c1, c2, c3, c4 = st.columns(4)
-    _card_drill(
-        c1,
-        ":material/payments: Valor imobilizado",
-        _dash_fmt_brl(k["valor_imobilizado"]),
-        "kpi_imob",
-        lambda: rows_inventario_filtro("com_valor"),
-        help="Capital parado em estoque hoje: Σ(estoque × preço de referência).",
-    )
-    _card_drill(
-        c2,
-        ":material/shopping_cart: Consumido no ano (YTD)",
-        _dash_fmt_brl(k["valor_consumido_ytd"]),
-        "kpi_cons",
-        lambda: rows_consumo_ytd(),
-        help="Valor total consumido de 1º/jan até hoje (saídas reais × preço).",
-    )
-    _card_drill(
-        c3,
-        ":material/assignment: Requisições (YTD)",
-        f"{k['n_requisicoes_ytd']:,}".replace(",", "."),
-        "kpi_req",
-        lambda: rows_requisicoes_ano(),
-        help="Nº de requisições atendidas no ano corrente.",
-    )
-    _card_drill(
-        c4,
-        ":material/inventory_2: Itens movimentados (YTD)",
-        k["itens_consumidos_ytd"],
-        "kpi_itmov",
-        lambda: rows_consumo_ytd(),
-        help="Quantos itens diferentes tiveram consumo real no ano.",
-    )
-    st.caption(
-        f":material/info: Valoração: {vd['itens_valorados']} itens com preço · "
-        f"{vd['itens_sem_preco']} com estoque sem preço (subestima o total)."
-    )
-
-    # ── Faixa 2: operação / serviço ──
-    o1, o2, o3, o4 = st.columns(4)
-    ns = k["nivel_servico"]
-    _card_drill(
-        o1,
-        ":material/ads_click: Nível de serviço",
-        f"{ns}%" if ns is not None else "—",
-        "kpi_ns",
-        lambda: rows_inventario_filtro("com_consumo"),
-        help="% dos itens com consumo real fora de ruptura. Proxy de disponibilidade.",
-    )
-    gm = k["giro_medio"]
-    _card_drill(
-        o2,
-        ":material/sync: Giro médio (ano)",
-        f"{gm}x" if gm is not None else "—",
-        "kpi_giro",
-        lambda: rows_inventario_filtro("com_consumo"),
-        help="Quantas vezes o estoque se renova por ano, em média.",
-    )
-    _card_drill(
-        o3,
-        "🔴 Críticos",
-        k["criticos"],
-        "kpi_crit",
-        lambda: rows_criticos_reposicao(),
-        delta_color="off",
-        help="Itens que já precisam de compra agora (abaixo do ponto de pedido).",
-    )
-    _card_drill(
-        o4,
-        ":material/emergency: Rupturas",
-        k["rupturas"],
-        "kpi_rup",
-        lambda: rows_inventario_filtro("ruptura"),
-        delta_color="off",
-        help="Itens com consumo real e estoque zerado — risco imediato.",
-    )
-
-    st.markdown("---")
-
-    # ── Evolução mensal (R$) + composição por tipo (donut) ──
-    s = vm["series"]
-    colE, colC = st.columns([3, 2])
-    with colE:
-        with st.container(border=True):
-            st.markdown(f"#### :material/trending_up: Consumo mês a mês em {ano} (R$)")
-            cm = s["consumo_mensal"]
-            if cm:
-                df = pd.DataFrame([{"Mês": _mes_label(x["mes"]), "Valor (R$)": x["valor"]} for x in cm])
-                st.bar_chart(df.set_index("Mês"), color="#F36F21", height=300)
-                _drill_select(
-                    "kpi_ch_mensal",
-                    [x["mes"] for x in cm],
-                    lambda l: f"Consumo de {_mes_label(l)}",
-                    lambda l: rows_saidas_mes(l),
-                    display=[_mes_label(x["mes"]) for x in cm],
-                )
-            else:
-                st.caption("Sem consumo real no ano ainda.")
-    with colC:
-        with st.container(border=True):
-            st.markdown("#### :material/donut_large: Consumo por tipo de material")
-            comp = vm["composicao_tipo"]
-            if comp:
-                st.plotly_chart(
-                    _donut(
-                        [x["tipo"] for x in comp], [x["valor"] for x in comp], height=300, fmt=_brl_compact
-                    ),
-                    width="stretch",
-                    config={"displayModeBar": False},
-                )
-                _tipos = [x["tipo"] for x in comp if x["tipo"] != "Outros"]
-                _drill_select(
-                    "kpi_ch_comp", _tipos, lambda l: f"Consumo YTD · {l}", lambda l: rows_consumo_ytd_tipo(l)
-                )
-            else:
-                st.caption("Sem consumo valorado no ano.")
-
-    # ── Curva ABC ──
-    with st.container(border=True):
-        abc = vm["abc"]
-        classes = abc["classes"]
-        st.markdown("#### :material/emoji_events: Curva ABC por valor consumido (ano corrente)")
-        st.caption("Poucos itens concentram a maior parte do gasto — classe A = os que mais pesam.")
-        ca, cb, cc = st.columns(3)
-        _card_drill(
-            ca,
-            "🅰️ Classe A",
-            classes.get("A", 0),
-            "kpi_abc_a",
-            lambda: rows_abc_ytd_classe("A"),
-            help="Itens que somam até 80% do valor consumido.",
-        )
-        _card_drill(
-            cb,
-            "🅱️ Classe B",
-            classes.get("B", 0),
-            "kpi_abc_b",
-            lambda: rows_abc_ytd_classe("B"),
-            delta_color="off",
-            help="De 80% a 95% do valor.",
-        )
-        _card_drill(
-            cc,
-            "🅲 Classe C",
-            classes.get("C", 0),
-            "kpi_abc_c",
-            lambda: rows_abc_ytd_classe("C"),
-            delta_color="off",
-            help="Os 5% finais do valor.",
-        )
-        if abc["itens"]:
-            st.plotly_chart(
-                _barh(
-                    [f"{x['part_number']} · {str(x['nome_item'])[:18]}" for x in abc["itens"]][::-1],
-                    [x["valor"] for x in abc["itens"]][::-1],
-                    [_brl_compact(x["valor"]) for x in abc["itens"]][::-1],
-                    height=380,
-                ),
-                width="stretch",
-                config={"displayModeBar": False},
-            )
-
-    st.markdown("---")
-    st.markdown("### :material/leaderboard: Rankings Top 10 — ano corrente")
-    r = vm["rankings"]
-
-    # Linha 1: valor consumido | quantidade
-    t1, t2 = st.columns(2)
-    with t1:
-        _bloco_top(
-            ":material/shopping_cart: Top 10 — valor consumido (R$)",
-            r["top_valor_consumido"],
-            lambda x: f"{x['part_number']} · {str(x['nome_item'])[:16]}",
-            "valor",
-            _brl_compact,
-            caption="Onde o dinheiro foi gasto no ano.",
-        )
-    with t2:
-        _bloco_top(
-            ":material/format_list_numbered: Top 10 — quantidade consumida",
-            r["top_qtd_consumida"],
-            lambda x: f"{x['part_number']} · {str(x['nome_item'])[:16]}",
-            "qtd",
-            lambda v: f"{v:g}",
-            cor="#F7941E",
-            caption="Maior volume de saída (cada item na sua unidade).",
-        )
-
-    # Linha 2: valor imobilizado | dead stock
-    t3, t4 = st.columns(2)
-    with t3:
-        _bloco_top(
-            ":material/warehouse: Top 10 — capital parado em estoque",
-            r["top_valor_imobilizado"],
-            lambda x: f"{x['part_number']} · {str(x['nome_item'])[:16]}",
-            "valor",
-            _brl_compact,
-            cor="#6C7A89",
-            caption="Itens que mais imobilizam capital hoje.",
-        )
-    with t4:
-        _bloco_top(
-            ":material/bedtime: Top 10 — dinheiro dormindo (sem consumo no ano)",
-            r["top_dead_stock"],
-            lambda x: f"{x['part_number']} · {str(x['nome_item'])[:16]}",
-            "valor",
-            _brl_compact,
-            cor="#C0392B",
-            caption="Estoque parado que NÃO teve saída no ano — candidato a revisão.",
-        )
-
-    # Linha 3: centro de custo | emitente
-    t5, t6 = st.columns(2)
-    with t5:
-        _bloco_top(
-            ":material/account_tree: Top 10 — centros de custo (R$)",
-            r["top_centro_custo"],
-            lambda x: str(x["rotulo"])[:26],
-            "valor",
-            _brl_compact,
-            cor="#2E86C1",
-            caption="Áreas que mais consomem, em R$ (exclui CCs contábeis genéricos).",
-        )
-    with t6:
-        _bloco_top(
-            ":material/person: Top 10 — emitentes (nº requisições)",
-            r["top_emitente"],
-            lambda x: str(x["rotulo"])[:22],
-            "n",
-            lambda v: f"{v}",
-            cor="#27AE60",
-            caption="Quem mais abre requisições.",
-        )
-
-    # Linha 4: setor | padrões de demanda
-    t7, t8 = st.columns(2)
-    with t7:
-        _bloco_top(
-            ":material/factory: Top 10 — setores (nº requisições)",
-            r["top_setor"],
-            lambda x: str(x["rotulo"])[:22],
-            "n",
-            lambda v: f"{v}",
-            cor="#8E44AD",
-            caption="Setores que mais requisitam material.",
-        )
-    with t8:
-        with st.container(border=True):
-            st.markdown("#### :material/science: Padrões de demanda (SBC)")
-            st.caption("Quão previsível é repor cada material.")
-            ordem = ["Suave", "Intermitente", "Errático", "Irregular", "Poucos dados"]
-            dem = vm["destaques"]["demanda"]
-            dados_dem = [{"Padrão": p, "Itens": dem.get(p, 0)} for p in ordem if dem.get(p, 0)]
-            if dados_dem:
-                st.bar_chart(pd.DataFrame(dados_dem).set_index("Padrão"), color="#F7941E", height=240)
-                _drill_select(
-                    "kpi_ch_dem",
-                    [d["Padrão"] for d in dados_dem],
-                    lambda l: f"Padrão de demanda · {l}",
-                    lambda l: rows_padrao_demanda(l),
-                )
-            else:
-                st.caption("Sem consumo real suficiente para classificar.")
-            xyz = vm["destaques"]["xyz"]
-            if xyz:
-                st.caption(f"XYZ: X {xyz.get('X', 0)} · Y {xyz.get('Y', 0)} · Z {xyz.get('Z', 0)}.")
-
-    st.markdown("---")
-
-    # ── Distribuição do inventário + aging ──
-    d = vm["destaques"]
-    colD, colA = st.columns([3, 2])
-    with colD:
-        with st.container(border=True):
-            st.markdown("#### :material/donut_large: Distribuição do inventário hoje")
-            dist = d["distribuicao"]
-            labels = ["OK", "Atenção", "Comprar", "Sem Mov.", "Zerados"]
-            vals = [dist["ok"], dist["atencao"], dist["comprar"], dist["sem_mov"], dist["zerados"]]
-            st.plotly_chart(
-                _donut(labels, vals, height=270, fmt=lambda v: f"{v} itens"),
-                width="stretch",
-                config={"displayModeBar": False},
-            )
-    with colA:
-        with st.container(border=True):
-            st.markdown("#### :material/timer: Aging das SCs abertas")
-            st.caption("Há quanto tempo as SCs abertas estão paradas.")
-            ag = d["aging"]
-            a1, a2, a3 = st.columns(3)
-            a1.metric("0–7 d", ag["0-7"], delta_color="off")
-            a2.metric("8–15 d", ag["8-15"], delta_color="off")
-            a3.metric("15+ d", ag["15+"], delta_color="inverse", help="SCs paradas há mais de 15 dias.")
-            if ag.get("sem_data"):
-                st.caption(f"{ag['sem_data']} SC(s) sem data de abertura.")

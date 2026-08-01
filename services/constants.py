@@ -6,6 +6,15 @@ identicos aos que ja existiam; somente foram extraidos para um unico lugar."""
 
 import re
 
+# --- Versao do sistema (v6.0.0) ---
+# FONTE UNICA do numero de versao. Antes ele vivia copiado em tres literais que
+# derivaram entre si: `app.py` (titulo da aba) e `ui/sidebar.py` mostravam 5.8.0
+# enquanto o log de `database.py` dizia 5.7.0 -- e a versao entregue era a 5.9.0.
+# Quem exibe versao LE daqui; `scripts/release.py` tambem, para nomear o zip.
+# Bump em UM lugar so; `tests/test_v600_refatoracao_ux.py` prova que ninguem divergiu.
+VERSAO = "6.0.0"
+VERSAO_ROTULO = f"v{VERSAO}"  # com o "v" -- rodape da barra lateral
+
 # --- Status de estoque ---
 MARGEM_ATENCAO = 1.2  # limite da zona ATENCAO = estoque_minimo * 1.2
 FATOR_ESTOQUE_MAXIMO = 2  # estoque_maximo = estoque_minimo * 2

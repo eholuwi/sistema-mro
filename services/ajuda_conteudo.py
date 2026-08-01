@@ -54,11 +54,12 @@ Você **decide e cria as SCs**. O sistema **recomenda**, você confirma — nunc
 - **Selecione** os itens e crie **SCs sugeridas agrupadas por Tipo do material** (com
   título, justificativa de ~2 meses e centro de custo) — multi-item em 1 clique.
 
-**2. Cotar — abas de SC e Fornecedores** — melhor fornecedor (menor último preço), lead
-time e **rascunho de e-mail** de cotação.
+**2. Escolher fornecedor — `:material/badge: Ficha 360` → `:material/apartment: Fornecedores`**
+- Último preço, moeda, nº de compras, lead time por fornecedor e o **⭐ melhor preço**.
 
 **3. Curar conversão — `:material/add: Cadastro de Itens`** — quando compra em unidade diferente da de
-estoque (ex.: GL × L), cadastre a **unidade de compra** e o **fator** (o sistema sugere).
+estoque (ex.: GL × L), marque **"Este material é comprado em uma unidade diferente da
+unidade de estoque"** e informe a **unidade de compra** e o **fator** (o sistema sugere).
 
 **4. Ler a demanda — `:material/badge: Ficha 360` / `:material/assignment: Saldo em Estoque`** — **Padrão de demanda** e **XYZ**
 ajudam a escolher a política de compra. É **diagnóstico**, não muda a lista sozinho.
@@ -83,17 +84,18 @@ def _item(nome, para_que, base, como, crianca):
 MANUAL = [
     {
         "tela": ":material/bar_chart: Dashboard",
-        "intro": "A tela de abertura, agora com **abas por público** no topo (mesmo padrão de "
+        "intro": "A tela de abertura, com **abas por público** no topo (mesmo padrão de "
         "Controle de SC / Movimentação): cada perfil "
-        "(:material/person: Comprador · :material/bar_chart: Gestão · :material/calendar_month: KPI Mensal) vê só o que importa para o seu trabalho.",
+        "(:material/person: Comprador · :material/warehouse: Almoxarifado) vê só o que importa "
+        "para o seu trabalho.",
         "itens": [
             _item(
-                "Abas de visão (:material/person: Comprador · :material/bar_chart: Gestão · :material/calendar_month: KPI Mensal)",
+                "Abas de visão (:material/person: Comprador · :material/warehouse: Almoxarifado)",
                 "Trocar o painel inteiro conforme quem está olhando — sem poluir o menu lateral.",
                 "A aba escolhida; o conteúdo é montado só para aquele público.",
                 "Ao abrir uma aba, o sistema monta os cartões e gráficos daquela visão. "
-                "**Comprador** = ação (o que comprar); **Gestão** = saúde da operação; "
-                "**KPI Mensal** = apresentação (variação mês a mês + séries).",
+                "**Comprador** = ação (o que comprar); **Almoxarifado** = o painel operacional "
+                "completo (saúde do estoque, movimento do dia, números do ano e capital parado).",
                 "É como trocar de canal na TV: o mesmo aparelho, mas cada canal mostra o programa "
                 "certo para quem está assistindo.",
             ),
@@ -110,41 +112,43 @@ MANUAL = [
                 "isso já acabou' — tudo mastigado, é só decidir.",
             ),
             _item(
-                "Visão :material/bar_chart: Gestão — cartões de saúde (Nível de Serviço · Cobertura · Valor · Giro)",
-                "Mostrar a saúde geral da operação em 4 números.",
-                "A lista de itens (estoque, cobertura, consumo) e a valoração do estoque.",
-                "**Nível de Serviço de Estoque** = % dos itens com consumo real que estão fora de "
-                "ruptura (estoque > 0) — é um *proxy* de disponibilidade, **não** o OTIF do "
-                "fornecedor. **Cobertura média** = média de dias que o estoque dura. **Valor "
-                "imobilizado** = Σ(estoque × preço). **Giro médio** = quantas vezes o estoque roda "
-                "no ano (média dos itens com saída em 90 dias).",
-                "São quatro medidores do 'como vai a operação': se falta pouco (serviço alto), por "
-                "quantos dias dá pra durar, quanto dinheiro está parado e se as coisas giram.",
-            ),
-            _item(
-                "Visão :material/bar_chart: Gestão — distribuição, Top consumidores, setores e padrões de demanda",
-                "Detalhar a saúde: quantos itens em cada status, quem mais consome e como a "
-                "demanda se comporta.",
+                "Visão :material/warehouse: Almoxarifado — status dos itens, movimento do dia e demanda",
+                "Detalhar a saúde do estoque: quantos itens em cada status, quem mais consome e "
+                "como a demanda se comporta.",
                 "As saídas reais (por requisição), os preços de referência e as requisições.",
-                "**Distribuição** conta OK/Atenção/Críticos/Sem Movimentação/Zerados/Inventariado. "
-                "**Top 10 Consumidores** ordena por quantidade consumida no mês anterior. "
-                "**Requisições por Setor / Top Emitentes** mostram quem mais pede. **Padrões de "
-                "demanda** classifica cada item por Syntetos-Boylan (Suave/Intermitente/Errático/"
-                "Irregular) + resumo XYZ — é **diagnóstico**, não muda a lista de compra.",
+                "**Status dos itens** conta OK/Atenção/Críticos/Sem Movimentação/Zerados/"
+                "Inventariado (base de compra) e, na linha seguinte, o status FÍSICO de todo o "
+                "material. **Entradas/Saídas** mostram hoje/semana/mês. **Top 10 Consumidores** "
+                "ordena por quantidade consumida no mês anterior. **Requisições por Setor / Top "
+                "Emitentes** mostram quem mais pede. **Padrões de demanda** classifica cada item "
+                "por Syntetos-Boylan (Suave/Intermitente/Errático/Irregular) + resumo XYZ — é "
+                "**diagnóstico**, não muda a lista de compra.",
                 "É o 'raio-x' do estoque: quantos estão em cada cor, quem mais pede material e "
                 "quais itens saem sempre igual ou 'do nada'.",
             ),
             _item(
-                "Visão :material/calendar_month: KPI Mensal — panorama do ano (R$, consumo, ABC, Top 10)",
-                "Dar a visão de apresentação mensal: quanto se consumiu no ano, a curva ABC por "
-                "valor, a composição por tipo e os rankings Top 10.",
-                "As saídas reais valoradas (por requisição) e o valor imobilizado do estoque.",
-                "Traz **Valor consumido no ano**, **Valor imobilizado**, **nº de requisições**, as "
-                "**séries mensais** de consumo e de SCs, a **Curva ABC por valor** e vários **Top "
-                "10** (valor consumido, dead stock, centro de custo, emitente, setor). É a base da "
-                "reunião mensal de KPI.",
-                "É o resumo do mês para apresentar: quanto saiu, quanto está parado e onde o "
-                "dinheiro se concentra.",
+                "Visão :material/warehouse: Almoxarifado — Ano corrente (Consumido · Requisições · Itens)",
+                "Dar o panorama do ano em três números, no mesmo painel do dia a dia.",
+                "As saídas REAIS valoradas (por requisição) — ajuste de inventário não entra.",
+                "**Consumido no Ano** = Σ(quantidade saída × preço de referência) de 1º/jan até "
+                "hoje. **Requisições Atendidas no Ano** = nº de requisições com consumo real. "
+                "**Itens Movimentados no Ano** = quantos materiais diferentes tiveram saída. Ao "
+                "lado, o **Consumo por Tipo de Material** mostra onde o dinheiro se concentra.",
+                "É o resumo do ano: quanto saiu de dinheiro, quantos pedidos foram atendidos e "
+                "quantos materiais diferentes se mexeram.",
+            ),
+            _item(
+                "Visão :material/warehouse: Almoxarifado — capital parado e falhas de abastecimento",
+                "Mostrar onde há dinheiro dormindo no estoque e onde o abastecimento falhou.",
+                "A valoração do estoque (último preço), o giro por item e as movimentações de 90 dias.",
+                "**Tendência de Consumo** compara os últimos 30 dias com os 30 anteriores (±15%). "
+                "**Top Capital Parado** = maior valor em estoque COM giro 0. **Maior Valor em "
+                "Estoque** = quem mais imobiliza capital hoje, com giro ou sem. **Top Itens com "
+                "Divergências** = ajustes manuais frequentes (erro de processo). **Ruptura de "
+                "Estoque** = itens que zeraram durante uma requisição. Valores são **estimativas** "
+                "pelo último preço conhecido — não substituem o custo contábil.",
+                "É a parte que mostra dinheiro parado e onde faltou material — o que dá pra "
+                "melhorar sem comprar mais nada.",
             ),
         ],
     },
@@ -289,8 +293,9 @@ MANUAL = [
     },
     {
         "tela": ":material/receipt_long: Controle de SC",
-        "intro": "O centro do comprador: solicitações, reposição, fornecedores e importação. "
-        "(O **recebimento** mudou para a **Movimentação → Receber Material**.)",
+        "intro": "O centro do comprador: solicitações, reposição, consulta ao SCM e importação. "
+        "(O **recebimento** mudou para a **Movimentação → Receber Material**; os "
+        "**fornecedores por item** ficam na **Ficha 360**.)",
         "itens": [
             _item(
                 "Aba 'Assistente de Reposição' — fila e 'Comprar até'",
@@ -311,12 +316,14 @@ MANUAL = [
                 "por tipo de material pra você só confirmar.",
             ),
             _item(
-                "Aba 'Fornecedores & Cotação'",
-                "Escolher o melhor fornecedor e preparar a cotação.",
-                "Preços e lead times por fornecedor (do Relatório de SCs).",
-                "Marca o **melhor** = menor último preço; monta um **rascunho de e-mail** "
-                "(copiável) — o sistema prepara, você envia.",
-                "Mostra quem vende mais barato e escreve o e-mail de pedido de preço pra você.",
+                "Aba 'SCM Integrado'",
+                "Consultar as SCs de forma unificada e sincronizar com a API do SCM.",
+                "As SCs já gravadas no banco — pelo Relatório de SCs (Excel) e/ou pela API.",
+                "Lista **Solicitações de Compra**, **Itens das SCs** e o **Detalhe** de cada SC "
+                "(itens, itens fora do inventário e preços históricos). O botão **Atualizar "
+                "agora** é o único ponto que toca a rede — abrir a aba não consulta a API.",
+                "É a tela onde você procura uma SC e vê tudo dela, mesmo que ela não tenha vindo "
+                "da planilha do dia.",
             ),
             _item(
                 "Aba 'Importar Relatório de SCs'",
@@ -343,9 +350,12 @@ MANUAL = [
                 "você não mexeu.",
             ),
             _item(
-                "Conversão de unidades (unidade de compra + fator)",
+                "Conversão de unidades (checkbox → unidade de compra + fator)",
                 "Ensinar o sistema a converter quando compra e estoque usam unidades diferentes.",
                 "Sugestão vinda do nome do item (ex.: 'C/ 5 LT') e das unidades vistas nos pedidos.",
+                "Os campos só aparecem quando você marca **'Este material é comprado em uma "
+                "unidade diferente da unidade de estoque'** — no caso comum a tela não pergunta "
+                "nada. Na edição o checkbox **já vem marcado** se o item tem conversão gravada. "
                 "**Fator** = quantas unidades de compra cabem em 1 de estoque (ex.: 1 GL = 5 L → "
                 "fator 5). O sistema **sugere**, você **confirma** — nunca sobrescreve sozinho. "
                 "No recebimento, a entrada vira qtd ÷ fator.",
@@ -356,17 +366,20 @@ MANUAL = [
     },
     {
         "tela": ":material/sync: Movimentação",
-        "intro": "O centro do almoxarifado físico: **Analytics**, **Receber Material**, "
-        "**Requisição**, **Ajuste Rápido** e **Histórico Completo** — tudo que entra e sai.",
+        "intro": "O centro do almoxarifado físico: **Receber Material**, **Requisição**, "
+        "**Ajuste Rápido** e **Histórico Completo** — tudo que entra e sai.",
         "itens": [
             _item(
-                "Analytics (volume, divergências, rupturas) + export",
-                "Analisar tendências de consumo e problemas (divergências, faltas).",
-                "O histórico de movimentações (entradas/saídas) e as SCs.",
-                "Agrupa por período (mensal/semanal/diário) e mostra volumes, divergências de "
-                "compra e rupturas; permite exportar em Excel.",
-                "São gráficos que mostram 'quanto entrou e saiu ao longo do tempo' e onde houve "
-                "problema (faltou, ou veio diferente do pedido).",
+                "Histórico Completo + Relatório de Movimentações",
+                "Auditar o que entrou e saiu, e exportar o rateio mensal por CC/Setor.",
+                "O histórico de movimentações, com a categoria derivada (requisição, ajuste, "
+                "devolução, perda, conferência).",
+                "Filtra por item, categoria e limite de tela; a **exportação** recorta por "
+                "período e sai inteira (sem teto silencioso), com cada informação em sua coluna. "
+                "Os gráficos de tendência, divergência e ruptura ficam no **Dashboard → "
+                "Almoxarifado**.",
+                "É o extrato do almoxarifado: tudo que entrou e saiu, com filtro, e o botão de "
+                "baixar a planilha do mês.",
             ),
             _item(
                 "Aba 'Receber Material' (com conversão)",
@@ -382,7 +395,8 @@ MANUAL = [
     },
     {
         "tela": ":material/settings: Configurações",
-        "intro": "Aparência, importação da base do Compras e listas mestras.",
+        "intro": "Organizada em **abas**: Aparência · Backup · Importar Base · Solicitantes "
+        "MRO · Listas Mestras · **Ajuda** (a Central de Ajuda passou a morar aqui).",
         "itens": [
             _item(
                 ":material/palette: Aparência (tema claro/escuro)",
@@ -406,8 +420,18 @@ MANUAL = [
                 "Listas Mestras (centros de custo, locais, fornecedores...)",
                 "Manter as opções que aparecem nos formulários.",
                 "A tabela de listas do sistema.",
-                "Adiciona/remove valores usados nos selects (centro de custo, local, etc.).",
+                "Adiciona/remove valores usados nos selects (centro de custo, local, etc.). "
+                "As 5 listas ficam em sub-abas dentro da aba **Listas Mestras**.",
                 "É onde você cadastra as 'opções fixas' que aparecem nas listinhas dos formulários.",
+            ),
+            _item(
+                "Aba :material/help: Ajuda (Central de Ajuda)",
+                "Consultar os guias por perfil, o Manual do Sistema e enviar feedback.",
+                "Este manual + o backlog de feedback gravado no banco.",
+                "Era um item próprio do menu lateral e virou aba daqui, para encurtar a navegação. "
+                "Traz **Começar aqui** (guia por perfil), **Manual do Sistema** (esta tela a tela, "
+                "com modo de linguagem simples), **Enviar Feedback** e **Backlog**.",
+                "É o 'manual de instruções' do sistema, junto do lugar onde você configura ele.",
             ),
         ],
     },

@@ -40,11 +40,15 @@ IGNORAR_SUFIXOS = {".pyc", ".pyo", ".db", ".db-wal", ".db-shm", ".db-journal"}
 
 
 def versao_do_codigo() -> str:
-    """Le a versao de `ui/sidebar.py` (VERSAO = "v5.5.0") — fonte unica do rotulo."""
-    texto = (RAIZ / "ui" / "sidebar.py").read_text(encoding="utf-8")
+    """Le a versao de `services/constants.py` (VERSAO = "6.0.0") — fonte unica.
+
+    v6.0.0: era lida de `ui/sidebar.py`, que agora so re-exporta a constante. Le por
+    REGEX, sem importar o modulo: o release roda com o Python do sistema, sem as
+    dependencias do app instaladas."""
+    texto = (RAIZ / "services" / "constants.py").read_text(encoding="utf-8")
     m = re.search(r'^VERSAO\s*=\s*["\']v?([\d.]+)["\']', texto, re.M)
     if not m:
-        raise SystemExit("Nao consegui ler VERSAO de ui/sidebar.py")
+        raise SystemExit("Nao consegui ler VERSAO de services/constants.py")
     return m.group(1)
 
 

@@ -17,11 +17,14 @@ import os
 import streamlit as st
 from streamlit_option_menu import option_menu
 
+from services.constants import VERSAO_ROTULO
 from services.db_functions import listar_inventario, listar_scs
 from ui.router import opcoes_menu, icones_menu
 from ui.tema import paleta_atual
 
-VERSAO = "v5.8.0"
+# v6.0.0 — o número deixou de ser digitado aqui e vem de `services/constants.py`
+# (fonte única). Este alias existe porque o rodapé e `scripts/release.py` já o usavam.
+VERSAO = VERSAO_ROTULO
 
 # v5.5.0 (F5) — caminho ABSOLUTO do logo. Em dev o Streamlit roda com cwd = raiz do
 # projeto e o caminho relativo funcionava; no servidor o `iniciar_mro.bat` sobe a partir

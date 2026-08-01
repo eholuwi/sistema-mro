@@ -42,18 +42,22 @@ def _brl_compact(v):
     return f"R$ {v:.0f}"
 
 
-# Paleta de série p/ donuts (laranja da marca → tons de apoio).
-_SERIE_CORES = [
-    "#F36F21",
-    "#F7941E",
-    "#FFB65C",
-    "#6C7A89",
-    "#8E44AD",
-    "#2E86C1",
-    "#27AE60",
-    "#C0392B",
-    "#B3B3B3",
-]
+# v6.0.0 — a paleta de série saiu daqui e virou `SERIE_CATEGORICA` em services/tema.py
+# (alinhada ao docs/template_moderno.html). A lista anterior abria com TRÊS laranjas
+# seguidos, o que embaralhava as 3 primeiras fatias de qualquer donut.
+def _serie_cores():
+    """Cores da série categórica, na ordem do tema ativo."""
+    return paleta_atual()["serie"]
+
+
+def _rgba(hex_cor, alpha):
+    """'#F58220' + 0.10 → 'rgba(245,130,32,0.1)'. Plotly não aceita hex com alpha em
+    `fillcolor`, e fixar o rgba na mão prende a cor de preenchimento à marca antiga."""
+    h = str(hex_cor or "").lstrip("#")
+    if len(h) != 6:
+        return f"rgba(0,0,0,{alpha})"
+    r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{g},{b},{alpha})"
 
 
 def _barh(labels, values, textos, cor=None, height=300, label_outside=False):
@@ -104,10 +108,10 @@ def _donut(labels, values, height=300, fmt=None):
             hole=0.58,
             sort=False,
             marker=dict(
-                colors=_SERIE_CORES[: len(labels)] or None, line=dict(color=PAL["paper_bg"], width=1)
+                colors=_serie_cores()[: len(labels)] or None, line=dict(color=PAL["paper_bg"], width=1)
             ),
             textinfo="percent",
-            textfont=dict(size=11, color="#111"),
+            textfont=dict(size=11, color="#FFFFFF"),
             customdata=txt,
             hovertemplate="%{label}: %{customdata} (%{percent})<extra></extra>",
         )
@@ -124,9 +128,13 @@ def _donut(labels, values, height=300, fmt=None):
     return fig
 
 
-def _barv(labels, values, textos=None, cor=None, height=280):
+def _barv(labels, values, textos=None, cor=None, height=280, hover=None):
     """Barras verticais temáticas (categorias/tempo) — espelha `_barh` p/ telas que só
-    precisam de um bar chart no padrão da marca (Ficha 360 etc.). v3.3.0."""
+    precisam de um bar chart no padrão da marca (Ficha 360 etc.). v3.3.0.
+
+    `hover` (v6.0.0) = texto pronto por barra. Serve aos gráficos de VALOR, onde o rótulo
+    fica compacto ("R$ 34,0k") e o número cheio aparece no tooltip; sem ele o hover segue
+    desligado, como sempre foi."""
     import plotly.graph_objects as go
 
     PAL = paleta_atual()
@@ -138,7 +146,9 @@ def _barv(labels, values, textos=None, cor=None, height=280):
             text=textos if textos is not None else values,
             textposition="outside",
             textfont=dict(size=11, color=PAL["texto"]),
-            hoverinfo="skip",
+            hoverinfo="skip" if hover is None else None,
+            hovertext=hover,
+            hovertemplate=None if hover is None else "<b>%{x}</b><br>%{hovertext}<extra></extra>",
             cliponaxis=False,
         )
     )
@@ -183,6 +193,56 @@ def _linhas(x, series, height=260):
         legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0, font=dict(size=11)),
         xaxis=dict(showgrid=False, tickfont=dict(size=10, color=PAL["texto"])),
         yaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=10, color=PAL["texto"])),
+    )
+    return fig
+
+
+def _linha_valor(x, y, hover=None, cor=None, height=300, prefixo="R$ "):
+    """Linha temporal de UMA série monetária, no padrão da marca (v6.0.0).
+
+    Existe para a **Evolução de preço** da Ficha 360 (antes um `st.line_chart` cru, sem
+    identidade visual, sem moeda e sem contexto). Difere de `_linhas` em três pontos que
+    só fazem sentido para valor:
+      • eixo Y com prefixo de moeda e separador pt-BR (`separators=",."`);
+      • `hover` = texto pronto POR PONTO (fornecedor/PO/SC), em vez do tooltip padrão;
+      • área suave sob a linha + marcadores maiores, para série curta não ficar vazia.
+    """
+    import plotly.graph_objects as go
+
+    PAL = paleta_atual()
+    cor = cor or PAL["accent"]
+    fig = go.Figure(
+        go.Scatter(
+            x=x,
+            y=y,
+            mode="lines+markers",
+            line=dict(color=cor, width=2.5, shape="linear"),
+            marker=dict(size=9, color=cor, line=dict(width=2, color=PAL["paper_bg"])),
+            fill="tozeroy",
+            fillcolor=_rgba(cor, 0.10),
+            customdata=hover if hover is not None else [""] * len(x),
+            hovertemplate="<b>%{x|%d/%m/%Y}</b><br>" + prefixo + "%{y:,.2f}%{customdata}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        template=PAL["plotly_template"],
+        height=height,
+        margin=dict(l=0, r=8, t=10, b=0),
+        paper_bgcolor=PAL["paper_bg"],
+        plot_bgcolor=PAL["plot_bg"],
+        showlegend=False,
+        separators=",.",  # decimal vírgula, milhar ponto (pt-BR) — vale p/ eixo e hover
+        font=dict(family="Inter", color=PAL["texto"]),
+        hoverlabel=dict(font_size=12),
+        xaxis=dict(showgrid=False, tickformat="%b/%y", tickfont=dict(size=11, color=PAL["texto_suave"])),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor=PAL["painel_borda"],
+            zeroline=False,
+            tickprefix=prefixo,
+            tickformat=",.2f",
+            tickfont=dict(size=11, color=PAL["texto_suave"]),
+        ),
     )
     return fig
 

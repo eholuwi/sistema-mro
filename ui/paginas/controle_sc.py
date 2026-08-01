@@ -1,12 +1,19 @@
-"""Página Controle de SC (v5.3.0 / F4a) — 8 abas de acompanhamento das SCs.
+"""Página Controle de SC (v6.0.0) — 7 abas de acompanhamento das SCs.
 
-Migrada do bloco inline do `app.py` (último checkpoint da F4a). Abas: Monitor ·
-Guarda-Chuva · Assistente de Reposição · Fornecedores & Cotação · Nova SC ·
-Detalhes SC · Histórico · Importar Relatório de SCs.
+Migrada do bloco inline do `app.py` (último checkpoint da F4a). Abas: Guarda-Chuva ·
+Assistente de Reposição · SCM Integrado · Nova SC · Detalhes SC · Histórico ·
+Importar Relatório de SCs.
 
-Migração FIEL: nenhuma regra de negócio, cálculo ou layout muda. A aba **Monitor**
-mantém o aviso apontando para a página **SCM Integrado** — a UI de sincronização
-"Atualizar agora" migrou para lá na F3 e NÃO deve ser reintroduzida aqui.
+v6.0.0 (refatoração de UX) — três mudanças de NAVEGAÇÃO; nenhuma regra de negócio,
+cálculo ou layout de bloco mudou:
+  • saiu a aba **Monitor**. O "Controle Manual de Críticos" (dados do usuário na tabela
+    `monitor_livre`) foi preservado num expander do Guarda-Chuva; o cruzamento SCM × SC7
+    por upload, que era efêmero, saiu com a aba. `services/monitor_*.py` seguem intactos.
+  • saiu a aba **Fornecedores & Cotação**. A lista de fornecedores por item continua na
+    **Ficha 360** (expander "Fornecedores"); o rascunho de e-mail de cotação foi
+    descontinuado junto com a aba. `obter_fornecedores_por_item` segue no service.
+  • entrou **SCM Integrado**, que era item do menu lateral (reverte a separação da
+    v5.2.0/F3, a pedido do usuário). A aba chama `scm_integrado.conteudo()`.
 
 Cache: as escritas de SC/guarda-chuva chamam `invalidar_leituras()` para que as telas
 cacheadas (Dashboard, Saldo, sidebar) não exibam contagem/estoque velhos.
@@ -16,7 +23,6 @@ from __future__ import annotations
 
 import math
 import time
-import urllib.parse
 from datetime import date, datetime
 
 import pandas as pd
@@ -31,13 +37,10 @@ from services.db_functions import (
     importar_relatorio_scs,
     importar_solicitacoes_protheus,
     itens_com_sc_aberta,
-    listar_inventario,
     listar_itens_sc,
     listar_recebimentos_sc,
     listar_scs,
     listar_valores,
-    obter_cadastro_mro_para_cruzamento,
-    obter_fornecedores_por_item,
     salvar_planilha_livre,
     setor_dominante_por_item,
     sincronizar_monitor_sc,
@@ -55,7 +58,6 @@ from services.guarda_chuva import (
     remover_item_gc,
     remover_pedido_gc,
 )
-from services.monitor_cruzamento import cruzar_scm_sc7, preparar_df
 from services.scm_pedido import buscar_pedido
 from services.planejamento import (
     agrupar_por_tipo_material,
@@ -66,25 +68,29 @@ from services.planejamento import (
     sugestao_para_item_sc,
 )
 from ui.cache import invalidar_leituras
+from ui.paginas import scm_integrado
 from ui.componentes.exportar import botoes_export
 from ui.componentes.selecao import sel_material
 from ui.componentes.status import divergencia_recebimento
 from ui.componentes.tabela import chave_editor
-from ui.formatos import fmt, fmt_date_input
+from ui.formatos import fmt, fmt_brl, fmt_date_input
 
 
 def render() -> None:
     st.title(":material/receipt_long: Controle de SC")
 
-    # Estrutura de abas mantida conforme solicitado
     # v3.8.0 — "Receber Material" saiu daqui (agora vive na Movimentação).
-    # v4.9.0 — "☂️ Guarda-Chuva" (controle manual) entrou logo após o Monitor. 8 abas.
-    aba_mon, aba_gc, aba_assist, aba_forn, aba_nova_sc, aba_ed, aba_h, aba_import = st.tabs(
+    # v4.9.0 — "☂️ Guarda-Chuva" (controle manual) entrou logo após o Monitor.
+    # v6.0.0 — 8 → 7 abas: saíram **Monitor** e **Fornecedores & Cotação** (pedido do
+    # usuário) e entrou **SCM Integrado**, que era item do menu lateral. O "Controle
+    # Manual de Críticos", que morava no Monitor e guarda dados do usuário na tabela
+    # `monitor_livre`, foi preservado dentro do Guarda-Chuva — sem ele, a planilha
+    # colada pela operação ficaria no banco sem tela para abri-la.
+    aba_gc, aba_assist, aba_scm, aba_nova_sc, aba_ed, aba_h, aba_import = st.tabs(
         [
-            ":material/sensors: Monitor",
             ":material/umbrella: Guarda-Chuva",
             ":material/psychology: Assistente de Reposição",
-            ":material/apartment: Fornecedores & Cotação",
+            ":material/cloud_sync: SCM Integrado",
             ":material/add: Nova SC",
             ":material/sync: Detalhes SC",
             ":material/history: Histórico",
@@ -99,25 +105,15 @@ def render() -> None:
         _render_guarda_chuva_controle()
         if st.session_state.get("_gc_pedido_edit"):
             _dialog_guarda_chuva()
-    # ══════════════════════════════════════════════════════════════════════════════
-    # 📡 MONITOR DE COMPRAS
-    # ══════════════════════════════════════════════════════════════════════════════
-    with aba_mon:
-        # v4.11.0 — Monitor reordenado: (1) Controle Manual de Críticos (topo), (2) fallback
-        # de cruzamento por upload (sem rede). A grade técnica de 15 linhas (sync diário) saiu
-        # da UI — `sincronizar_monitor_sc`/`listar_monitor_sc` seguem no db_functions só p/ regressão.
-        # v5.2.0 (F3) — a sincronização SCM (API → banco) e a consulta das SCs migraram para
-        # a página **SCM Integrado** (menu, abaixo de Controle de SC).
-        # v5.6.0 — "SCs/Itens não atendidos" removido a pedido da operação. A lógica pura segue
-        # em `services/monitor_scm.py` (sem consumidor de UI), coberta por test_v4100_monitor_scm.
-        _render_controle_manual_criticos()
         st.divider()
-        st.info(
-            ":material/cloud_sync: A **sincronização SCM (API → banco)** e a consulta "
-            "unificada das SCs agora vivem na página **SCM Integrado** (menu lateral)."
-        )
-        st.divider()
-        _render_cruzamento_upload_fallback()
+        with st.expander(":material/edit_note: Controle Manual de Críticos"):
+            _render_controle_manual_criticos()
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # ☁️ SCM INTEGRADO (v6.0.0 — era página do menu; virou aba desta tela)
+    # ══════════════════════════════════════════════════════════════════════════════
+    with aba_scm:
+        scm_integrado.conteudo()
 
     # ══════════════════════════════════════════════════════════════════════════════
     #   📥 IMPORTAR PROTHEUS
@@ -405,7 +401,7 @@ def render() -> None:
                     )
                     cap = f":material/sell: Centro de custo sugerido: **{r['cc_sugerido']}**"
                     if r["valor_estimado"] > 0:
-                        cap += f"  ·  :material/payments: Valor estimado: ~R$ {r['valor_estimado']:,.2f}"
+                        cap += f"  ·  :material/payments: Valor estimado: ~{fmt_brl(r['valor_estimado'])}"
                     st.caption(cap)
                     with st.form(f"form_sc_grupo_{gi}", clear_on_submit=False):
                         gc1, gc2 = st.columns([2, 1])
@@ -455,156 +451,6 @@ def render() -> None:
                             else:
                                 st.error(f":material/cancel: {msg}")
 
-    with aba_forn:
-        st.markdown("### :material/apartment: Fornecedores & Cotação")
-        st.caption(
-            "Busque um material para ver seus fornecedores, último preço e lead time, "
-            "e gerar um e-mail de cotação pronto. O sistema recomenda; o comprador decide."
-        )
-
-        # v3.3.0 — busca única: o próprio select filtra por PN, nome OU descrição (o
-        # rótulo inclui a descrição), eliminando o campo de busca redundante acima.
-        opcoes_forn = {}
-        for i in listar_inventario():
-            desc = (i.get("descricao") or "").strip()
-            rot = f"{i['part_number']} — {i['nome_item']}"
-            if desc and desc.lower() not in (i.get("nome_item") or "").lower():
-                rot += f" · {desc}"
-            opcoes_forn[rot] = i
-        lista_forn = [" "] + list(opcoes_forn.keys())
-        sel_forn = st.selectbox(
-            "Selecione o material (busque por PN, nome ou descrição)",
-            lista_forn,
-            index=0,
-            key="forn_item_sel",
-        )
-        item_forn = opcoes_forn.get(sel_forn) if sel_forn != " " else None
-        if not item_forn:
-            st.info("Selecione um material para consultar os fornecedores.")
-        else:
-            lt_cad = int(item_forn.get("lead_time_dias") or 0)
-            lt_calc = item_forn.get("lead_time_calculado")
-            lt_calc_txt = (
-                (
-                    f" · Lead time calculado: {int(lt_calc)}d "
-                    f"({item_forn.get('lead_time_calculado_amostras') or 0} amostras, "
-                    f"{item_forn.get('lead_time_calculado_origem') or '—'})"
-                )
-                if lt_calc
-                else ""
-            )
-            st.info(
-                f"**{item_forn['part_number']} — {item_forn['nome_item']}**  \n"
-                f"Saldo: {(item_forn.get('estoque_atual') or 0):g} {item_forn.get('unidade', '')} · "
-                f"Mínimo: {(item_forn.get('estoque_minimo') or 0):g} · "
-                f"Lead time cadastrado (Compras): {lt_cad}d{lt_calc_txt}"
-            )
-
-            fs = obter_fornecedores_por_item(item_forn["id"])
-            if not fs:
-                st.warning(
-                    "Sem fornecedores para este item ainda. Os fornecedores vêm dos "
-                    "pedidos importados no Relatório de SCs (Nome Fantasia por nº do pedido)."
-                )
-            else:
-                melhor = next((f for f in fs if f.get("melhor")), None)
-                if melhor:
-                    st.success(
-                        f":material/star: **Melhor fornecedor: {melhor['fornecedor']}** — {melhor['melhor_motivo']}. "
-                        f"E-mail: {melhor['email'] or 'sem e-mail no cadastro'}."
-                    )
-
-                df_fs = pd.DataFrame(
-                    [
-                        {
-                            "Fornecedor": f["fornecedor"],
-                            "Último Preço": f["ultimo_preco"],
-                            "Moeda": f["moeda"],
-                            "Nº Compras": f["n_compras"],
-                            "Última Compra": fmt(f["ultima_data"]),
-                            "Lead Time (d)": f["lead_time_fornecedor"],
-                            "E-mail": f["email"] or "—",
-                            "Contato": f["contato"] or "—",
-                            "Telefone": f["telefone"] or "—",
-                            "Cadastro": ":material/check_circle:"
-                            if f["no_cadastro"]
-                            else ":material/warning:",
-                        }
-                        for f in fs
-                    ]
-                )
-                st.dataframe(
-                    df_fs,
-                    hide_index=True,
-                    width="stretch",
-                    column_config={
-                        "Último Preço": st.column_config.NumberColumn(format="%.2f"),
-                        "Lead Time (d)": st.column_config.NumberColumn(
-                            format="%d",
-                            help="Mediana do prazo real (SC7) atribuído ao fornecedor via nº do pedido.",
-                        ),
-                    },
-                )
-                st.caption(
-                    "Ordenado por menor último preço. Lead time por fornecedor = mediana do "
-                    "prazo real (SC7) atribuído pelo nº do pedido. ‘:material/warning:’ = fornecedor sem "
-                    "correspondência no cadastro (sem e-mail para cotação)."
-                )
-
-                # --- Rascunho de cotação (não envia) ---
-                st.markdown("#### :material/mail: Rascunho de cotação")
-                nomes = [f["fornecedor"] for f in fs]
-                default_sel = [melhor["fornecedor"]] if melhor else nomes[:1]
-                sel_forn = st.multiselect(
-                    "Fornecedores para cotar", nomes, default=default_sel, key="forn_cotar"
-                )
-                qtd_cotar = st.number_input(
-                    "Quantidade a cotar",
-                    min_value=0.0,
-                    value=float(item_forn.get("estoque_minimo") or 0),
-                    step=1.0,
-                    key="forn_qtd",
-                )
-                prazo = st.text_input(
-                    "Prazo desejado (opcional)", placeholder="Ex.: até 15 dias", key="forn_prazo"
-                )
-
-                escolhidos = [f for f in fs if f["fornecedor"] in sel_forn]
-                emails = [f["email"] for f in escolhidos if f["email"]]
-                sem_email = [f["fornecedor"] for f in escolhidos if not f["email"]]
-
-                assunto = f"Cotação — {item_forn['part_number']} ({item_forn['nome_item']})"
-                corpo = (
-                    "Prezados,\n\n"
-                    "Solicitamos cotação para o item abaixo:\n\n"
-                    f"• Part Number: {item_forn['part_number']}\n"
-                    f"• Descrição: {item_forn['nome_item']}\n"
-                    f"• Quantidade: {qtd_cotar:g} {item_forn.get('unidade', '')}\n"
-                    + (f"• Prazo desejado: {prazo}\n" if prazo else "")
-                    + "\nFavor informar preço unitário, prazo de entrega e condições de pagamento.\n\n"
-                    "Atenciosamente,\nCompras — Inventus Power"
-                )
-                st.text_area("Corpo do e-mail (copie ou edite)", corpo, height=220, key="forn_corpo")
-                if emails:
-                    st.markdown("**Destinatários:**")
-                    st.code(", ".join(emails), language=None)
-                    mailto = (
-                        "mailto:"
-                        + ",".join(emails)
-                        + "?subject="
-                        + urllib.parse.quote(assunto)
-                        + "&body="
-                        + urllib.parse.quote(corpo)
-                    )
-                    st.link_button(":material/mail: Abrir e-mail no meu cliente", mailto)
-                elif escolhidos:
-                    st.warning("Nenhum fornecedor selecionado tem e-mail no cadastro.")
-                if sem_email:
-                    st.caption("Sem e-mail no cadastro: " + ", ".join(sem_email))
-                st.caption(
-                    "O sistema **prepara** a cotação; o envio é feito pelo comprador, "
-                    "no próprio cliente de e-mail."
-                )
     # ══════════════════════════════════════════════════════════════════════════════
     #   ➕ NOVA SC (Formulário em Grid + Agrupamento Lógico)
     # ══════════════════════════════════════════════════════════════════════════════
@@ -1439,81 +1285,3 @@ def _render_controle_manual_criticos():
         _corpo.columns = _cols_final
         st.caption("Pré-visualização (1ª linha como cabeçalho):")
         st.dataframe(_corpo, width="stretch", hide_index=True)
-
-
-def _render_cruzamento_upload_fallback():
-    """v4.11.0 — Fallback (sem rede ao SCM): cruzamento SCM × SC7 por UPLOAD manual (v4.6.0),
-    dentro de um expander. Efêmero: nada é gravado no banco."""
-    with st.expander(":material/cloud_off: Sem rede ao SCM? Cruzamento por upload (SCM × SC7)"):
-        st.caption(
-            "Alternativa manual à tabela acima: envie os **dois exports crus** — "
-            "**SCM** (`Solicitações.xlsx`) e **SC7** (`Relatório de Compras.xlsx`) — e o "
-            "sistema casa por **PO** + Produto. Traz só material do MRO. Efêmero."
-        )
-        _cz1, _cz2 = st.columns(2)
-        with _cz1:
-            _up_scm = st.file_uploader("SCM — Solicitações.xlsx (cru)", type=["xlsx", "xls"], key="cruz_scm")
-        with _cz2:
-            _up_sc7 = st.file_uploader(
-                "SC7 — Relatório de Compras.xlsx (cru)", type=["xlsx", "xls"], key="cruz_sc7"
-            )
-        if not (_up_scm and _up_sc7):
-            st.info(":material/upload: Envie os **dois** arquivos crus (SCM e SC7) para gerar o cruzamento.")
-            return
-        _df_scm, _meta_scm = preparar_df(_up_scm, "SCM")
-        _df_sc7, _meta_sc7 = preparar_df(_up_sc7, "SC7")
-        if _df_scm is None:
-            st.error(f":material/error: {_meta_scm['erro']}")
-            return
-        if _df_sc7 is None:
-            st.error(f":material/error: {_meta_sc7['erro']}")
-            return
-        _solic_mro, _pns_mro, _dep_solic = obter_cadastro_mro_para_cruzamento()
-        _res = cruzar_scm_sc7(
-            _df_scm, _df_sc7, solicitantes_mro=_solic_mro, pns_mro=_pns_mro, dep_por_solic=_dep_solic
-        )
-        if _res.get("erro"):
-            st.error(f":material/error: {_res['erro']}")
-            return
-        _s = _res["stats"]
-        _k1, _k2, _k3, _k4, _k5 = st.columns(5)
-        _k1.metric("Casadas", _s["casadas"])
-        _k2.metric("Sem pedido", _s["sem_pedido"])
-        _k3.metric("PO sem SC7", _s["po_sem_sc7"])
-        _k4.metric("Órfãos (PO s/ SC)", _s["orfaos"])
-        _k5.metric("Saldo pendente", f"{_s['saldo_pendente_total']:,.0f}")
-        st.caption(
-            f"Fora do escopo MRO (ignoradas): **{_s['fora_escopo']}** linha(s) do SCM. "
-            f"Lidas: SCM {_s['n_scm']} × SC7 {_s['n_sc7']} linhas."
-        )
-        _df_cruz = pd.DataFrame(_res["linhas"], columns=_res["colunas"])
-        _dep_sel = st.selectbox("Filtrar por Departamento", ["Todos"] + _res["departamentos"], key="cruz_dep")
-        if _dep_sel != "Todos":
-            _df_cruz = _df_cruz[_df_cruz["Departamento"] == _dep_sel]
-        if _df_cruz.empty:
-            st.info("Nenhuma linha do MRO no cruzamento para o filtro atual.")
-        else:
-            st.dataframe(
-                _df_cruz,
-                width="stretch",
-                hide_index=True,
-                height=460,
-                column_config={
-                    "Qty (SC)": st.column_config.NumberColumn(format="%.0f"),
-                    "Qtd Entregue": st.column_config.NumberColumn(format="%.0f"),
-                    "Saldo": st.column_config.NumberColumn(format="%.0f"),
-                },
-            )
-            botoes_export(
-                _df_cruz,
-                "monitor_sc_2_cruzamento",
-                key="cruz_download",
-                sheet_name="Cruzamento",
-                csv=False,
-                label_excel=":material/download: Baixar cruzamento (Excel)",
-                sufixo="",
-            )
-        if _res["orfaos"]:
-            with st.expander(f":material/warning: Órfãos — {len(_res['orfaos'])} PO(s) do SC7 sem SC no MRO"):
-                st.caption("Compras (PO) de material MRO **sem SC correspondente** na planilha SCM.")
-                st.dataframe(pd.DataFrame(_res["orfaos"]), width="stretch", hide_index=True)

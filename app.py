@@ -1,5 +1,6 @@
 import streamlit as st
 import os, sys
+from services.constants import VERSAO
 from services.styles import inject_custom_css
 from services.logging_config import setup_logging
 
@@ -28,7 +29,7 @@ except Exception:
     pass
 
 st.set_page_config(
-    page_title="MRO Inventus Power 5.8.0",
+    page_title=f"MRO Inventus Power {VERSAO}",
     page_icon=":material/build:",
     layout="wide",
     initial_sidebar_state="expanded",

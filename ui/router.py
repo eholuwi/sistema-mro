@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from ui.paginas import (
-    ajuda,
     configuracoes,
     controle_sc,
     dashboard,
@@ -23,7 +22,6 @@ from ui.paginas import (
     gerenciar_itens,
     movimentacao,
     saldo_estoque,
-    scm_integrado,
 )
 
 
@@ -34,6 +32,9 @@ class Rota:
 
 
 # Ordem = ordem do menu lateral. NÃO reordenar sem intenção (muda a navegação).
+# v6.0.0 — o menu caiu de 9 para 7 itens (refatoração de UX): **SCM Integrado** virou
+# aba de Controle de SC e **Ajuda** virou aba de Configurações. As telas não sumiram —
+# `scm_integrado.conteudo()` e `ajuda.conteudo()` são chamadas pelas abas que as hospedam.
 ROTAS: dict[str, Rota] = {
     "Dashboard": Rota("bar-chart-fill", dashboard.render),  # F4a
     "Saldo em Estoque": Rota("box-seam", saldo_estoque.render),  # F4a
@@ -41,8 +42,6 @@ ROTAS: dict[str, Rota] = {
     "Cadastro de Itens": Rota("plus-circle", gerenciar_itens.render),  # F4a (renomeado na v5.9.0)
     "Movimentação": Rota("arrow-repeat", movimentacao.render),  # F4b
     "Controle de SC": Rota("receipt", controle_sc.render),  # F4a
-    "SCM Integrado": Rota("cloud-check", scm_integrado.render),  # F3 — consulta unificada
-    "Ajuda": Rota("question-circle", ajuda.render),
     "Configurações": Rota("gear", configuracoes.render),
 }
 

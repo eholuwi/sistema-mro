@@ -1,10 +1,14 @@
 """Página SCM Integrado (v5.2.0 / F3) — consulta unificada das SCs.
 
-Página de CONSULTA (almoxarifado E compradores) sobre as SCs já persistidas no
+Tela de CONSULTA (almoxarifado E compradores) sobre as SCs já persistidas no
 `mro.db` (pelo Relatório Excel e/ou pela sincronização da API do SCM, v5.1.0).
 Cabeçalho com a sincronização "Atualizar agora" (movida da aba Monitor de Controle
 de SC, onde era provisória na F2) + 3 abas: Solicitações de Compra / Itens das SCs /
 Detalhes da SC.
+
+v6.0.0 — deixou de ser item do menu lateral e virou **aba de Controle de SC** (pedido
+do usuário; reverte a separação feita na v5.2.0/F3). O corpo foi extraído para
+`conteudo()`, que é o que a aba chama; `render()` segue montando a página inteira.
 
 Regra de rede: `render()` é livre de rede — a API do SCM só é consultada em ações
 explícitas do usuário ("Atualizar agora" e "Buscar dados ao vivo"). Isso mantém a
@@ -21,18 +25,29 @@ from ui.cache import invalidar_leituras
 from ui.componentes.filtros import barra_filtros
 from ui.componentes.tabela import tabela_paginada
 from ui.componentes.status import badge_origem, painel_saude_scm, registrar_diagnostico_do_sync
+from ui.formatos import colunas_brl
 
 _ABERTAS_EXCLUI = {"Recebido", "Cancelado"}
 _DATA_COLS_SC = ["data_abertura", "data_aprovacao", "proxima_necessidade"]
 
 
 def render() -> None:
+    """Página completa (título + corpo). Mantida como ponto de entrada da tela; desde a
+    v6.0.0 o SCM Integrado é uma ABA de Controle de SC, que chama `conteudo()`."""
     st.title(":material/cloud_sync: SCM Integrado")
     st.caption(
         "Consulta unificada das Solicitações de Compra — do **Relatório de SCs** "
         "(Excel) e da **API do SCM**. Para almoxarifado e compradores."
     )
+    conteudo()
 
+
+def conteudo() -> None:
+    """Corpo da tela, SEM título — reusável dentro de uma aba (v6.0.0).
+
+    A separação existe para o SCM Integrado virar aba de Controle de SC sem duplicar
+    uma linha: o container muda, o conteúdo é o mesmo. A regra de rede continua valendo
+    (nada de API aqui; só em ação explícita do usuário)."""
     _cabecalho_sync()
 
     scs = scm_consulta.listar_scs_consulta()
@@ -174,7 +189,7 @@ def _aba_solicitacoes(scs):
         "proxima_necessidade",
         "pos",
     ]
-    vis = filtrado.reindex(columns=colunas)
+    vis = colunas_brl(filtrado.reindex(columns=colunas), "preco_unitario", "valor_total")
     config = {
         "numero_sc": st.column_config.TextColumn("SC"),
         "status": st.column_config.TextColumn("Status"),
@@ -237,8 +252,8 @@ def _aba_itens(itens):
         "descricao": st.column_config.TextColumn("Descrição", width="medium"),
         "quantidade": st.column_config.NumberColumn("Qtd", format="%.2f"),
         "unidade": st.column_config.TextColumn("UN"),
-        "preco_unitario": st.column_config.NumberColumn("Preço Unit.", format="R$ %.2f"),
-        "valor_total": st.column_config.NumberColumn("Valor Total", format="R$ %.2f"),
+        "preco_unitario": st.column_config.TextColumn("Preço Unit."),
+        "valor_total": st.column_config.TextColumn("Valor Total"),
         "numero_po": st.column_config.TextColumn("PO"),
         "status_item": st.column_config.TextColumn("Status Item"),
         "origem": st.column_config.TextColumn("Origem"),
@@ -302,7 +317,7 @@ def _aba_detalhes(scs):
             ]
         )
         st.dataframe(
-            df_it,
+            colunas_brl(df_it, "preco_unitario", "valor_total"),
             width="stretch",
             hide_index=True,
             column_config={
@@ -317,8 +332,8 @@ def _aba_detalhes(scs):
                     format="%.2f",
                     help="Declarado pelo ERP. Não altera o saldo; serve para comparar.",
                 ),
-                "preco_unitario": st.column_config.NumberColumn("Preço Unit.", format="R$ %.2f"),
-                "valor_total": st.column_config.NumberColumn("Valor Total", format="R$ %.2f"),
+                "preco_unitario": st.column_config.TextColumn("Preço Unit."),
+                "valor_total": st.column_config.TextColumn("Valor Total"),
                 "numero_po": "PO",
                 "status_item": "Status",
                 "origem": "Origem",
@@ -343,7 +358,7 @@ def _aba_detalhes(scs):
             ]
         )
         st.dataframe(
-            df_ex,
+            colunas_brl(df_ex, "preco_unitario", "valor_total"),
             width="stretch",
             hide_index=True,
             column_config={
@@ -351,8 +366,8 @@ def _aba_detalhes(scs):
                 "descricao": "Descrição",
                 "quantidade": st.column_config.NumberColumn("Qtd", format="%.2f"),
                 "unidade": "UN",
-                "preco_unitario": st.column_config.NumberColumn("Preço Unit.", format="R$ %.2f"),
-                "valor_total": st.column_config.NumberColumn("Valor Total", format="R$ %.2f"),
+                "preco_unitario": st.column_config.TextColumn("Preço Unit."),
+                "valor_total": st.column_config.TextColumn("Valor Total"),
                 "numero_po": "PO",
                 "origem": "Origem",
             },
@@ -374,13 +389,13 @@ def _aba_detalhes(scs):
                 ]
             )
             st.dataframe(
-                df_pr,
+                colunas_brl(df_pr, "preco_unitario"),
                 width="stretch",
                 hide_index=True,
                 column_config={
                     "part_number": "PN",
                     "data": "Data",
-                    "preco_unitario": st.column_config.NumberColumn("Preço", format="R$ %.2f"),
+                    "preco_unitario": st.column_config.TextColumn("Preço"),
                     "moeda": "Moeda",
                     "fornecedor": "Fornecedor",
                     "numero_sc": "SC",

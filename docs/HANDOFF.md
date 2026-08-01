@@ -18,8 +18,32 @@
   `requirements.txt` **sem pin** — descartado por decisão do Luis, nada a resgatar. As duas branches
   agora apontam para o mesmo commit; quem clonar o repositório cai no estado atual.
 
-- **v5.9.0 IMPLEMENTADA, gate verde (688 testes), ⏳ AGUARDANDO VALIDAÇÃO NO APP REAL E OK DO
-  LUIS PARA COMMIT** (regra inviolável nº6). Ver `changelog/5.9.0.md`. Sete entregas: Dashboard do
+- **v6.0.0 COMMITADA, gate verde (726 testes), ⏳ AGUARDANDO VALIDAÇÃO VISUAL DO LUIS.**
+  Ver `changelog/6.0.0.md`. Refatoração de **UX/UI** aprovada de uma vez (11 itens): menu de 9 → 7,
+  KPI Mensal e aba Dashboard da Movimentação extintas com o conteúdo redistribuído no Almoxarifado,
+  R$ em pt-BR no sistema inteiro e cores alinhadas ao `docs/template_moderno.html`.
+  - **SEM migração de schema.** Nenhum cálculo mudou — o teste que prova isso compara os
+    indicadores do ano do Almoxarifado com os do extinto `montar_visao_executiva()`.
+  - **O que conferir no app:** o Dashboard → Almoxarifado ficou longo (herdou 9 blocos); a primeira
+    abertura custa ~1,3 s e depois cai no cache de 120 s. Conferir também Ficha 360 → Evolução de
+    preço (item com 1 preço vira métrica, item multi-moeda vira tabela) e o checkbox de conversão
+    no Cadastro de Itens **em item já curado** — ele tem de nascer MARCADO.
+  - **Três telas saíram sem substituto** (Curva ABC nos dashboards, rascunho de e-mail de cotação,
+    cruzamento SCM × SC7 por upload) e o **Volume de Movimentações** foi descontinuado. Os services
+    seguem intactos: voltar é religar a chamada. Lista completa na seção "O que SAIU" do changelog.
+  - **Preservado de propósito:** o Controle Manual de Críticos (tabela `monitor_livre`) foi para um
+    expander do Guarda-Chuva quando a aba Monitor saiu — senão os dados do usuário ficariam no banco
+    sem tela para abri-los.
+  - **Débito conhecido:** a sidebar cinza `#5B5B5B` do template NÃO foi adotada porque o
+    `inventus_logo.png` é opaco com fundo branco (alfa = 255 em toda a imagem) e viraria um
+    retângulo branco. Com um PNG transparente é troca de um token em `services/tema.py`.
+  - **Armadilha paga — versão em três lugares:** `app.py` e `ui/sidebar.py` diziam 5.8.0 e o log de
+    `database.py` dizia 5.7.0, com a v5.9.0 entregue. Agora a fonte é `services.constants.VERSAO` e
+    há teste varrendo os três pontos de exibição. **Ao bumpar: mexa só na constante e crie o
+    `changelog/<versão>.md`** — o teste exige o arquivo.
+
+- **v5.9.0 COMMITADA (`2393f58`), gate verde (691 testes), ⏳ AGUARDANDO VALIDAÇÃO NO APP REAL.**
+  Ver `changelog/5.9.0.md`. Sete entregas: Dashboard do
   Comprador enxuto (4 cards + 5 gráficos), "Cadastro de Itens", bug do SelectBox, card Entradas,
   Guarda-Chuva por Pedido, componente de exportação e data real da saída.
   - **Migração de schema:** 3 tabelas novas e **aditivas** (`guarda_chuva_pedido`,
@@ -30,15 +54,17 @@
     Comprador passam a contar ITEM, não SC. É correção — **avisar o almoxarifado**.
   - **O que conferir no app:** trocar de item em Cadastro de Itens atualiza TODOS os campos e salva
     no item certo; Guarda-Chuva adiciona pedido pela API e cai no manual quando ela falha; entrega
-    com "Material saindo agora" desmarcado grava a data informada.
-  - **🔴 PENDENTE — "Material saindo agora" falta na Requisição Padrão** (retorno do Luis,
-    31/07/2026). Hoje o checkbox existe só na **fila do almoxarife**
-    (`ui/paginas/movimentacao.py:510`, `_fila_visao_almoxarife`) — que **fica como está**. Falta o
-    mesmo checkbox na tela de **Nova Requisição → Requisição Padrão**, que é onde o material sai na
-    hora e, portanto, onde a data retroativa mais importa.
-    **O serviço já está pronto e testado:** `criar_requisicao_com_baixa` já aceita `data_saida=None`
-    e `tests/test_v590_data_saida.py::test_requisicao_padrao_respeita_a_data_de_saida` já cobre os
-    dois caminhos. **É só UI** — replicar o bloco do checkbox e passar `data_saida=` na chamada.
+    com "Material saindo agora" desmarcado grava a data informada — **e o mesmo na Nova
+    Requisição → Padrão**, onde a requisição deve continuar com a data de hoje.
+  - **✅ RESOLVIDO (31/07/2026) — "Material saindo agora" agora existe também na Requisição
+    Padrão** (retorno do Luis). O bloco do checkbox foi replicado em `_req_nova_padrao`
+    (`ui/paginas/movimentacao.py`, seção "4. Autorização da Saída"), com `key=` prefixadas
+    (`pad_agora`/`pad_dt_saida`/`pad_hr_saida`) para não colidir com as da Fila — que **ficou como
+    estava**. Só UI: o serviço já aceitava `data_saida=None`.
+    **Trava nova:** o teste de serviço não pegava a falta de fiação entre tela e serviço, então
+    `tests/test_v590_data_saida.py` ganhou dois casos de **AppTest** que percorrem a tela e provam
+    que a data informada chega em `movimentacoes.data_hora` (verificado: removendo o
+    `data_saida=` da chamada, o teste falha). Falta só conferir no app real.
   - **Achado que mudou o plano (§3):** a correção prevista era *remover* os `key=` dos widgets de
     edição. Medido: isso quebraria a página com `StreamlitDuplicateElementId`, porque as duas abas
     têm widgets de mesmo rótulo/opções e os ids colidem quando o item está no valor padrão

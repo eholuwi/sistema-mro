@@ -32,6 +32,11 @@ def inject_custom_css(pal=None):
             --text-gray: {c["texto_suave"]};
             --shadow: {c["shadow"]};
             --shadow-lg: {c["shadow_lg"]};
+            --positive: {c["positivo"]};
+            --negative: {c["negativo"]};
+            --warning: {c["atencao"]};
+            --radius: {c["raio"]};
+            --accent-glow: {c["accent_glow"]};
         }}
     """
 
@@ -82,8 +87,8 @@ def inject_custom_css(pal=None):
         .metric-label { font-size: 0.72rem; color: var(--text-gray); font-family: 'Inter', sans-serif; font-weight: 600; letter-spacing: 0.3px; display: flex; align-items: center; gap: 6px; }
         .metric-value { font-size: 1.5rem; font-weight: 700; color: var(--text-white); font-family: 'JetBrains Mono', monospace; margin-top: 4px; letter-spacing: -0.02em; }
         .dot { height: 8px; width: 8px; border-radius: 50%; display: inline-block; }
-        .dot-yellow { background-color: #D97706; }
-        .dot-red { background-color: #DC2626; }
+        .dot-yellow { background-color: var(--warning); }
+        .dot-red { background-color: var(--negative); }
 
         .progress-container { margin: 6px 0 4px; }
         .progress-label { font-size: 0.78rem; color: var(--text-gray); font-weight: 600; letter-spacing: 0.3px; margin-bottom: 6px; }
@@ -120,7 +125,7 @@ def inject_custom_css(pal=None):
         [data-testid="stMetric"] {
             background-color: var(--bg-metric) !important;
             padding: 16px 18px !important;
-            border-radius: 12px !important;
+            border-radius: var(--radius) !important;
             border: 1px solid var(--border-color) !important;
             box-shadow: var(--shadow);
             transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease !important;
@@ -155,7 +160,7 @@ def inject_custom_css(pal=None):
 
         /* CONTÊINERES COM BORDA (st.container(border=True)) COMO CARDS */
         [data-testid="stVerticalBlockBorderWrapper"] {
-            border-radius: 12px !important;
+            border-radius: var(--radius) !important;
             box-shadow: var(--shadow);
         }
 
@@ -167,7 +172,7 @@ def inject_custom_css(pal=None):
             border-radius: 8px !important;
             font-weight: 700 !important;
             padding: 0.5rem 1.4rem !important;
-            box-shadow: 0 1px 2px rgba(243,111,33,0.35) !important;
+            box-shadow: 0 1px 2px var(--accent-glow) !important;
             transition: all 0.15s ease !important;
         }
 

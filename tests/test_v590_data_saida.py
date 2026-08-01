@@ -15,6 +15,7 @@ O que este arquivo trava:
 from datetime import datetime, timedelta
 
 import pytest
+from streamlit.testing.v1 import AppTest
 
 import database
 from services.db_functions import (
@@ -229,3 +230,77 @@ def test_requisicao_padrao_respeita_a_data_de_saida(db, make_item, data_saida, e
     )
     assert ok, res
     assert _movs(item)[-1]["data_hora"][:10] == esperado.strftime("%Y-%m-%d")
+
+
+# ── UI da Requisição Padrão (o checkbox na tela do balcão) ───────────────────
+#
+# O serviço já aceitava `data_saida` desde a v5.9.0; o que faltava era a tela do
+# balcão OFERECER a opção e repassar o valor. Teste de serviço não pega essa falta
+# de fiação — por isso o caminho aqui é pela tela.
+
+SCRIPT_MOV = "from ui.router import render_pagina\nrender_pagina('Movimentação')\n"
+
+
+def _por_rotulo(widgets, rotulo):
+    return [w for w in widgets if w.label == rotulo][0]
+
+
+@pytest.fixture
+def tela_padrao(db, make_item):
+    """Item em estoque + as listas que a Requisição Padrão exige no formulário."""
+    from services.db_functions import adicionar_valor_lista
+
+    item = make_item("PN-UI-PADRAO", estoque=50)
+    adicionar_valor_lista("setor", "MANUTENÇÃO")
+    adicionar_valor_lista("centro_custo", "21106 - MANUTENÇÃO")
+    return item
+
+
+def test_padrao_oferece_o_checkbox_marcado_por_padrao(tela_padrao):
+    """Marcado = saída agora, e nenhum campo de data à vista (mesmo contrato da Fila)."""
+    at = AppTest.from_string(SCRIPT_MOV)
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.checkbox(key="pad_agora").value is True
+    assert not [d for d in at.date_input if d.key == "pad_dt_saida"]
+
+
+def test_padrao_desmarcado_grava_a_data_informada_e_nao_retroage_a_requisicao(tela_padrao):
+    item = tela_padrao
+    at = AppTest.from_string(SCRIPT_MOV)
+    at.run()
+
+    # A lista de materiais é montada por um form com rerun; injetá-la direto mantém
+    # o teste no ponto de interesse (a data), não na mecânica do carrinho.
+    at.session_state.itens_req = [
+        {
+            "item_id": item,
+            "part_number": "PN-UI-PADRAO",
+            "nome_item": "Item",
+            "unidade": "UN",
+            "estoque_disponivel": 50,
+            "quantidade_solicitada": 4.0,
+        }
+    ]
+    _por_rotulo(at.selectbox, "Setor Solicitante *").set_value("MANUTENÇÃO")
+    _por_rotulo(at.text_input, "Nome do Emitente *").set_value("Joao")
+    _por_rotulo(at.text_input, "Nome do Autorizador (gestor) *").set_value("Neidson")
+    at.checkbox(key="pad_agora").uncheck().run()
+    assert not at.exception, [e.value for e in at.exception]
+
+    at.date_input(key="pad_dt_saida").set_value(ONTEM.date()).run()
+    _por_rotulo(at.button, ":material/check_circle: FINALIZAR E BAIXAR ESTOQUE").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+
+    movs = _movs(item)
+    assert len(movs) == 1
+    assert movs[-1]["data_hora"][:10] == ONTEM.strftime("%Y-%m-%d")
+
+    # A requisição em si continua sendo de hoje: a numeração REQ-YYYYMMDD-NNN vem dela.
+    conn = database.get_connection()
+    try:
+        req = conn.execute("SELECT data_hora, numero_requisicao FROM requisicoes").fetchone()
+    finally:
+        conn.close()
+    assert req["data_hora"][:10] == HOJE.strftime("%Y-%m-%d")
+    assert HOJE.strftime("%Y%m%d") in req["numero_requisicao"]

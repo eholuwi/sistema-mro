@@ -18,7 +18,14 @@ from __future__ import annotations
 
 import streamlit as st
 
-from services.db_functions import listar_inventario, listar_scs, obter_dados_dashboard
+from services.db_functions import (
+    listar_inventario,
+    listar_scs,
+    obter_dados_dashboard,
+    exportar_inventario_df,
+    obter_analitico_divergencias,
+    obter_analitico_rupturas,
+)
 from services.dashboards import (
     montar_dashboard,
     montar_visao_compras_mro,
@@ -66,6 +73,32 @@ def visao_almoxarifado_cached():
 def dados_dashboard_cached():
     """`obter_dados_dashboard()` com cache curto (distribuição/Top 10 do Almoxarifado)."""
     return obter_dados_dashboard()
+
+
+# ── Blocos herdados da Movimentação (v6.0.0) ─────────────────────────────────
+# Tendência de consumo, Top capital parado, Maior valor em estoque, Divergências e
+# Ruptura saíram da aba Dashboard da Movimentação e passaram ao Almoxarifado — a página
+# mais visitada. Sem cache, `exportar_inventario_df()` (giro + valoração POR ITEM) seria
+# recalculado a cada rerun da página inteira; por isso entram aqui, não no call site.
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def inventario_indicadores_cached():
+    """`exportar_inventario_df()` com cache curto — o DF largo (giro, valoração,
+    tendência) que alimenta 3 blocos do Almoxarifado de uma só passada."""
+    return exportar_inventario_df()
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def divergencias_cached(days: int = 90):
+    """`obter_analitico_divergencias()` com cache curto (Top itens com divergências)."""
+    return obter_analitico_divergencias(days=days)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def rupturas_cached(days: int = 90):
+    """`obter_analitico_rupturas()` com cache curto (Ruptura de estoque)."""
+    return obter_analitico_rupturas(days=days)
 
 
 def invalidar_leituras() -> None:

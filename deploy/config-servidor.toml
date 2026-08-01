@@ -4,13 +4,31 @@
 # committado no repositório continua THEME-ONLY (dev do Luis intocado).
 
 # ── Tema da marca (idêntico ao .streamlit/config.toml de dev) ──────────────────
+# v6.0.0 — alinhado a docs/template_moderno.html. Espelha `services/tema.py`; o teste
+# test_config_servidor_toml_sanidade compara este arquivo com o de dev, então os dois
+# não podem divergir.
 [theme]
 base = "light"
-primaryColor = "#F36F21"
-backgroundColor = "#F6F7F9"
+primaryColor = "#F58220"
+backgroundColor = "#F5F5F5"
 secondaryBackgroundColor = "#FFFFFF"
-textColor = "#1A1D21"
+textColor = "#2B2B2B"
+borderColor = "#E5E5E5"
 font = "sans serif"
+
+redColor = "#DC2626"
+greenColor = "#16A34A"
+orangeColor = "#F58220"
+blueColor = "#1D4ED8"
+grayColor = "#7A7F87"
+
+chartCategoricalColors = [
+  "#F58220", "#1D4ED8", "#B91C1C", "#5B5B5B",
+  "#7C3AED", "#0E7490", "#B45309", "#15803D", "#9CA3AF",
+]
+
+dataframeBorderColor = "#E5E5E5"
+dataframeHeaderBackgroundColor = "#EEF0F2"
 
 # ── Servidor (só produção) ─────────────────────────────────────────────────────
 [server]

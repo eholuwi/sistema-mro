@@ -27,7 +27,8 @@ def test_paleta_tipo_invalido_cai_para_dark():
 
 
 def test_accent_constante_nos_dois_temas():
-    assert paleta("dark")["accent"] == ACCENT == "#F36F21"
+    # v6.0.0 — o laranja passou a ser o --primary de docs/template_moderno.html.
+    assert paleta("dark")["accent"] == ACCENT == "#F58220"
     assert paleta("light")["accent"] == ACCENT
 
 
