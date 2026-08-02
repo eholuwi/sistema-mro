@@ -136,3 +136,39 @@ preservado.
 ⚠️ Os códigos de status da API (`01/03/05/09`) são **inferidos** da documentação e ainda não
 foram confirmados com dado real — o código cru fica guardado em `status_protheus`, então nada
 se perde se o mapeamento estiver errado.
+
+---
+
+## Usuários e acesso (v6.1.0)
+
+Opcional e **desligado por padrão**. Sem ligar nada, o sistema abre direto, como sempre.
+
+**Ligar:** Configurações → Usuários → *Exigir login para acessar o sistema*. A partir daí todo
+acesso pede **nome + PIN de 4 dígitos**. O nome aceita as formas que a pessoa naturalmente
+digita — `Jasiva Lopes`, `jasiva.lopes` ou ` JASIVA  LOPES ` caem na mesma conta.
+
+**De onde vêm os usuários:** o sistema os cria sozinho na abertura, a partir dos **Solicitantes
+MRO** (papel *Requisitante*), mais os papéis definidos manualmente — Luis, Jasiva e Juan como
+*Almoxarife*; Miguel e Adrya como *Comprador*. Quem não está em nenhuma das duas listas pode ser
+cadastrado à mão na mesma aba. **Ninguém nasce com PIN**, e sem PIN não se entra: quem define é
+o almoxarife.
+
+**O que cada papel enxerga no menu:**
+
+| Papel | Telas |
+|---|---|
+| Almoxarife | as 7 |
+| Comprador | Dashboard, Saldo em Estoque, Ficha 360, Cadastro de Itens, Controle de SC |
+| Requisitante · Gestor · Portaria | nenhuma ainda — as telas deles são a próxima fase |
+
+**Duas coisas o sistema recusa**, porque não haveria como desfazer pela tela: rebaixar ou
+desativar o **último almoxarife ativo**, e ligar a exigência de login quando **nenhum** usuário
+ativo tem PIN.
+
+⚠️ Isto separa papéis e dá nome a quem age — **não é proteção contra invasor**. Um PIN de 4
+dígitos tem 10 mil combinações e o banco é um arquivo na rede interna. O PIN em si é guardado
+com hash (pbkdf2-sha256, 200 mil iterações, salt por usuário) e nunca em texto, mas o desenho
+todo pressupõe uma rede confiável. Não usar para proteger dado sensível.
+
+O login é **100% local**: vive no `mro.db`, sem depender da API do SCM, de Kódigos ou da TI. A
+sessão vale por aba do navegador e cai quando o servidor reinicia — não há "lembrar de mim".

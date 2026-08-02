@@ -14,6 +14,8 @@ contexto.
 | UI — sidebar / tema / formatos / cache | `ui/sidebar.py`, `ui/tema.py`, `ui/formatos.py`, `ui/cache.py` |
 | UI — páginas (`render()`) | `ui/paginas/` — as 9 rotas; `ROTAS_MIGRADAS == ROTAS` |
 | UI — componentes reusáveis | `ui/componentes/` (`filtros`, `tabela`, `selecao`, `status`, `graficos`, `exportar`) |
+| UI — sessão / login / gate (v6.1.0) | `ui/auth.py`; mapa rota→papel em `ui/router.py` (`ROTAS_POR_PAPEL`) |
+| Usuários, papéis e PIN (v6.1.0) | `services/usuarios.py`, tabela `usuarios`, flag `configuracoes['exigir_login']` |
 | Lógica + acesso a dados | `services/db_functions.py` |
 | Banco / schema / migração | `database.py` — `criar_banco()` cria e `_migrar()` migra, em runtime |
 | Planejamento (min/máx, cobertura, lead time) | `services/planejamento.py` |

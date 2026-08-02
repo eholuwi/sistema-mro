@@ -664,6 +664,34 @@ def criar_banco():
         )
     """)
 
+    # v6.1.0 — Usuários e login local (100% local, sem dependência externa: nem OIDC,
+    # nem API do SCM, nem TI). Tabela NOVA e vazia ao migrar — não toca linha existente,
+    # portanto aditiva e sem `_backup_db` (mesmo padrão de `itens_sc_externos`, v5.1.0).
+    # Se algum dia o seed passar a reescrever linha existente, exige backup antes.
+    #
+    # pin_hash   = 'pbkdf2:sha256:200000:<salt_hex>:<hash_hex>' | NULL = sem PIN (não autentica).
+    # nome_norm  = `_normalizar_nome` (mesma regra de `solicitantes_mro`) — identidade da pessoa.
+    # ident_norm = chave de BUSCA do login: nome_norm sem ponto e sem espaço, para que
+    #              "Jasiva Lopes", "jasiva.lopes" e " JASIVA  LOPES " caiam na mesma conta.
+    # solic_mro_id liga ao solicitante de origem com ON DELETE SET NULL: tirar alguém do
+    #              escopo MRO nunca pode apagar o usuário (e sua senha) junto.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome          TEXT NOT NULL,
+            nome_norm     TEXT NOT NULL UNIQUE,
+            login         TEXT,
+            ident_norm    TEXT NOT NULL UNIQUE,
+            pin_hash      TEXT,
+            papel         TEXT NOT NULL DEFAULT 'requisitante',
+            departamento  TEXT,
+            ativo         INTEGER DEFAULT 1,
+            solic_mro_id  INTEGER REFERENCES solicitantes_mro(id) ON DELETE SET NULL,
+            ultimo_login  TEXT,
+            data_registro TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     # v5.1.0 (F2) — código Protheus do solicitante (ex.: "001054"), necessário para o
     # endpoint ByUser do sync SCM. Resolvido por nome via /Usuario (ou preenchido à mão
     # em Configurações). Nullable — solicitantes sem código apenas não entram no sync.
@@ -752,6 +780,9 @@ def criar_banco():
     c.execute("CREATE INDEX IF NOT EXISTS idx_sc_comprador   ON solicitacoes_compra(comprador)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_sc_scmid       ON solicitacoes_compra(sc_id_scm)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_isc_ext_sc     ON itens_sc_externos(sc_id)")
+    # v6.1.0 — o filtro de menu por papel e a guarda do "último almoxarife" consultam
+    # por papel a cada render; `ident_norm`/`nome_norm` já têm índice via UNIQUE.
+    c.execute("CREATE INDEX IF NOT EXISTS idx_usuarios_papel ON usuarios(papel)")
 
     conn.commit()
     _migrar(conn)

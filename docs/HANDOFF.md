@@ -9,7 +9,7 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 31/07/2026
+## STATUS ATUAL — atualizado em 02/08/2026
 
 - **Branch de trabalho: `feat/v5.0.0`.**
   **Primeiro comando de qualquer sessão:** `git fetch --all --prune` e `git checkout feat/v5.0.0`.
@@ -17,6 +17,38 @@
   e carregava um commit órfão (`21fc73e`) com uma versão **anterior** do `scm_client.py` e um
   `requirements.txt` **sem pin** — descartado por decisão do Luis, nada a resgatar. As duas branches
   agora apontam para o mesmo commit; quem clonar o repositório cai no estado atual.
+
+- **v6.1.0 COMMITADA, gate verde (760 testes), ✅ VALIDADA NO APP REAL PELO LUIS (02/08/2026).**
+  Ver `changelog/6.1.0.md` e o plano em `docs/PLANO_V610_USUARIOS_LOGIN.md` (seguido integralmente).
+  Fundação de **usuários e login local**: tabela `usuarios`, `services/usuarios.py`, `ui/auth.py`,
+  menu filtrado por papel e aba **Usuários** em Configurações.
+  - **A flag `exigir_login` nasce DESLIGADA** e é o que garante a compatibilidade: sem ligá-la, o app
+    abre idêntico à v6.0.0. `gate()` é no-op, o menu é o completo e o rodapé da barra continua sendo
+    o bloco fixo "Luis Oliveira / Inventus Power".
+  - **Migração aditiva, sem `_backup_db`** (padrão v5.1.0): a tabela nasce vazia e nenhuma linha
+    existente é reescrita. O seed é `INSERT OR IGNORE` — rodar de novo **nunca** sobrescreve papel,
+    PIN ou departamento de quem já existe (senão a abertura seguinte do app desfaria toda edição
+    feita na tela).
+  - **Validação no app real cumprida (02/08/2026):** flag off = app intacto; a lista de usuários já
+    vem semeada dos Solicitantes MRO; PIN definido → login → 7 rotas para o almoxarife e 5 para o
+    comprador (sem Movimentação e sem Configurações); PIN errado recusa com mensagem genérica;
+    desligar a flag devolve a abertura direta.
+  - **Em produção, o `mro.db` do servidor só ganha a tabela `usuarios` na primeira vez que alguém
+    abrir o app pelo navegador** — subir o serviço não executa `app.py` (armadilha já documentada
+    na seção de comandos do `CLAUDE.md`). A prova de que a migração rodou é a aba Usuários listar
+    gente, não o serviço responder.
+  - **Duas guardas de porta trancada** (irreversíveis pela UI, porque a aba Usuários só existe dentro
+    de Configurações): não dá para rebaixar/desativar o **último almoxarife ativo**, e não dá para
+    ligar `exigir_login` sem **nenhum** usuário ativo com PIN. A 2ª é adição ao plano — ele previa só
+    um aviso; o aviso continua e o bloqueio cobre o caso de prejuízo certo.
+  - **Armadilha paga — teste que quebra no dia 1º:** `test_v590_entradas_reais` falhava em 01/08/2026
+    **sem relação com esta versão**. O cenário grava a movimentação em `hoje - 1 dia`; no dia 1º ela
+    cai no mês anterior e o `historico_mensal` devolve o mês corrente como `0.0`, quebrando uma
+    asserção de lista literal. Corrigido para comparar a **soma**. Fixture com data relativa +
+    asserção posicional por mês é uma bomba-relógio — vale para os próximos testes de série mensal.
+  - **Próxima fase (fora do escopo):** telas do Requisitante ("Minhas Requisições"), do Gestor (fila
+    de aprovação) e da Portaria. Os três papéis já autenticam, mas ficam **sem rota** — a sidebar
+    mostra "Seu perfil ainda não tem telas" com o botão Sair.
 
 - **v6.0.0 COMMITADA, gate verde (726 testes), ⏳ AGUARDANDO VALIDAÇÃO VISUAL DO LUIS.**
   Ver `changelog/6.0.0.md`. Refatoração de **UX/UI** aprovada de uma vez (11 itens): menu de 9 → 7,

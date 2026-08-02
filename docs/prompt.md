@@ -1,9 +1,61 @@
 # Backlog / prompt de continuidade — Sistema MRO
 
-> Atualizado em 27/07/2026, ao fechar a **v5.7.0**. As 4 demandas antigas desta lista
-> (Consumo/Mensal, Guarda-Chuva, Monitor de SC, integração com a API do SCM) foram entregues
-> entre a v4.8 e a v5.6 e saíram daqui. O estudo das requisições digitais segue em
-> `docs/REQUISICOES_DIGITAIS_ESTUDO.md`.
+> Atualizado em 01/08/2026, ao planejar a **v6.1.0** (Usuários e Login local — fundação).
+> As 4 demandas antigas desta lista foram entregues entre a v4.8 e a v5.6 e saíram daqui.
+> O estudo das requisições digitais segue em `docs/REQUISICOES_DIGITAIS_ESTUDO.md` e a decisão
+> de arquitetura do login em `docs/DECISAO_ENTREGA_FINAL_LOGIN.md`.
+
+---
+
+## ✅ ENTREGUE — v6.1.0 · Usuários e Login local (FUNDAÇÃO)
+
+> **Implementada em 01/08/2026**, gate verde (756 testes), aguardando validação no app real e o
+> OK do Luis para commitar. Ver `changelog/6.1.0.md`; o roteiro de validação está no
+> `docs/HANDOFF.md` (STATUS ATUAL). O item 8 do backlog abaixo virou também
+> `docs/FUNCIONALIDADES.md` › "Usuários e acesso" e duas linhas no `CLAUDE.md`.
+>
+> **Resolvido o que estava em aberto:** a aba "Usuários" em Configurações entrou (7ª aba) — sem
+> ela ninguém definiria PIN. Duas guardas foram além do plano, ambas para bordas sem volta pela
+> UI: não dá para rebaixar/desativar o **último almoxarife ativo**, nem para ligar `exigir_login`
+> sem **nenhum** usuário ativo com PIN.
+>
+> **Próxima fase:** telas do Requisitante ("Minhas Requisições" + criar), do Gestor (fila de
+> aprovação) e da Portaria. Os três papéis já existem e autenticam, mas seguem sem rota.
+
+**Decidido em 01/08/2026** (sessão do Luis):
+
+- **Escopo:** só a fundação — tabela `usuarios`, seed, login, papel no `session_state` e filtro
+  de rotas. As telas novas (Requisitante/Gestor/Portaria) ficam para a próxima fase.
+- **Login:** módulo próprio (`ui/auth.py` + `services/usuarios.py`) — o `st.login` do Streamlit
+  1.60 é **OIDC-only** (exige provedor externo em `secrets.toml` + `authlib`, não instalado).
+  Não existe "provider local". Mantém o login 100% local, como manda o doc de decisão.
+- **Credencial:** nome (ou login `primeiro.sobrenome`) + **PIN de 4 dígitos** (hash pbkdf2,
+  stdlib — sem dependência nova). PIN definido pelo admin em Configurações.
+- **Ativação:** comutável — flag `exigir_login` em `configuracoes`, **padrão DESLIGADO**.
+  O Luis ativa quando validar no app real.
+- **Papéis:** `almoxarife` (admin), `comprador`, `requisitante`, `gestor`, `portaria`.
+  - almoxarife: **Luis Gabriel Arruda de Oliveira**, **Jasiva Lopes**, **Juan Tarco** (acesso total)
+  - comprador: **Miguel Nascimento**, **Adrya Vigil** → veem Dashboard, Saldo em Estoque, Ficha 360,
+    Cadastro de Itens e Controle de SC (sem Movimentação nem Configurações)
+  - requisitante: demais `solicitantes_mro` (ex.: Sidinei) → nenhuma rota ainda (telas novas na
+    próxima fase)
+- **Migração:** tabela nova aditiva (CREATE TABLE IF NOT EXISTS + índice) no padrão v5.1.0
+  (`itens_sc_externos`); seed idempotente (`INSERT OR IGNORE`). Sem backup necessário — não toca
+  dado existente. O que definir que toca dado existente (se mudar a distribuição de papéis) exige
+  backup antes.
+- **Pergunta em aberto:** a aba "Usuários" em Configurações (listar, papel, PIN, ativo) é parte da
+  fundação — sem ela ninguém consegue definir PIN. Fora isso, nada mais entra nesta fase.
+
+Backlog de implementação (após aprovação do plano):
+
+1. `services/usuarios.py` — PAPEIS, hash/validação de PIN, `autenticar`, CRUD de usuários.
+2. `database.py` — tabela `usuarios` + `semear_usuarios()` (seed + overrides manuais).
+3. `ui/auth.py` — sessão (`st.session_state`), formulário de login, gate.
+4. `ui/router.py` + `ui/sidebar.py` — filtro de `ROTAS` por papel; perfil do usuário logado.
+5. `ui/paginas/configuracoes.py` — aba "Usuários".
+6. `app.py` — gate de login antes do despacho.
+7. `tests/test_v610_usuarios.py` — migração/seed/PIN/rotas-por-papel/flag.
+8. Changelog `6.1.0` + HANDOFF.
 
 ---
 

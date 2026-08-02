@@ -13,12 +13,14 @@ escreve pelo caminho antigo (ver ui/cache.py e docs/PLANO_V5_EVOLUCAO.md).
 from __future__ import annotations
 
 import os
+from urllib.parse import quote_plus
 
 import streamlit as st
 from streamlit_option_menu import option_menu
 
 from services.constants import VERSAO_ROTULO
 from services.db_functions import listar_inventario, listar_scs
+from ui.auth import fazer_logout, rotulo_papel, usuario_logado
 from ui.router import opcoes_menu, icones_menu
 from ui.tema import paleta_atual
 
@@ -33,9 +35,37 @@ VERSAO = VERSAO_ROTULO
 LOGO = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inventus_logo.png")
 
 
+def _render_perfil(usuario: dict | None) -> None:
+    """Cartão do usuário no rodapé da barra (v6.1.0).
+
+    Deslogado (flag `exigir_login` off, o padrão) mantém o bloco fixo "Luis Oliveira /
+    Inventus Power" que existe desde a v4.1.0 — o app segue idêntico para quem não ligou
+    o login. Logado, mostra a pessoa de verdade, o papel e o botão de sair.
+    """
+    nome = usuario["nome"] if usuario else "Luis Oliveira"
+    subtitulo = rotulo_papel(usuario["papel"]) if usuario else "Inventus Power"
+    avatar_url = f"https://ui-avatars.com/api/?name={quote_plus(nome)}&background=F36F21&color=fff"
+    st.markdown(
+        f"""
+    <div class="user-profile">
+        <img src="{avatar_url}" class="user-avatar" alt="User">
+        <div class="user-info">
+            <h4>{nome}</h4>
+            <p>{subtitulo}</p>
+        </div>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+    if usuario and st.button(":material/logout: Sair", key="sb_sair", width="stretch"):
+        fazer_logout()
+
+
 def render_sidebar() -> str:
     """Desenha a sidebar e devolve a página escolhida no menu."""
     pal = paleta_atual()
+    usuario = usuario_logado()
+    papel = usuario["papel"] if usuario else None
     with st.sidebar:
         # 1. Cabeçalho com Logo/Título (v4.1.0 — logo Inventus; versão no rodapé da nav)
         st.image(LOGO, width="stretch")
@@ -48,11 +78,22 @@ def render_sidebar() -> str:
             unsafe_allow_html=True,
         )
 
-        # 2. Navegação (Option Menu) — opções/ícones vêm do router (fonte única).
+        # 2. Navegação (Option Menu) — opções/ícones vêm do router (fonte única), agora
+        # filtrados pelo papel de quem entrou (v6.1.0). Sem login, `papel` é None e o
+        # menu é o completo de sempre.
+        opcoes = opcoes_menu(papel)
+        if not opcoes:
+            # Requisitante/gestor/portaria ainda não têm tela (próxima fase). Sai daqui
+            # COM o botão Sair renderizado — deixar a pessoa presa numa tela sem saída
+            # seria a pior versão desta borda.
+            st.info("Seu perfil ainda não tem telas. Fale com o almoxarife.")
+            _render_perfil(usuario)
+            st.stop()
+
         pagina = option_menu(
             menu_title=None,
-            options=opcoes_menu(),
-            icons=icones_menu(),
+            options=opcoes,
+            icons=icones_menu(papel),
             menu_icon="cast",
             default_index=0,
             styles=pal["option_menu_styles"],
@@ -124,19 +165,7 @@ def render_sidebar() -> str:
         st.progress(progresso)
 
         # 5. Perfil do Usuário (Rodapé)
-        avatar_url = "https://ui-avatars.com/api/?name=Luis+Oliveira&background=F36F21&color=fff"
-        st.markdown(
-            f"""
-        <div class="user-profile">
-            <img src="{avatar_url}" class="user-avatar" alt="User">
-            <div class="user-info">
-                <h4>Luis Oliveira</h4>
-                <p>Inventus Power</p>
-            </div>
-        </div>
-        """,
-            unsafe_allow_html=True,
-        )
+        _render_perfil(usuario)
 
         # v4.1.0 — versão do sistema no rodapé da barra de navegação
         st.markdown(

@@ -66,7 +66,11 @@ def test_top_recebidos_e_historico_seguem_o_mesmo_criterio(db, make_item, make_s
 
     # A quantidade do "mais recebido" não pode somar os ajustes (10, não 25).
     assert [r["q"] for r in vm["top_recebidos"] if r["pn"] == "PN-REC"] == [10.0]
-    assert vm["historico_mensal"]["entradas"] == [10.0]
+    # SOMA, não lista literal: o cenário grava em `hoje - 1 dia` e o histórico devolve
+    # uma posição por mês do período. Rodando no dia 1º (o teste quebrou em 01/08/2026)
+    # a movimentação cai no mês anterior e o mês corrente entra como 0.0 — o que a
+    # asserção protege é o VALOR (10, não 25 com os ajustes), não o nº de meses.
+    assert sum(vm["historico_mensal"]["entradas"]) == 10.0
 
 
 def test_drill_do_card_bate_com_o_numero_do_card(db, make_item, make_sc):

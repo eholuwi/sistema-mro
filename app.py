@@ -7,12 +7,20 @@ from services.logging_config import setup_logging
 sys.path.insert(0, os.path.dirname(__file__))
 from database import criar_banco
 from services.db_functions import tirar_snapshot_estoque, sincronizar_monitor_sc
+from services.usuarios import semear_usuarios
+from ui.auth import gate
 from ui.tema import paleta_atual
 from ui.sidebar import render_sidebar
 from ui.router import render_pagina
 
 setup_logging()
 criar_banco()
+
+# v6.1.0 — usuários a partir dos Solicitantes MRO + papéis manuais. Idempotente: no 1º
+# render cria as linhas, nas demais aberturas é um SELECT e nenhum INSERT. Fora do
+# try/except de propósito — igual a `criar_banco()`: falhar aqui é problema de banco, e
+# engolir o erro entregaria um sistema de acesso silenciosamente vazio.
+semear_usuarios()
 
 # v2.2.0 — foto diária do estoque (idempotente por dia; sem scheduler externo).
 # Só executa a primeira vez que o app abre no dia; nas demais é praticamente no-op.
@@ -41,7 +49,12 @@ st.set_page_config(
 PAL = paleta_atual()
 inject_custom_css(PAL)
 
-# ── Sidebar + despacho ────────────────────────────────────────────────────────
+# ── Gate de acesso + sidebar + despacho ───────────────────────────────────────
+
+# v6.1.0 — trava SÓ quando a flag `exigir_login` está ligada e não há sessão. Roda ANTES
+# da sidebar para que o menu não apareça a quem ainda não entrou; com a flag desligada
+# (padrão) é no-op e o app abre exatamente como na v6.0.0.
+gate()
 
 pagina = render_sidebar()
 

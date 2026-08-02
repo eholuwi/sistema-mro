@@ -30,21 +30,23 @@ from services.db_functions import (
 )
 from services import scm_sync
 from services import backup
+from services import usuarios as U
 from ui.cache import invalidar_leituras
 from ui.paginas import ajuda
 from ui.tema import paleta_atual
 
 
 def render() -> None:
-    """Configurações em 6 abas (v6.0.0). Antes eram 8 blocos empilhados num scroll só;
-    cada seção virou uma aba, as 5 Listas Mestras foram agrupadas em uma, e a Central de
-    Ajuda entrou como aba (deixou de ser item do menu lateral)."""
+    """Configurações em 7 abas (v6.1.0 — entrou **Usuários**). Antes da v6.0.0 eram 8
+    blocos empilhados num scroll só; cada seção virou uma aba, as 5 Listas Mestras foram
+    agrupadas em uma, e a Central de Ajuda entrou como aba (deixou de ser item do menu)."""
     st.title(":material/settings: Configurações do Sistema")
-    st.caption("Parâmetros globais, listas mestras, backup e a Central de Ajuda.")
+    st.caption("Parâmetros globais, usuários, listas mestras, backup e a Central de Ajuda.")
 
-    aba_apar, aba_bkp, aba_imp, aba_sol, aba_listas, aba_ajuda = st.tabs(
+    aba_apar, aba_usr, aba_bkp, aba_imp, aba_sol, aba_listas, aba_ajuda = st.tabs(
         [
             ":material/palette: Aparência",
+            ":material/group: Usuários",
             ":material/backup: Backup",
             ":material/download: Importar Base",
             ":material/badge: Solicitantes MRO",
@@ -54,6 +56,8 @@ def render() -> None:
     )
     with aba_apar:
         _secao_aparencia()
+    with aba_usr:
+        _secao_usuarios()
     with aba_bkp:
         _secao_backup()
     with aba_imp:
@@ -81,6 +85,158 @@ def _secao_aparencia() -> None:
             "(as grades seguem o tema base); no modo claro (padrão) fica tudo consistente."
         )
         st.markdown("<br>", unsafe_allow_html=True)
+
+
+def _secao_usuarios() -> None:
+    """Usuários, papéis e PIN (v6.1.0) — a administração do login local.
+
+    É a única tela que escreve em `usuarios`, e só o almoxarife a alcança (Configurações
+    não está no menu do comprador). Toda ação delega para `services.usuarios` e mostra o
+    `(ok, msg)` de volta — a tela não decide nada sobre permissão.
+    """
+    with st.container(border=True):
+        st.subheader(":material/group: Usuários e Acesso")
+        st.info(
+            ":material/info: **Login 100% local** — os usuários vivem no `mro.db`. Não depende "
+            "da API do SCM, nem de Kódigos, nem da TI. O PIN é guardado com hash (pbkdf2), "
+            "nunca em texto."
+        )
+
+        usuarios = U.listar_usuarios()
+        com_pin = [u for u in usuarios if u["tem_pin"] and u["ativo"]]
+
+        # ── Interruptor geral ────────────────────────────────────────────────
+        exigir_atual = U.exigir_login()
+        if not exigir_atual:
+            st.warning(
+                ":material/warning: Ao ligar, **todo acesso passa a exigir nome + PIN**. Defina "
+                "o PIN das pessoas ANTES de ligar — quem estiver sem PIN não consegue entrar."
+            )
+        novo_exigir = st.toggle(
+            "Exigir login para acessar o sistema",
+            value=exigir_atual,
+            key="usr_exigir_login",
+            help="Desligado (padrão): o sistema abre direto, como sempre foi.",
+        )
+        if novo_exigir != exigir_atual:
+            # Guarda de porta trancada: ligar sem NENHUM usuário ativo com PIN deixa o
+            # sistema inacessível pela própria tela que o desligaria. É a mesma família
+            # da guarda do "último almoxarife" — não existe desfazer pela UI.
+            if novo_exigir and not com_pin:
+                st.error(
+                    "Nenhum usuário ativo tem PIN definido — ligar agora trancaria o sistema "
+                    "para todo mundo, inclusive para você. Defina ao menos um PIN abaixo."
+                )
+            else:
+                U.definir_exigir_login(novo_exigir)
+                st.rerun()
+        elif exigir_atual:
+            st.success(f":material/lock: Login exigido. {len(com_pin)} usuário(s) ativo(s) com PIN definido.")
+
+        st.divider()
+
+        if not usuarios:
+            st.info(
+                "Nenhum usuário cadastrado ainda. Eles são criados automaticamente na abertura "
+                "do sistema, a partir dos **Solicitantes MRO** — ou à mão, no formulário abaixo."
+            )
+        else:
+            # ── Grade ────────────────────────────────────────────────────────
+            df = pd.DataFrame(
+                [
+                    {
+                        "Nome": u["nome"],
+                        "Login": u["login"] or "—",
+                        "Papel": U.ROTULO_PAPEL.get(u["papel"], u["papel"]),
+                        "Departamento": u["departamento"] or "—",
+                        "Ativo": "Sim" if u["ativo"] else "Não",
+                        "PIN definido": "Sim" if u["tem_pin"] else "Não",
+                        "Último acesso": u["ultimo_login"] or "—",
+                    }
+                    for u in usuarios
+                ]
+            )
+            st.dataframe(df, width="stretch", hide_index=True)
+
+            # ── Ações por usuário ────────────────────────────────────────────
+            st.markdown("##### Editar usuário")
+            rotulos = {
+                f"{u['nome']}  ·  {U.ROTULO_PAPEL.get(u['papel'], u['papel'])}"
+                + ("" if u["ativo"] else "  (inativo)"): u
+                for u in usuarios
+            }
+            escolha = st.selectbox("Usuário", list(rotulos.keys()), key="usr_sel")
+            alvo = rotulos[escolha]
+            uid = alvo["id"]
+
+            c_papel, c_pin, c_ativo = st.columns([2, 2, 1])
+
+            with c_papel:
+                novo_papel = st.selectbox(
+                    "Papel",
+                    U.PAPEIS,
+                    index=U.PAPEIS.index(alvo["papel"]) if alvo["papel"] in U.PAPEIS else 0,
+                    format_func=lambda p: U.ROTULO_PAPEL.get(p, p),
+                    key=f"usr_{uid}_papel",
+                )
+                if st.button(":material/save: Salvar papel", key=f"usr_{uid}_papel_btn", width="stretch"):
+                    _feedback_usuario(U.definir_papel(uid, novo_papel))
+
+            with c_pin:
+                novo_pin = st.text_input(
+                    "PIN (4 dígitos)",
+                    type="password",
+                    max_chars=4,
+                    key=f"usr_{uid}_pin",
+                    placeholder="ex.: 1234",
+                )
+                cb_def, cb_rm = st.columns(2)
+                if cb_def.button(":material/key: Definir", key=f"usr_{uid}_pin_btn", width="stretch"):
+                    _feedback_usuario(U.definir_pin(uid, novo_pin))
+                if cb_rm.button(
+                    ":material/key_off: Remover",
+                    key=f"usr_{uid}_pin_rm",
+                    width="stretch",
+                    disabled=not alvo["tem_pin"],
+                ):
+                    _feedback_usuario(U.remover_pin(uid))
+
+            with c_ativo:
+                st.markdown("<br>", unsafe_allow_html=True)
+                # Botão, não checkbox: a ação pode ser RECUSADA (último almoxarife) e um
+                # checkbox ficaria marcado contra o estado real do banco no rerun.
+                _lbl = ":material/block: Desativar" if alvo["ativo"] else ":material/check: Ativar"
+                if st.button(_lbl, key=f"usr_{uid}_ativo", width="stretch"):
+                    _feedback_usuario(U.ativar_usuario(uid, not alvo["ativo"]))
+
+        st.divider()
+
+        # ── Cadastro manual ──────────────────────────────────────────────────
+        with st.expander(":material/person_add: Adicionar usuário manualmente"):
+            st.caption(
+                "Para quem não vem dos Solicitantes MRO (compradores, portaria). O usuário "
+                "nasce **sem PIN** — defina o PIN dele acima para que consiga entrar."
+            )
+            with st.form("form_add_usuario", clear_on_submit=True):
+                c_n, c_p, c_d = st.columns([3, 2, 2])
+                nome_novo = c_n.text_input("Nome completo", placeholder="ex.: Miguel Nascimento")
+                papel_novo = c_p.selectbox("Papel", U.PAPEIS, format_func=lambda p: U.ROTULO_PAPEL.get(p, p))
+                depto_novo = c_d.text_input("Departamento (opcional)")
+                if st.form_submit_button(":material/add: Adicionar", width="stretch"):
+                    _feedback_usuario(U.salvar_usuario(nome_novo, papel_novo, depto_novo))
+        st.markdown("<br>", unsafe_allow_html=True)
+
+
+def _feedback_usuario(resultado: tuple[bool, str]) -> None:
+    """Mostra o `(ok, msg)` de `services.usuarios` e recarrega quando deu certo."""
+    ok, msg = resultado
+    if not ok:
+        st.error(msg)
+        return
+    invalidar_leituras()
+    st.success(msg)
+    time.sleep(0.8)
+    st.rerun()
 
 
 def _secao_backup() -> None:
