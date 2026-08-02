@@ -1660,6 +1660,47 @@ def cancelar_requisicao(req_id):
         return False, str(e)
 
 
+def aprovar_requisicao(req_id, gestor_nome):
+    """v6.2.0 — Registra a aprovação do gestor do setor. **NÃO é bloqueante.**
+
+    Grava só `aprovado_por`/`aprovado_em`: não toca `status` (nenhum status novo — decisão
+    de 02/08/2026) nem `autorizador_tipo`/`autorizador_nome`, que continuam sendo exigidos
+    do almoxarife na ENTREGA (`entregar_requisicao`). O almoxarife pode separar e entregar
+    uma requisição não aprovada exatamente como antes; a aprovação é um registro paralelo
+    da autorização antecipada do setor, não uma trava.
+
+    A primeira aprovação vale: aprovar de novo devolve `(True, "Já aprovada por…")` e não
+    sobrescreve. Quem aprovou primeiro é o dado com valor de auditoria, e uma segunda
+    chamada é quase sempre duplo-clique ou refresh — reescrever apagaria o registro certo.
+
+    `aprovado_em` usa `datetime.now()` (hora local), como `data_hora` das requisições, e
+    não `CURRENT_TIMESTAMP` do SQLite, que é UTC: as duas datas aparecem lado a lado na
+    tela da Portaria e um pedido apareceria "aprovado" 3 horas depois de entregue."""
+    gestor = str(gestor_nome or "").strip()
+    if not gestor:
+        return False, "Informe o nome de quem está aprovando."
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with transaction() as conn:
+            req = conn.execute(
+                "SELECT numero_requisicao, status, aprovado_por, aprovado_em FROM requisicoes WHERE id=?",
+                (req_id,),
+            ).fetchone()
+            if not req:
+                raise Exception("Requisição não encontrada.")
+            if req["status"] == "Cancelada":
+                raise Exception("Requisição Cancelada: não pode ser aprovada.")
+            if req["aprovado_por"]:
+                return True, f"Já aprovada por {req['aprovado_por']} em {req['aprovado_em']}."
+            conn.execute(
+                "UPDATE requisicoes SET aprovado_por=?, aprovado_em=? WHERE id=?",
+                (gestor, agora, req_id),
+            )
+        return True, f"Requisição {req['numero_requisicao']} aprovada."
+    except Exception as e:
+        return False, str(e)
+
+
 def listar_requisicoes_abertas(incluir_entregues=False):
     """v4.7.0 — Fila de separação: requisições Aberta/Parcial (mais antigas primeiro),
     com contagem de itens e do que ainda falta atender.
@@ -1684,6 +1725,35 @@ def listar_requisicoes_abertas(incluir_entregues=False):
     return [dict(r) for r in rows]
 
 
+def _consultar_requisicoes(filtro="", params=(), ordem="r.data_hora DESC", limit=None):
+    """SELECT canônico das requisições: a linha de `requisicoes` mais os agregados
+    `total_itens`/`total_atendido` dos seus itens.
+
+    v6.2.0 — extraído de `listar_requisicoes` quando a Portaria (busca por número) e o
+    Gestor (fila do setor) passaram a precisar exatamente do mesmo shape. Só o `WHERE` e a
+    ordem mudam entre os três; duplicar o SELECT deixaria três lugares para manter em
+    sincronia — e uma tela mostrando um agregado diferente da outra é justamente o tipo de
+    divergência que ninguém percebe. Não cobre `listar_requisicoes_abertas`, cujo agregado
+    é outro (`itens_pendentes`, a fila de separação do almoxarife)."""
+    sql = f"""
+        SELECT r.*,
+               COUNT(ir.id) AS total_itens,
+               SUM(ir.quantidade_atendida) AS total_atendido
+        FROM requisicoes r
+        LEFT JOIN itens_requisicao ir ON ir.requisicao_id=r.id
+        {filtro}
+        GROUP BY r.id
+        ORDER BY {ordem}
+    """
+    params = list(params)
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    with transaction() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
 def listar_requisicoes(limit=100, emitente=None):
     """v5.7.0 — `emitente` filtra as requisições de um solicitante (comparação
     case-insensitive, para não perder 'Joao' × 'JOAO'). Alimenta a Visão do Solicitante da
@@ -1693,22 +1763,55 @@ def listar_requisicoes(limit=100, emitente=None):
     if emitente and str(emitente).strip():
         filtro = "WHERE UPPER(TRIM(r.emitente)) = UPPER(TRIM(?))"
         params.append(str(emitente).strip())
-    params.append(limit)
-    with transaction() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT r.*,
-                   COUNT(ir.id) AS total_itens,
-                   SUM(ir.quantidade_atendida) AS total_atendido
-            FROM requisicoes r
-            LEFT JOIN itens_requisicao ir ON ir.requisicao_id=r.id
-            {filtro}
-            GROUP BY r.id
-            ORDER BY r.data_hora DESC LIMIT ?
-        """,
-            params,
-        ).fetchall()
-    return [dict(r) for r in rows]
+    return _consultar_requisicoes(filtro, params, limit=limit)
+
+
+def buscar_requisicao_por_numero(numero):
+    """v6.2.0 — Consulta da Portaria: uma requisição pelo NÚMERO completo, com os itens.
+
+    Busca case-insensitive e com TRIM nas pontas ('req-20260802-001 ' acha
+    'REQ-20260802-001'): quem digita é o porteiro num terminal compartilhado, lendo o
+    número de um papel. Devolve o mesmo shape de `listar_requisicoes` com a chave extra
+    `itens` (de `listar_itens_requisicao`). Número vazio/None → None, sem consultar o
+    banco — string vazia não pode casar com requisição nenhuma."""
+    numero = str(numero or "").strip()
+    if not numero:
+        return None
+    reqs = _consultar_requisicoes("WHERE UPPER(TRIM(r.numero_requisicao)) = UPPER(TRIM(?))", [numero])
+    if not reqs:
+        return None
+    req = reqs[0]
+    req["itens"] = listar_itens_requisicao(req["id"])
+    return req
+
+
+def listar_requisicoes_por_setor(setor, so_abertas=True, apenas_aprovadas=False, limite=100):
+    """v6.2.0 — Requisições de um SETOR, para a tela "Aprovações do Setor" (Gestor).
+
+    O filtro é igualdade simples de setor (case/trim insensível), decisão do Luis em
+    02/08/2026: `requisicoes.setor` e `usuarios.departamento` são vocabulários distintos e
+    a interseção é parcial, mas a criação pelo Requisitante já pré-preenche o setor com o
+    departamento — o fluxo novo casa, e o legado de setor divergente fica de fora (a tela
+    tem seletor de setor para alcançá-lo).
+
+    - `so_abertas=True` → só 'Aberta'/'Parcial' (a fila de quem ainda pode ser aprovado);
+      False → todos os status.
+    - `apenas_aprovadas=True` → só `aprovado_por IS NOT NULL`; False → só `IS NULL`.
+      As duas metades são telas diferentes ("aguardando" × "já aprovadas"), por isso o
+      parâmetro não tem um estado "as duas".
+    - Ordem ASC (mais antiga primeiro), como a fila do almoxarife: fila se atende pelo
+      começo.
+
+    `setor` vazio → lista vazia, sem consultar (nega por omissão: gestor sem departamento
+    não pode acabar vendo o setor de todo mundo)."""
+    setor = str(setor or "").strip()
+    if not setor:
+        return []
+    filtro = ["WHERE UPPER(TRIM(r.setor)) = UPPER(TRIM(?))"]
+    if so_abertas:
+        filtro.append("AND r.status IN ('Aberta','Parcial')")
+    filtro.append("AND r.aprovado_por IS NOT NULL" if apenas_aprovadas else "AND r.aprovado_por IS NULL")
+    return _consultar_requisicoes(" ".join(filtro), [setor], ordem="r.data_hora ASC", limit=limite)
 
 
 def listar_emitentes_requisicao():

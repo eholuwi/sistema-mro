@@ -574,6 +574,81 @@ def _fila_visao_almoxarife(autorizadores_lista):
                 st.error(res)
 
 
+def _req_painel_pedidos(reqs, chave, permitir_cancelar=False):
+    """Acompanhamento dos pedidos de UMA pessoa: métricas, tabela e detalhe item a item.
+
+    v6.2.0 — extraído da Visão do Solicitante para a tela "Minhas Requisições" do
+    Requisitante logado. As duas mostram a mesma coisa; o que muda é como o nome chega
+    (seletor de simulação × sessão) e o direito de cancelar. `chave` prefixa as keys dos
+    widgets, para as duas telas nunca disputarem o mesmo `session_state`.
+
+    `permitir_cancelar` liga o botão de cancelar no pedido aberto: quem está logado cancela
+    o próprio pedido, mas na simulação sem login qualquer pessoa cancelaria o de qualquer
+    um. Espera `reqs` não vazio (a mensagem de lista vazia é de quem chama, que sabe se o
+    caso é "ninguém escolhido ainda" ou "você não tem pedidos")."""
+    na_fila = [r for r in reqs if r["status"] in ("Aberta", "Parcial")]
+    ms1, ms2, ms3 = st.columns(3)
+    ms1.metric(":material/receipt_long: Meus pedidos", len(reqs))
+    ms2.metric(":material/pending_actions: Aguardando separação", len(na_fila))
+    ms3.metric(":material/task_alt: Entregues", len([r for r in reqs if r["status"] == "Entregue"]))
+
+    df_s = pd.DataFrame(reqs).reindex(
+        columns=[
+            "numero_requisicao",
+            "data_hora",
+            "setor",
+            "centro_custo",
+            "status",
+            "total_itens",
+            "total_atendido",
+        ]
+    )
+    st.dataframe(
+        df_s,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "numero_requisicao": "Nº",
+            "data_hora": "Aberta em",
+            "setor": "Setor",
+            "centro_custo": "Centro de Custo",
+            "status": "Status",
+            "total_itens": st.column_config.NumberColumn("Itens", format="%d"),
+            "total_atendido": st.column_config.NumberColumn("Qtd entregue", format="%.0f"),
+        },
+    )
+
+    opc_s = {f"{r['numero_requisicao']} · {r['status']}": r for r in reqs}
+    sel_s = st.selectbox("Ver os itens de um pedido:", [""] + list(opc_s.keys()), key=f"{chave}_req")
+    if not sel_s:
+        return
+    r_sel = opc_s[sel_s]
+    for it in listar_itens_requisicao(r_sel["id"]):
+        falta = float(it["quantidade_solicitada"]) - float(it["quantidade_atendida"])
+        marca = ":material/check_circle:" if falta <= 0 else ":material/pending:"
+        st.markdown(
+            f"{marca} **{it['part_number']}** — {it['nome_item']} · "
+            f"pedido {float(it['quantidade_solicitada']):g} · "
+            f"recebido {float(it['quantidade_atendida']):g} {it['unidade']}"
+        )
+    if r_sel.get("aprovado_por"):
+        st.caption(
+            f":material/how_to_reg: Aprovado por **{r_sel['aprovado_por']}** em {r_sel['aprovado_em']}"
+        )
+    if permitir_cancelar and r_sel["status"] == "Aberta":
+        if st.button(
+            ":material/cancel: Cancelar requisição (nada foi entregue)",
+            key=f"{chave}_cancelar_{r_sel['id']}",
+        ):
+            ok, msg = cancelar_requisicao(r_sel["id"])
+            if ok:
+                invalidar_leituras()
+                st.warning(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
+
 def _fila_visao_solicitante():
     """Visão do Solicitante (v5.7.0, decisão nº5 de 27/07/2026) — SIMULAÇÃO, sem login.
 
@@ -606,52 +681,7 @@ def _fila_visao_solicitante():
     if not reqs:
         st.info(f"**{nome}** ainda não tem requisições registradas.")
     else:
-        na_fila = [r for r in reqs if r["status"] in ("Aberta", "Parcial")]
-        ms1, ms2, ms3 = st.columns(3)
-        ms1.metric(":material/receipt_long: Meus pedidos", len(reqs))
-        ms2.metric(":material/pending_actions: Aguardando separação", len(na_fila))
-        ms3.metric(":material/task_alt: Entregues", len([r for r in reqs if r["status"] == "Entregue"]))
-
-        df_s = pd.DataFrame(reqs).reindex(
-            columns=[
-                "numero_requisicao",
-                "data_hora",
-                "setor",
-                "centro_custo",
-                "status",
-                "total_itens",
-                "total_atendido",
-            ]
-        )
-        st.dataframe(
-            df_s,
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "numero_requisicao": "Nº",
-                "data_hora": "Aberta em",
-                "setor": "Setor",
-                "centro_custo": "Centro de Custo",
-                "status": "Status",
-                "total_itens": st.column_config.NumberColumn("Itens", format="%d"),
-                "total_atendido": st.column_config.NumberColumn("Qtd entregue", format="%.0f"),
-            },
-        )
-
-        opc_s = {f"{r['numero_requisicao']} · {r['status']}": r for r in reqs}
-        sel_s = st.selectbox(
-            "Ver os itens de um pedido:", [""] + list(opc_s.keys()), key="fila_solicitante_req"
-        )
-        if sel_s:
-            r_sel = opc_s[sel_s]
-            for it in listar_itens_requisicao(r_sel["id"]):
-                falta = float(it["quantidade_solicitada"]) - float(it["quantidade_atendida"])
-                marca = ":material/check_circle:" if falta <= 0 else ":material/pending:"
-                st.markdown(
-                    f"{marca} **{it['part_number']}** — {it['nome_item']} · "
-                    f"pedido {float(it['quantidade_solicitada']):g} · "
-                    f"recebido {float(it['quantidade_atendida']):g} {it['unidade']}"
-                )
+        _req_painel_pedidos(reqs, "fila_solicitante")
 
     st.markdown("---")
     if st.button(
@@ -663,7 +693,22 @@ def _fila_visao_solicitante():
         st.success(f"Nome **{nome}** preenchido. Abra a aba **Nova Requisição** acima para montar o pedido.")
 
 
-def _req_bloco_identificacao():
+def _opcoes_setor(setor_padrao=""):
+    """Setores do select da Requisição, com `setor_padrao` garantido na lista (v6.2.0).
+
+    `listar_setores_conhecidos()` é a união Configurações + histórico; o departamento de
+    quem está logado (`usuarios.departamento`) vem de outro vocabulário e frequentemente
+    NÃO está lá — sem este empurrão, a tela do Requisitante abriria com o setor da pessoa
+    ausente do select. Quando o setor já existe (em qualquer caixa), a forma cadastrada
+    vence e nada é duplicado. Função pura de propósito: é a parte testável do prefill."""
+    setores = listar_setores_conhecidos()
+    padrao = str(setor_padrao or "").strip()
+    if padrao and padrao.upper() not in {s.upper() for s in setores}:
+        return [padrao] + setores
+    return setores
+
+
+def _req_bloco_identificacao(setor_padrao="", emitente_fixo=None):
     """Bloco 1 — Identificação da Demanda. Comum aos dois fluxos (v5.7.0).
 
     Sem `key` nos widgets, de propósito: a aba Nova renderiza antes da Fila e definir o
@@ -671,17 +716,38 @@ def _req_bloco_identificacao():
     `StreamlitAPIException` (o "Abrir nova requisição como…" da Visão do Solicitante
     escreve `_req_emit_prefill`). Como só um dos fluxos renderiza por execução, os rótulos
     iguais fazem o Streamlit reaproveitar o estado — trocar Padrão↔Digital preserva o que
-    já foi digitado, que é o comportamento desejado."""
+    já foi digitado, que é o comportamento desejado.
+
+    v6.2.0 — parâmetros para a tela do Requisitante, com os defaults do fluxo do balcão:
+    `setor_padrao` pré-seleciona o setor (editável — o pedido pode ser de outro setor) e
+    `emitente_fixo` trava o emitente no nome de quem está logado (ali o solicitante é quem
+    é; digitar outro nome seria abrir pedido no nome alheio). Padrão/Digital chamam sem
+    argumento e continuam idênticas."""
     st.markdown("##### 1. Identificação da Demanda")
     c1, c2, c3 = st.columns(3)
+    opcoes_setor = [""] + _opcoes_setor(setor_padrao)
+    padrao = str(setor_padrao or "").strip()
+    # Índice case-insensitive: `_opcoes_setor` pode ter devolvido a forma CADASTRADA do
+    # setor ('Manutenção') no lugar da digitada no cadastro do usuário ('MANUTENÇÃO').
+    idx_setor = 0
+    if padrao:
+        idx_setor = next((i for i, v in enumerate(opcoes_setor) if v.upper() == padrao.upper()), 0)
     req_setor = c1.selectbox(
         "Setor Solicitante *",
-        options=[""] + listar_setores_conhecidos(),
-        index=0,
+        options=opcoes_setor,
+        index=idx_setor,
         accept_new_options=True,
         help="Escolha um setor já usado ou digite um novo para padronizar o cadastro.",
     )
-    req_emit = c2.text_input("Nome do Emitente *", value=st.session_state.get("_req_emit_prefill", ""))
+    if emitente_fixo:
+        req_emit = c2.text_input(
+            "Nome do Emitente *",
+            value=emitente_fixo,
+            disabled=True,
+            help="Você está logado — o pedido sai no seu nome.",
+        )
+    else:
+        req_emit = c2.text_input("Nome do Emitente *", value=st.session_state.get("_req_emit_prefill", ""))
     opcoes_cc = [""] + (listar_valores("centro_custo") or [])
     req_cc = c3.selectbox("Centro de Custo *", options=opcoes_cc, index=0)
     return req_setor, req_emit, req_cc

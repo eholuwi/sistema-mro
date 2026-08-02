@@ -18,6 +18,60 @@
   `requirements.txt` **sem pin** — descartado por decisão do Luis, nada a resgatar. As duas branches
   agora apontam para o mesmo commit; quem clonar o repositório cai no estado atual.
 
+- **v6.2.0 IMPLEMENTADA, gate verde (793 testes), ⏳ AGUARDANDO VALIDAÇÃO NO APP REAL E OK PARA COMMIT.**
+  Ver `changelog/6.2.0.md` e o plano em `docs/claude/Sessão 3/PLANO_V620_TELAS_SELF_SERVICE.md`
+  (seguido integralmente; a análise técnica prévia está em `Etapa 2 Plan.md`, na mesma pasta).
+  **Telas self-service**: os três papéis órfãos da v6.1.0 ganharam rota — Requisitante ("Minhas
+  Requisições"), Gestor ("Aprovações do Setor") e Portaria ("Consulta de Saída"). Menu de 7 → 10.
+  - **A aprovação do gestor NÃO bloqueia nada** (decisão do Luis, 02/08/2026): grava
+    `aprovado_por`/`aprovado_em` e só. Sem status novo, sem tocar `autorizador_*`, sem impedir a
+    entrega. Quem libera o material continua sendo o almoxarife, na entrega. A primeira aprovação
+    vale — a segunda chamada avisa e não sobrescreve (duplo-clique não pode reescrever auditoria).
+  - **Portaria é pública por decisão.** A guarita é terminal compartilhado; PIN coletivo colado no
+    monitor seria pior que login nenhum. `ui/auth.SESSAO_PUBLICA` + botão na tela de login.
+    ⚠️ **A ordem da checagem em `render_sidebar()` é o que segura o acesso:** `papel_atual()` é
+    `None` tanto no modo público quanto com a flag desligada, e nesse segundo caso
+    `opcoes_menu(None)` devolve o menu INTEIRO. `em_modo_publico()` tem de ser perguntado ANTES —
+    inverter entrega as 10 rotas a quem entrou sem credencial.
+  - **Migração aditiva** `requisicoes.aprovado_por`/`aprovado_em` (padrão `tipo_fluxo` da v5.7.0:
+    commit → `_backup_db` → `ALTER`). O guard olha as DUAS colunas e cada `ALTER` tem o seu `if`:
+    o `sqlite3` não abre transação para DDL, então um crash entre os dois `ADD COLUMN` deixaria a
+    primeira commitada e um guard só na primeira nunca completaria a segunda.
+  - **Nada duplicado:** o `SELECT` de requisições virou `_consultar_requisicoes` (usado pelas três
+    funções), e as páginas novas importam os blocos de `ui/paginas/movimentacao.py`
+    (`_req_bloco_identificacao` agora parametrizado, `_req_bloco_materiais`, `_req_painel_pedidos`
+    extraído da Visão do Solicitante, `_opcoes_setor` novo).
+  - **Limitação aceita:** o filtro do Gestor é igualdade simples de setor. No `mro.db` de hoje
+    `requisicoes.setor` tem **59** valores distintos e `usuarios.departamento` tem **19**, com
+    interseção de **9** (o plano dizia 57 — recontado em 02/08/2026). Cobre o fluxo novo, onde o
+    setor nasce do departamento; o legado divergente se alcança pelo seletor de setor da tela.
+  - **🐛 CORREÇÃO DE BUG DA v6.1.0 QUE ENTROU AQUI — login por alias não autenticava.** Achado em
+    02/08/2026 ao ligar o login para os requisitantes: "Usuário ou PIN inválidos" para quase todo
+    mundo. `_gerar_login` monta `primeiro.ultimo` e **descarta os nomes do meio**, mas a chave de
+    busca (`ident_norm`) é o nome COMPLETO — as duas só coincidem em nome de 2 palavras. **88 dos
+    104 usuários** do `mro.db` não entravam pelo login que a tela mostrava. A v6.1.0 passou verde
+    porque foi validada com "Jasiva Lopes" (2 palavras).
+    Corrigido em `services/usuarios._localizar_por_identificador`: tenta `ident_norm` e, só se não
+    achar, o alias. **`login` NÃO é único** (5 aliases compartilhados por duas pessoas): quando
+    alguém se chama literalmente como o alias, o match exato vence; empate real (`luis.oliveira`,
+    `simone.lima`) é **recusado** em vez de desempatado no chute. Hoje: 104/104 entram pelo nome
+    completo, 97 pelo alias.
+    ⚠️ **Lição de teste:** o `test_autenticar_normaliza_identificador` da v6.1.0 usava um nome de
+    duas palavras e, por construção, não podia pegar isso. Teste de identidade/normalização precisa
+    de nome com 3+ palavras.
+  - **Débito herdado:** 5 pessoas estão cadastradas em DUPLICIDADE em `usuarios` (mesma identidade,
+    duas grafias vindas de `solicitantes_mro`): `luis.oliveira`, `simone.lima`, `luan.perna`,
+    `miguel.nascimento`, `daniel.menezes`. Não mexido — é dado operacional e exige decisão caso a
+    caso sobre qual linha fica.
+  - **⚠️ COMMITADA COM VALIDAÇÃO INCOMPLETA.** O Luis autorizou o commit explicitamente, mas parou
+    a validação no meio para entender o fluxo. **Antes de evoluir, rodar `docs/ROTEIRO_TESTES_V620.md`**
+    (~20 min, 7 partes). Os 4 pontos que importam estão no fim do roteiro; o crítico é o **6.6** —
+    no modo público a sidebar tem de ter UM item só. Se aparecerem 10, é falha de acesso.
+  - **Feedback do Luis já registrado como v6.3.0** (`docs/prompt.md`, topo): (1) **admin deveria ver
+    tudo que há para aprovar, de todos os setores, sem escolher departamento** — hoje o almoxarife
+    cai no mesmo ramo do gestor e, sem departamento cadastrado, não vê nada; (2) fila do gestor
+    agrupada por solicitante (ideia não fechada — perguntar antes).
+
 - **v6.1.0 COMMITADA, gate verde (760 testes), ✅ VALIDADA NO APP REAL PELO LUIS (02/08/2026).**
   Ver `changelog/6.1.0.md` e o plano em `docs/PLANO_V610_USUARIOS_LOGIN.md` (seguido integralmente).
   Fundação de **usuários e login local**: tabela `usuarios`, `services/usuarios.py`, `ui/auth.py`,
@@ -46,9 +100,9 @@
     cai no mês anterior e o `historico_mensal` devolve o mês corrente como `0.0`, quebrando uma
     asserção de lista literal. Corrigido para comparar a **soma**. Fixture com data relativa +
     asserção posicional por mês é uma bomba-relógio — vale para os próximos testes de série mensal.
-  - **Próxima fase (fora do escopo):** telas do Requisitante ("Minhas Requisições"), do Gestor (fila
-    de aprovação) e da Portaria. Os três papéis já autenticam, mas ficam **sem rota** — a sidebar
-    mostra "Seu perfil ainda não tem telas" com o botão Sair.
+  - **Próxima fase (fora do escopo da v6.1.0):** telas do Requisitante, do Gestor e da Portaria —
+    **entregues na v6.2.0**, acima. A partir dela, "Seu perfil ainda não tem telas" só aparece para
+    papel desconhecido (banco editado à mão), que continua negando por omissão.
 
 - **v6.0.0 COMMITADA, gate verde (726 testes), ⏳ AGUARDANDO VALIDAÇÃO VISUAL DO LUIS.**
   Ver `changelog/6.0.0.md`. Refatoração de **UX/UI** aprovada de uma vez (11 itens): menu de 9 → 7,
@@ -226,14 +280,54 @@ de banco estão no `CLAUDE.md`; estas são as de domínio e de Streamlit.
 
 ---
 
+## Setup em OUTRA MÁQUINA (checklist)
+
+O repositório é **público** e não carrega dado operacional — `mro.db`, `backups/`, `vault/`,
+`graphify-out/` e o CSV do inventário estão no `.gitignore`. Quem clona pega o **código**, não o
+banco.
+
+```powershell
+git clone https://github.com/eholuwi/sistema-mro.git
+cd sistema-mro
+git fetch --all --prune
+git checkout feat/v5.0.0          # é a branch de trabalho; a main está parada na v4.5.5
+python -m venv venv               # NÃO copiar o venv de outra máquina (caminhos absolutos)
+venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt
+.\verify.ps1                      # tem de dar exit 0 antes de mexer em qualquer coisa
+```
+
+**O `mro.db` não vem pelo git.** Três caminhos, em ordem de preferência:
+
+1. **OneDrive** — a pasta `Documentos\programa\` inteira sincroniza, banco incluído. É como as
+   duas máquinas do Luis conversam hoje. ⚠️ Fechar o app antes de trocar de máquina: dois
+   Streamlit escrevendo no mesmo `mro.db` pelo OneDrive dá conflito de arquivo, e o `-wal`
+   sincroniza separado do `.db`.
+2. **Banco novo** — abrir o app sem `mro.db` cria um vazio (`criar_banco()` roda no 1º render).
+   Serve para desenvolver e rodar testes; não serve para validar com dado real.
+3. **Cópia manual** de um `.bak` de `backups/`.
+
+Depois do clone, para o grafo: `graphify update .` (AST local, sem API, custo 0) — `graphify-out/`
+não é versionado.
+
+---
+
 ## Prompt pronto para colar na próxima sessão (qualquer dispositivo)
 
 ```
 Continuar o Sistema MRO (Inventus Power). Leia @docs/HANDOFF.md e @docs/prompt.md (backlog vivo).
-Trabalhe na branch feat/v5.0.0 — `git fetch --all --prune && git checkout feat/v5.0.0` antes de
-qualquer coisa. Estado: v5.8.0 commitada (015a5cf), 641 testes verdes, validação no app real
-PENDENTE (roteiro no HANDOFF). Próximo passo do plano: passada global de UX (barra_filtros /
-tabela_paginada nas tabelas cruas da F4a), página a página com validação — nunca em bloco.
+Branch feat/v5.0.0 — `git fetch --all --prune && git checkout feat/v5.0.0` antes de qualquer coisa.
+
+Estado: v6.2.0 commitada e pushada (telas self-service: Requisitante, Gestor, Portaria + modo
+público da guarita + correção do login por alias da v6.1.0). Gate verde, 793 testes.
+A validação no app real ficou INCOMPLETA — roteiro em @docs/ROTEIRO_TESTES_V620.md (~20 min).
+
+Próximo trabalho = v6.3.0, item 1 do topo de docs/prompt.md: o perfil ADMIN (almoxarife) tem de
+ver de uma vez tudo o que há para aprovar, de TODOS os setores, sem escolher departamento — hoje
+ele cai no mesmo ramo do gestor e, sem departamento cadastrado, não vê nada. Cuidado registrado
+no backlog: NÃO afrouxar `listar_requisicoes_por_setor` (setor vazio devolve [] de propósito,
+nega por omissão para gestor sem departamento) — criar caminho explícito para "todos os setores".
+O item 2 (fila do gestor agrupada por solicitante) é ideia não fechada: PERGUNTAR antes.
+
 Siga a skill atualizar-sistema-mro, use `graphify query` antes de abrir arquivo grande, valide com
 `.\verify.ps1` (exit 0) e PARE para aprovação antes de cada commit.
 ```

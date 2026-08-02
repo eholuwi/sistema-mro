@@ -20,8 +20,8 @@ from streamlit_option_menu import option_menu
 
 from services.constants import VERSAO_ROTULO
 from services.db_functions import listar_inventario, listar_scs
-from ui.auth import fazer_logout, rotulo_papel, usuario_logado
-from ui.router import opcoes_menu, icones_menu
+from ui.auth import em_modo_publico, fazer_logout, rotulo_papel, sair_modo_publico, usuario_logado
+from ui.router import ROTAS, ROTA_PUBLICA, opcoes_menu, icones_menu
 from ui.tema import paleta_atual
 
 # v6.0.0 — o número deixou de ser digitado aqui e vem de `services/constants.py`
@@ -61,11 +61,55 @@ def _render_perfil(usuario: dict | None) -> None:
         fazer_logout()
 
 
+def _sidebar_publica(pal) -> str:
+    """Barra do modo público da Portaria (v6.2.0): UMA rota e nada mais.
+
+    Sem as métricas de estoque do rodapé, de propósito — a guarita consulta requisição, e
+    total de itens/críticos/SCs abertas é informação interna que não precisa aparecer num
+    terminal compartilhado (de quebra, poupa o `listar_inventario()` a cada consulta).
+    """
+    with st.sidebar:
+        st.image(LOGO, width="stretch")
+        st.markdown(
+            """
+        <div class="sidebar-title">
+            <span style="font-size: 1.4rem;">MRO Inventus</span>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+        option_menu(
+            menu_title=None,
+            options=[ROTA_PUBLICA],
+            icons=[ROTAS[ROTA_PUBLICA].icone],
+            menu_icon="cast",
+            default_index=0,
+            styles=pal["option_menu_styles"],
+        )
+        st.markdown("---")
+        st.caption(":material/badge: **Portaria** · consulta pública")
+        if st.button(":material/logout: Sair do modo público", key="sb_sair_publico", width="stretch"):
+            sair_modo_publico()
+        st.markdown(
+            "<div style='text-align:center; margin-top:10px; color: var(--primary-orange); "
+            f"font-weight:700; font-size:0.8rem; letter-spacing:0.5px;'>{VERSAO}</div>",
+            unsafe_allow_html=True,
+        )
+    return ROTA_PUBLICA
+
+
 def render_sidebar() -> str:
     """Desenha a sidebar e devolve a página escolhida no menu."""
     pal = paleta_atual()
     usuario = usuario_logado()
     papel = usuario["papel"] if usuario else None
+    # v6.2.0 — o modo público é checado ANTES de qualquer coisa e é o único jeito correto:
+    # `papel_atual()` é None tanto para quem entrou pela consulta da Portaria quanto para
+    # quem abre o app com a flag desligada, e para este segundo caso `opcoes_menu(None)`
+    # devolve o menu INTEIRO (contrato legado). Inverter a ordem entregaria as 10 rotas a
+    # quem entrou sem credencial nenhuma.
+    if em_modo_publico() and not usuario:
+        return _sidebar_publica(pal)
     with st.sidebar:
         # 1. Cabeçalho com Logo/Título (v4.1.0 — logo Inventus; versão no rodapé da nav)
         st.image(LOGO, width="stretch")
@@ -83,9 +127,10 @@ def render_sidebar() -> str:
         # menu é o completo de sempre.
         opcoes = opcoes_menu(papel)
         if not opcoes:
-            # Requisitante/gestor/portaria ainda não têm tela (próxima fase). Sai daqui
-            # COM o botão Sair renderizado — deixar a pessoa presa numa tela sem saída
-            # seria a pior versão desta borda.
+            # v6.2.0 — os 5 papéis do domínio têm rota; sobra o papel DESCONHECIDO (banco
+            # editado à mão, papel removido numa versão futura), que nega por omissão. Sai
+            # daqui COM o botão Sair renderizado — deixar a pessoa presa numa tela sem
+            # saída seria a pior versão desta borda.
             st.info("Seu perfil ainda não tem telas. Fale com o almoxarife.")
             _render_perfil(usuario)
             st.stop()

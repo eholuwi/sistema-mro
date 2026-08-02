@@ -20,7 +20,10 @@ from ui.paginas import (
     dashboard,
     ficha_360,
     gerenciar_itens,
+    gestor,
     movimentacao,
+    portaria,
+    requisitante,
     saldo_estoque,
 )
 
@@ -43,6 +46,12 @@ ROTAS: dict[str, Rota] = {
     "Movimentação": Rota("arrow-repeat", movimentacao.render),  # F4b
     "Controle de SC": Rota("receipt", controle_sc.render),  # F4a
     "Configurações": Rota("gear", configuracoes.render),
+    # v6.2.0 — telas self-service, no FIM do menu de propósito: a ordem das 7 anteriores é
+    # a navegação que o almoxarifado já tem na mão, e cada um dos 3 papéis novos vê um menu
+    # de um item só, então a posição relativa aqui não muda a vida de ninguém.
+    "Minhas Requisições": Rota("inbox", requisitante.render),
+    "Aprovações do Setor": Rota("clipboard-check", gestor.render),
+    "Portaria": Rota("pass", portaria.render),
 }
 
 # Páginas cujo render já vive em ui/paginas/ (as demais seguem no if/elif do app.py).
@@ -54,18 +63,26 @@ ROTAS_MIGRADAS: frozenset[str] = frozenset(n for n, r in ROTAS.items() if r.rend
 #
 # "O que o comprador vê" foi definido pelo Luis (01/08/2026): ele planeja e acompanha,
 # não movimenta estoque nem administra o sistema — daí a ausência de Movimentação e
-# Configurações. Requisitante/gestor/portaria ficam SEM rota nesta fase: as telas deles
-# são a próxima fase, e dar acesso às telas do almoxarife enquanto isso seria pior que
-# não ter acesso nenhum.
+# Configurações. O comprador NÃO ganhou as telas novas na v6.2.0: elas são self-service de
+# quem consome material, não de quem compra.
+#
+# v6.2.0 — requisitante/gestor/portaria saem do `frozenset()` vazio da v6.1.0 e passam a
+# ter exatamente UMA rota, a sua. É o mínimo que faz sentido: cada um desses papéis existe
+# para uma tarefa só, e dar-lhes as telas do almoxarife seria acesso demais.
 ROTAS_POR_PAPEL: dict[str, frozenset[str]] = {
     "almoxarife": frozenset(ROTAS.keys()),
     "comprador": frozenset(
         {"Dashboard", "Saldo em Estoque", "Ficha 360", "Cadastro de Itens", "Controle de SC"}
     ),
-    "requisitante": frozenset(),
-    "gestor": frozenset(),
-    "portaria": frozenset(),
+    "requisitante": frozenset({"Minhas Requisições"}),
+    "gestor": frozenset({"Aprovações do Setor"}),
+    "portaria": frozenset({"Portaria"}),
 }
+
+# v6.2.0 — o que a consulta pública da Portaria enxerga: uma rota, de leitura pura. Vive
+# aqui junto do resto do mapa de acesso, e não em `ui/sidebar.py`, porque quem responde
+# "quem vê o quê" neste sistema é o router.
+ROTA_PUBLICA = "Portaria"
 
 
 def opcoes_menu(papel: str | None = None) -> list[str]:

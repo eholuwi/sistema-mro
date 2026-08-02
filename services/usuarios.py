@@ -86,8 +86,14 @@ def _gerar_login(nome: str) -> str | None:
 def _gerar_ident_norm(nome: str) -> str:
     """Chave ÚNICA de busca do login: sem acento, minúscula, sem ponto e sem espaço.
 
-    É o que permite `autenticar` aceitar as três formas que a pessoa vai digitar —
-    'Jasiva Lopes', 'jasiva.lopes' e ' JASIVA  LOPES ' — sem três colunas no banco.
+    Aplicada ao NOME COMPLETO, é o que faz 'Jasiva Lopes', ' JASIVA  LOPES ' e
+    'JasivaLopes' caírem na mesma conta sem três colunas no banco.
+
+    ⚠️ Aplicada ao ALIAS `primeiro.sobrenome`, só coincide com o `ident_norm` gravado
+    quando o nome tem exatamente duas palavras — 'jasiva.lopes' → 'jasivalopes' bate, mas
+    'ana.carvalho' → 'anacarvalho' não bate com 'anaclarapascoaldecarvalho'. Foi o bug de
+    login da v6.1.0; quem resolve o alias hoje é `_localizar_por_identificador`, não esta
+    função.
     """
     return re.sub(r"[\s.]+", "", _sem_acento(nome))
 
@@ -198,6 +204,43 @@ def _sem_segredo(row) -> dict:
     return usuario
 
 
+def _localizar_por_identificador(conn, identificador: str):
+    """Linha de `usuarios` para o que a pessoa digitou. None se não achar ou se for ambíguo.
+
+    Duas chaves, nesta ordem:
+
+    1. `ident_norm` — o NOME COMPLETO normalizado. Sempre funciona, para todo mundo.
+    2. o alias `primeiro.sobrenome` da coluna `login`.
+
+    O passo 2 é a correção de um bug da v6.1.0 (achado em 02/08/2026, ao ligar o login para
+    os requisitantes): `_gerar_login` descarta os nomes do MEIO, então o alias exibido na
+    tela — 'ana.carvalho' para 'ANA CLARA PASCOAL DE CARVALHO' — não normalizava para o
+    `ident_norm` gravado. A busca só por `ident_norm` recusava o login que a própria tela
+    anunciava, e a mensagem genérica ("Usuário ou PIN inválidos") escondia o motivo. Num
+    cadastro real de 104 pessoas, 88 caíam nisso; só quem tem nome de duas palavras entrava.
+
+    **`login` NÃO é único** (o `UNIQUE` do schema está em `nome_norm`/`ident_norm`): duas
+    pessoas cadastradas com grafias diferentes da mesma identidade — 'Miguel Magalhaes Do
+    Nascimento' e 'Miguel Nascimento' — compartilham 'miguel.nascimento'. A ordem acima já
+    resolve a maioria desses casos: quando alguém se chama LITERALMENTE como o alias, o
+    passo 1 casa e essa pessoa vence, deterministicamente. Sobra o empate real (dois nomes
+    longos, nenhum igual ao alias, como 'Luis Gabriel Arruda de Oliveira' × 'Luis Gabriel
+    Oliveira'), e aí o alias é RECUSADO em vez de desempatado no chute: os candidatos podem
+    ter papéis diferentes, e entrar na conta errada é pior que não entrar. Quem cair nesse
+    caso usa o nome completo, que é sempre único.
+    """
+    ident = _gerar_ident_norm(identificador)
+    if not ident:
+        return None
+    row = conn.execute("SELECT * FROM usuarios WHERE ident_norm=?", (ident,)).fetchone()
+    if row is not None:
+        return row
+    # `login` já nasce sem acento e minúsculo; tirar o ponto o põe na mesma forma do
+    # `ident_norm`. NULL (nome de uma palavra) nunca casa — REPLACE(NULL) é NULL.
+    candidatos = conn.execute("SELECT * FROM usuarios WHERE REPLACE(login,'.','')=?", (ident,)).fetchall()
+    return candidatos[0] if len(candidatos) == 1 else None
+
+
 def autenticar(identificador: str, pin: str) -> dict | None:
     """Valida nome/login + PIN. Sucesso → dict do usuário (sem `pin_hash`) e `ultimo_login`
     atualizado. Falha → None, sem distinguir o motivo.
@@ -205,12 +248,8 @@ def autenticar(identificador: str, pin: str) -> dict | None:
     O None único é intencional: a tela mostra uma mensagem genérica, então descobrir se
     o nome existe, se está inativo ou se só o PIN está errado exige tentativa e erro.
     """
-    ident = _gerar_ident_norm(identificador)
-    if not ident:
-        return None
-
     with transaction() as conn:
-        row = conn.execute("SELECT * FROM usuarios WHERE ident_norm=?", (ident,)).fetchone()
+        row = _localizar_por_identificador(conn, identificador)
         if row is None or not row["ativo"] or not verificar_pin(pin, row["pin_hash"]):
             return None
         conn.execute("UPDATE usuarios SET ultimo_login=CURRENT_TIMESTAMP WHERE id=?", (row["id"],))

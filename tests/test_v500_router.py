@@ -44,6 +44,9 @@ def test_rotas_migradas_sao_as_com_render():
             "Controle de SC",
             "Ficha 360",
             "Movimentação",
+            "Minhas Requisições",  # v6.2.0 — telas self-service
+            "Aprovações do Setor",
+            "Portaria",
         }
     )
     for nome in ROTAS_MIGRADAS:
@@ -57,7 +60,7 @@ def test_menu_v600_nao_tem_mais_ajuda_nem_scm_integrado():
     from ui.paginas import ajuda, scm_integrado
 
     assert {"Ajuda", "SCM Integrado"}.isdisjoint(set(opcoes_menu()))
-    assert len(opcoes_menu()) == 7
+    assert len(opcoes_menu()) == 10  # v6.2.0: as 7 da v6.0.0 + as 3 telas self-service
     assert callable(ajuda.conteudo)
     assert callable(scm_integrado.conteudo)
 

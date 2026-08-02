@@ -218,6 +218,71 @@ def test_autenticar_normaliza_identificador(db):
         assert usuario["id"] == uid
 
 
+def test_autenticar_pelo_alias_com_nomes_do_meio(db):
+    """v6.2.0 — regressão do bug de login da v6.1.0.
+
+    `_gerar_login` descarta os nomes do MEIO, então o alias exibido na tela não normaliza
+    para o `ident_norm` gravado (nome completo). Quem tem 3+ nomes — a maioria absoluta do
+    cadastro real — recebia "Usuário ou PIN inválidos" usando exatamente o login que a
+    própria tela anunciava. Este teste usa um nome de QUATRO palavras de propósito: com
+    'Jasiva Lopes' (duas) o bug não aparece, que foi o motivo de ele passar despercebido.
+    """
+    ok, _ = U.salvar_usuario("Ana Clara Pascoal de Carvalho", "requisitante")
+    assert ok
+    uid = _por_nome("Ana Clara Pascoal de Carvalho")["id"]
+    assert _por_nome("Ana Clara Pascoal de Carvalho")["login"] == "ana.carvalho"
+    U.definir_pin(uid, "1234")
+
+    for forma in ("Ana Clara Pascoal de Carvalho", "ANA CLARA PASCOAL DE CARVALHO", "ana.carvalho"):
+        usuario = U.autenticar(forma, "1234")
+        assert usuario is not None, forma
+        assert usuario["id"] == uid
+
+    assert U.autenticar("ana.carvalho", "0000") is None  # o alias não afrouxa o PIN
+
+
+def test_alias_ambiguo_recusa_e_o_nome_completo_resolve(db):
+    """`login` NÃO é único: duas grafias da mesma identidade compartilham o alias.
+
+    Par real do `mro.db` ('Luis Gabriel Arruda de Oliveira' × 'Luis Gabriel Oliveira'), em
+    que NENHUM dos dois se chama literalmente 'Luis Oliveira' — o alias não tem como ser
+    resolvido. Recusar é a escolha certa: os candidatos podem ter papéis diferentes, e
+    entrar na conta errada é pior que não entrar.
+    """
+    assert U.salvar_usuario("Luis Gabriel Arruda de Oliveira", "almoxarife")[0]
+    assert U.salvar_usuario("Luis Gabriel Oliveira", "requisitante")[0]
+    longo = _por_nome("Luis Gabriel Arruda de Oliveira")
+    curto = _por_nome("Luis Gabriel Oliveira")
+    assert longo["login"] == curto["login"] == "luis.oliveira"
+    U.definir_pin(longo["id"], "1111")
+    U.definir_pin(curto["id"], "2222")
+
+    # O alias é ambíguo: não autentica NINGUÉM, com PIN de qualquer um dos dois.
+    assert U.autenticar("luis.oliveira", "1111") is None
+    assert U.autenticar("luis.oliveira", "2222") is None
+
+    # O nome completo continua único e resolve cada um na sua conta.
+    assert U.autenticar("Luis Gabriel Arruda de Oliveira", "1111")["papel"] == "almoxarife"
+    assert U.autenticar("Luis Gabriel Oliveira", "2222")["papel"] == "requisitante"
+
+
+def test_alias_nao_atropela_o_nome_completo_de_outra_pessoa(db):
+    """Borda real do `mro.db`: o alias de uma pessoa é o nome completo de outra.
+
+    'Miguel Nascimento' tem `ident_norm='miguelnascimento'`, que é exatamente o alias
+    'miguel.nascimento' normalizado. O nome completo tem de vencer — senão digitar o
+    próprio nome poderia cair na conta do homônimo."""
+    assert U.salvar_usuario("Miguel Nascimento", "comprador")[0]
+    assert U.salvar_usuario("Miguel Magalhaes Do Nascimento", "requisitante")[0]
+    curto = _por_nome("Miguel Nascimento")
+    U.definir_pin(curto["id"], "2222")
+
+    usuario = U.autenticar("Miguel Nascimento", "2222")
+
+    assert usuario is not None and usuario["id"] == curto["id"]
+    assert usuario["papel"] == "comprador"
+
+
 def test_autenticar_nome_de_uma_palavra(db):
     """Nome de uma palavra não tem alias `primeiro.sobrenome` — mas autentica pelo nome."""
     ok, _ = U.salvar_usuario("Portaria", "portaria")
@@ -340,15 +405,17 @@ def test_exigir_login_default_false(db):
 
 def test_rotas_por_papel():
     assert opcoes_menu("almoxarife") == list(ROTAS.keys())
-    assert len(opcoes_menu("almoxarife")) == 7
+    assert len(opcoes_menu("almoxarife")) == 10  # v6.2.0: 7 + as 3 telas self-service
 
     comprador = opcoes_menu("comprador")
     assert comprador == ["Dashboard", "Saldo em Estoque", "Ficha 360", "Cadastro de Itens", "Controle de SC"]
     assert {"Movimentação", "Configurações"}.isdisjoint(comprador)
 
-    # Telas do requisitante/gestor/portaria são a próxima fase.
-    for papel in ("requisitante", "gestor", "portaria"):
-        assert opcoes_menu(papel) == []
+    # v6.2.0 — os três papéis saíram do "sem rota" da v6.1.0: cada um ganhou a SUA tela
+    # (detalhe em tests/test_v620_telas_self_service.py).
+    assert opcoes_menu("requisitante") == ["Minhas Requisições"]
+    assert opcoes_menu("gestor") == ["Aprovações do Setor"]
+    assert opcoes_menu("portaria") == ["Portaria"]
 
     # Papel desconhecido nega por omissão (não libera o menu inteiro).
     assert opcoes_menu("papel-que-nao-existe") == []
@@ -462,9 +529,13 @@ def test_sidebar_sem_login_mantem_o_rodape_de_sempre(db):
 
 
 def test_sidebar_para_quando_o_papel_nao_tem_tela(db):
-    """Requisitante/gestor/portaria (telas na próxima fase): avisa e para — mas sai com
-    o botão Sair na tela, senão a pessoa fica presa sem como trocar de usuário."""
-    at = _sidebar_como("requisitante")
+    """Papel sem rota nenhuma: avisa e para — mas sai com o botão Sair na tela, senão a
+    pessoa fica presa sem como trocar de usuário.
+
+    v6.2.0 — o exemplo deixou de ser 'requisitante' (que agora tem a sua tela) e passou a
+    ser um papel DESCONHECIDO, que é a borda que sobrou: banco editado à mão ou papel
+    removido numa versão futura. A negativa por omissão é o comportamento a proteger."""
+    at = _sidebar_como("papel-que-nao-existe")
     assert not at.exception, [e.value for e in at.exception]
     assert any("não tem telas" in i.value for i in at.sidebar.info)
     assert [b for b in at.sidebar.button if b.key == "sb_sair"]

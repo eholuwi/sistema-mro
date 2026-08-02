@@ -293,6 +293,8 @@ def criar_banco():
             observacoes        TEXT,
             status             TEXT CHECK(status IN ('Aberta','Parcial','Entregue','Cancelada')) DEFAULT 'Aberta',
             tipo_fluxo         TEXT,
+            aprovado_por       TEXT,
+            aprovado_em        TEXT,
             data_criacao       TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -969,6 +971,28 @@ def _migrar(conn):
             _backup_db("requisicoes-tipo-fluxo-v570")
         conn.execute("ALTER TABLE requisicoes ADD COLUMN tipo_fluxo TEXT")
         logger.info("  ↳ Migração v5.7.0: tipo_fluxo em requisicoes adicionada (legado → NULL).")
+
+    # v6.2.0 — aprovação do gestor (tela "Aprovações do Setor"). Registra QUEM autorizou o
+    # pedido do setor e QUANDO. NÃO é status (fora do CHECK de `status`, de propósito) e NÃO
+    # bloqueia separação/entrega: é a autorização antecipada do fluxo self-service, paralela
+    # ao `autorizador_*`, que continua sendo exigido do almoxarife na ENTREGA. Aditiva e sem
+    # backfill: NULL = "nenhum gestor aprovou", que é a verdade sobre todo o legado — as
+    # requisições anteriores nasceram sem esta etapa. O guard olha as DUAS colunas e cada
+    # ALTER tem o seu `if`: o sqlite3 não abre transação para DDL, então um crash entre os
+    # dois ADD COLUMN deixaria a primeira coluna já commitada, e um guard só em
+    # `aprovado_por` nunca mais completaria a segunda.
+    if "aprovado_por" not in cols_req or "aprovado_em" not in cols_req:
+        if conn.execute("SELECT 1 FROM requisicoes LIMIT 1").fetchone():
+            # Mesmo motivo dos backups da v4.7.0/v5.6.0/v5.7.0: os ALTER TABLE acima deixam
+            # transação aberta e sem este commit o `wal_checkpoint` devolve BUSY e o .bak
+            # sai incompleto.
+            conn.commit()
+            _backup_db("requisicoes-aprovacao-gestor-v620")
+        if "aprovado_por" not in cols_req:
+            conn.execute("ALTER TABLE requisicoes ADD COLUMN aprovado_por TEXT")
+        if "aprovado_em" not in cols_req:
+            conn.execute("ALTER TABLE requisicoes ADD COLUMN aprovado_em TEXT")
+        logger.info("  ↳ Migração v6.2.0: aprovado_por/aprovado_em em requisicoes adicionadas.")
 
     conn.commit()
 

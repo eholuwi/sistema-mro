@@ -1,26 +1,111 @@
 # Backlog / prompt de continuidade — Sistema MRO
 
-> Atualizado em 01/08/2026, ao planejar a **v6.1.0** (Usuários e Login local — fundação).
-> As 4 demandas antigas desta lista foram entregues entre a v4.8 e a v5.6 e saíram daqui.
-> O estudo das requisições digitais segue em `docs/REQUISICOES_DIGITAIS_ESTUDO.md` e a decisão
-> de arquitetura do login em `docs/DECISAO_ENTREGA_FINAL_LOGIN.md`.
+> Atualizado em 02/08/2026, ao planejar a **v6.2.0** (Telas self-service: Requisitante · Gestor ·
+> Portaria). A v6.1.0 (Usuários e Login) saiu desta lista — entregue, validada no app real e
+> commitada (`cded88c`).
+> As demandas antigas desta lista foram entregues entre a v4.8 e a v5.6 e saíram daqui.
+> O estudo das requisições digitais segue em `docs/REQUISICOES_DIGITAIS_ESTUDO.md`, a decisão
+> de arquitetura do login em `docs/DECISAO_ENTREGA_FINAL_LOGIN.md` e o plano da fase atual em
+> `docs/PLANO_V620_TELAS_SELF_SERVICE.md`.
+
+---
+
+## 🔧 DEMANDA ABERTA — v6.3.0 · Ajustes das telas self-service (feedback do Luis, 02/08/2026)
+
+> **Aberta em 02/08/2026**, ao testar a v6.2.0 no app real. São dois ajustes de **usabilidade
+> da tela do Gestor** — nenhum muda regra de negócio. A v6.2.0 fica como está (commitada e
+> verde); estes entram na próxima sessão.
+
+### 1. Admin não deveria escolher setor — deveria ver TUDO que há para aprovar (prioridade)
+
+**Como está:** `ui/paginas/gestor.py::_escolher_setor` trata todo usuário logado igual — lê
+`usuario["departamento"]` e, se estiver vazio, **para** com um aviso. Para o almoxarife
+(admin) isso é duplamente ruim: ele normalmente **não tem departamento** cadastrado, então a
+tela não mostra nada; e mesmo cadastrando um, ele veria só um setor por vez.
+
+**Como deve ficar (palavras do Luis):** *"deveria mostrar tudo que tem pra aprovar logo de
+todos os setores pra perfil de admin"*. Ou seja: papel `almoxarife` → fila **consolidada**,
+de todos os setores, sem seletor obrigatório (o seletor vira filtro opcional, com "Todos"
+como padrão). Gestor continua no seu departamento.
+
+**Onde mexer:**
+- `services/db_functions.listar_requisicoes_por_setor` — hoje `setor` vazio devolve `[]` de
+  propósito (nega por omissão, para gestor sem departamento não virar admin). **Não afrouxar
+  essa função**: criar um caminho explícito para "todos os setores" (parâmetro `setor=None`
+  com semântica diferente de `""`, ou função irmã `listar_requisicoes_para_aprovacao()`), para
+  que a negativa por omissão do gestor continue intacta. Há teste fixando o comportamento
+  atual: `test_listar_requisicoes_por_setor_sem_setor_nega`.
+- `ui/paginas/gestor.py::_escolher_setor` — ramo por papel: `almoxarife` → consolidado;
+  `gestor` → departamento; sem login → simulação (como hoje).
+- A fila consolidada precisa mostrar a coluna **Setor** com destaque (hoje ela já vem no
+  `_tabela`, mas com um setor só ela é redundante — com todos, é a informação principal).
+
+### 2. Tela do gestor agrupada por solicitante (a confirmar)
+
+*"em perfis de gestor deveria aparecer por solicitante eu acho"* — ideia ainda **não
+fechada** (o "eu acho" é do Luis). Confirmar antes de implementar: agrupar a fila por
+`emitente` (expander por pessoa, com contagem), em vez da lista plana por data. Decidir se
+substitui a ordenação por data (fila do mais antigo) ou se é uma visão alternativa —
+**perguntar antes**, porque a ordem por data é o que faz "fila" significar alguma coisa.
+
+---
+
+## 🟡 EM VALIDAÇÃO — v6.2.0 · Telas self-service (Requisitante · Gestor · Portaria)
+
+> **Implementada e COMMITADA em 02/08/2026** com OK explícito do Luis, gate verde (793 testes).
+> Os 7 itens do backlog abaixo estão feitos, mais a correção do login por alias (bug da v6.1.0
+> achado ao testar). Ver `changelog/6.2.0.md`; plano de referência em
+> `docs/claude/Sessão 3/PLANO_V620_TELAS_SELF_SERVICE.md` e análise técnica prévia em
+> `Etapa 2 Plan.md`, na mesma pasta.
+>
+> ⚠️ **A validação no app real ficou INCOMPLETA** (o Luis parou para entender o fluxo). O commit
+> saiu com autorização explícita dele mesmo assim. Roteiro passo a passo em
+> `docs/ROTEIRO_TESTES_V620.md` — os 4 pontos críticos estão na última seção do roteiro; o mais
+> importante é o **6.6** (menu do modo público tem de ter UM item só).
+>
+> **Decisões travadas em 02/08/2026 (Luis):**
+> - **Aprovação do Gestor NÃO bloqueante** — registra a autorização antecipada
+>   (`requisicoes.aprovado_por`/`aprovado_em`, migração aditiva com backup); o almoxarife pode
+>   separar/entregar antes; **sem novo status** no `CHECK` de `requisicoes.status`.
+> - **Portaria = consulta pública por número, sem login** (terminal compartilhado): o `gate()`
+>   ganha um "modo público" com botão na tela de login; a página é leitura pura.
+> - **Setor na criação do Requisitante**: mantém o `selectbox` de `listar_setores_conhecidos()`,
+>   pré-preenchido com o `departamento` do usuário logado e editável.
+> - **Filtro do Gestor = igualdade simples de setor** (`requisicoes.setor == departamento`), com
+>   seletor de setor editável para testar outros setores. Limitação aceita: vocabulários divergem
+>   (**59** setores × 19 departamentos, 9 de interseção — recontado no `mro.db` em 02/08/2026; o
+>   plano dizia 57) — o filtro cobre o fluxo novo.
+> - **Simulação "Visão do Solicitante"**: mantida com `exigir_login` desligada (modo legado);
+>   com login ligado, o requisitante usa a tela própria.
+>
+> Backlog de implementação — **todos os 7 itens concluídos em 02/08/2026**:
+> 1. ✅ `database.py` — migração aditiva `aprovado_por`/`aprovado_em` + `_backup_db`.
+> 2. ✅ `services/db_functions.py` — `aprovar_requisicao`, `buscar_requisicao_por_numero`,
+>    `listar_requisicoes_por_setor` (todas sobre o `_consultar_requisicoes` extraído).
+> 3. ✅ `ui/auth.py` — modo público da Portaria; `ui/router.py` + `ui/sidebar.py` — 3 rotas novas e
+>    menu por papel (7 → 10 rotas).
+> 4. ✅ `ui/paginas/movimentacao.py` — `_opcoes_setor()` + bloco 1 parametrizado (setor padrão +
+>    emitente fixo) + `_req_painel_pedidos` extraído da Visão do Solicitante.
+> 5. ✅ Páginas novas `ui/paginas/requisitante.py`, `ui/paginas/gestor.py`, `ui/paginas/portaria.py`.
+> 6. ✅ `tests/test_v620_telas_self_service.py` (27 testes) + ajustes em `test_v610_usuarios.py` e
+>    `test_v500_router.py` (o menu cresceu — o plano citava v410/v530, que não tocam o menu).
+> 7. ✅ `VERSAO = "6.2.0"`, `changelog/6.2.0.md`, `docs/HANDOFF.md`.
+>
+> **Falta:** validação no app real (roteiro de 7 passos na §13 do plano) → OK do Luis → commit →
+> `graphify update .`.
 
 ---
 
 ## ✅ ENTREGUE — v6.1.0 · Usuários e Login local (FUNDAÇÃO)
 
-> **Implementada em 01/08/2026**, gate verde (756 testes), aguardando validação no app real e o
-> OK do Luis para commitar. Ver `changelog/6.1.0.md`; o roteiro de validação está no
-> `docs/HANDOFF.md` (STATUS ATUAL). O item 8 do backlog abaixo virou também
-> `docs/FUNCIONALIDADES.md` › "Usuários e acesso" e duas linhas no `CLAUDE.md`.
+> **Entregue em 02/08/2026** — implementada, validada no app real pelo Luis e commitada
+> (`cded88c`). Ver `changelog/6.1.0.md`. O item 8 do backlog virou `docs/FUNCIONALIDADES.md` ›
+> "Usuários e acesso" e duas linhas no `CLAUDE.md`.
 >
 > **Resolvido o que estava em aberto:** a aba "Usuários" em Configurações entrou (7ª aba) — sem
 > ela ninguém definiria PIN. Duas guardas foram além do plano, ambas para bordas sem volta pela
 > UI: não dá para rebaixar/desativar o **último almoxarife ativo**, nem para ligar `exigir_login`
 > sem **nenhum** usuário ativo com PIN.
->
-> **Próxima fase:** telas do Requisitante ("Minhas Requisições" + criar), do Gestor (fila de
-> aprovação) e da Portaria. Os três papéis já existem e autenticam, mas seguem sem rota.
 
 **Decidido em 01/08/2026** (sessão do Luis):
 

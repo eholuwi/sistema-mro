@@ -17,6 +17,12 @@ from services.usuarios import ROTULO_PAPEL, autenticar, exigir_login
 
 SESSAO_USUARIO = "mro_usuario"
 
+# v6.2.0 — modo público da Portaria. A consulta de saída roda num terminal COMPARTILHADO
+# na guarita: exigir login ali significaria um PIN coletivo colado no monitor, que é pior
+# que não ter login. Quem entra por aqui não tem usuário nem papel — a sidebar dá uma rota
+# só ("Portaria"), que é leitura pura.
+SESSAO_PUBLICA = "mro_portaria_publica"
+
 MSG_CREDENCIAL_INVALIDA = "Usuário ou PIN inválidos."
 
 
@@ -49,6 +55,29 @@ def fazer_login(identificador: str, pin: str) -> tuple[bool, str]:
 def fazer_logout() -> None:
     """Encerra a sessão e recarrega a página."""
     st.session_state.pop(SESSAO_USUARIO, None)
+    st.session_state.pop(SESSAO_PUBLICA, None)
+    st.rerun()
+
+
+def em_modo_publico() -> bool:
+    """A aba está na consulta pública da Portaria (v6.2.0)?
+
+    Lido pelo `gate()` e pela sidebar. **Não é papel**: `papel_atual()` continua None aqui,
+    exatamente como para quem abre o app com a flag desligada — quem distingue os dois
+    casos é esta função, e é por isso que a sidebar a consulta ANTES de montar o menu.
+    """
+    return st.session_state.get(SESSAO_PUBLICA) is True
+
+
+def entrar_modo_publico() -> None:
+    """Abre a consulta pública (botão da tela de login) e recarrega."""
+    st.session_state[SESSAO_PUBLICA] = True
+    st.rerun()
+
+
+def sair_modo_publico() -> None:
+    """Fecha a consulta pública — a próxima execução cai de volta no `gate()`."""
+    st.session_state.pop(SESSAO_PUBLICA, None)
     st.rerun()
 
 
@@ -59,16 +88,18 @@ def render_login() -> None:
         with st.container(border=True):
             st.subheader(":material/lock: Acesso ao MRO")
             st.caption(
-                "Entre com o seu **nome** (ou `primeiro.sobrenome`) e o **PIN de 4 dígitos**. "
+                "Entre com o seu **nome completo** (como está no cadastro) e o **PIN de 4 "
+                "dígitos**. O atalho `primeiro.sobrenome` também serve — menos quando duas "
+                "pessoas cadastradas compartilham o mesmo atalho; aí vale o nome completo. "
                 "Não tem PIN? Fale com o almoxarife — ele define o seu em "
                 "**Configurações › Usuários**."
             )
 
             with st.form("form_login", clear_on_submit=False):
                 identificador = st.text_input(
-                    "Nome ou login",
+                    "Nome completo ou login",
                     key="login_ident",
-                    placeholder="ex.: Jasiva Lopes  ou  jasiva.lopes",
+                    placeholder="ex.: Ana Clara Pascoal de Carvalho  ou  ana.carvalho",
                 )
                 pin = st.text_input(
                     "PIN",
@@ -92,14 +123,34 @@ def render_login() -> None:
             if usuario_logado() and st.button("Voltar", key="login_voltar"):
                 st.rerun()
 
+            # v6.2.0 — saída pública da guarita, FORA do `st.form` (o form já tem o seu
+            # único submit). Escondido para quem tem sessão viva: trocar de usuário e cair
+            # no modo público seria um downgrade acidental de acesso.
+            if not usuario_logado():
+                st.markdown("---")
+                st.caption(
+                    "Consulta pública de requisições. Não é necessário login — funciona num "
+                    "terminal compartilhado."
+                )
+                if st.button(
+                    ":material/badge: Consulta de saída — Portaria (sem login)",
+                    key="login_portaria_publica",
+                    width="stretch",
+                ):
+                    entrar_modo_publico()
+
 
 def gate() -> None:
     """Trava o app quando `exigir_login` está ligada e não há sessão.
 
     No-op no padrão (flag desligada). Chamado no `app.py` ANTES da sidebar, para que o
     menu não apareça a quem ainda não entrou.
+
+    v6.2.0 — o modo público da Portaria também passa: quem clicou "Consulta de saída" na
+    tela de login entra sem credencial. O que limita esse acesso é a sidebar, que em modo
+    público monta um menu de UMA rota (`ui/sidebar.py`) — não este gate.
     """
-    if exigir_login() and not usuario_logado():
+    if exigir_login() and not usuario_logado() and not em_modo_publico():
         render_login()
         st.stop()
 
