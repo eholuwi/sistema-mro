@@ -63,7 +63,11 @@ def _aba_nova(usuario, PAL):
             "Peça ao almoxarife para cadastrar o seu, e ele vem preenchido nas próximas."
         )
     st.markdown("---")
-    _req_bloco_materiais(PAL, AJUDA_QTD)
+    # v6.4.0 — `ocultar_saldo=True` só aqui: esta é a tela de quem PEDE. O mesmo bloco
+    # renderizado pela Movimentação continua mostrando o saldo, porque lá quem monta o
+    # pedido é o almoxarife. Item a item, o cadastro ainda pode liberar a visão
+    # (`mostrar_saldo_requisitante`, marcada por padrão).
+    _req_bloco_materiais(PAL, AJUDA_QTD, ocultar_saldo=True)
     st.markdown("---")
 
     st.markdown("##### 3. Observações e Envio")

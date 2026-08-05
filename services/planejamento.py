@@ -22,6 +22,7 @@ from collections import Counter
 from database import transaction
 from services.constants import (
     HORIZONTE_REPOSICAO_DIAS,
+    JANELA_CONSUMO_DIAS,
     ANTECEDENCIA_REPOSICAO_DIAS,
     LEAD_TIME_DEFAULT_DIAS,
     PREVISAO_RUPTURA_SEM_RISCO,
@@ -145,6 +146,98 @@ def calcular_ponto_reposicao(item):
         "lead_time": lt,
         "lead_time_origem": lt_org,
         "lead_time_maturidade": lt_mat,
+    }
+
+
+def lead_time_para_sugestao(item):
+    """Lead time da SUGESTÃO automática de Mín/Máx — v6.4.0, pedido do Luis em 05/08/2026:
+    "o mín/máx calculado deveria considerar o cálculo automático do lead time também".
+
+    **É deliberadamente o INVERSO de `lead_time_efetivo`:**
+
+    | | 1ª escolha | 2ª | 3ª |
+    |---|---|---|---|
+    | `lead_time_efetivo` (ROP, reposição) | cadastrado (Neidson) | calculado | default |
+    | `lead_time_para_sugestao` (Mín/Máx) | **calculado** | cadastrado | default |
+
+    Não é incoerência — são perguntas diferentes. O ROP decide **compra real**, e ali a base
+    do Sr. Neidson tem prioridade por decisão de produto desde a v2.5.0. Esta função alimenta
+    um número que se propõe a ser "o que os dados dizem"; usar o lead time digitado à mão o
+    tornaria metade empírico e metade cadastral, e o gestor estaria comparando a base dele
+    com uma sugestão que já embute a própria base.
+
+    O que está em jogo, medido no `mro.db` de 05/08/2026: **104 itens têm lead time
+    calculado e 103 deles divergem do cadastrado** — o cadastrado é quase sempre um `20`
+    genérico, enquanto o calculado sai de recebimentos reais e varia de 6 a 100 dias.
+
+    Retorna a mesma tupla `(dias, origem, maturidade)` de `lead_time_efetivo`."""
+    ltc = _num(item.get("lead_time_calculado"))
+    if ltc > 0:
+        amostras = int(_num(item.get("lead_time_calculado_amostras")))
+        origem = item.get("lead_time_calculado_origem") or "SC7"
+        return int(round(ltc)), f"calculado ({origem}, {amostras} amostra(s))", "sugestão"
+    return lead_time_efetivo(item)
+
+
+def calcular_min_max_sugerido(item, amostras=None):
+    """Mín/Máx SUGERIDOS pelo consumo — v6.4.0, fórmulas travadas pelo Luis (05/08/2026):
+
+        mínimo = consumo_diário × lead time calculado  (≈ 1 mês de cobertura)
+        máximo = consumo_diário × 60 d                 (≈ 2 meses)
+
+    O máximo usa `HORIZONTE_REPOSICAO_DIAS` (60), a mesma constante que
+    `calcular_qtd_sugerida` usa como horizonte de reposição.
+
+    ⚠️ **O mínimo NÃO é mais idêntico ao ROP**, e a divergência é intencional (Luis,
+    05/08/2026). Os dois são `consumo × lead time`, mas escolhem lead times diferentes: o
+    ROP prefere o **cadastrado** (base do Neidson tem prioridade na compra real), esta
+    sugestão prefere o **calculado** (ver `lead_time_para_sugestao`). Em 103 dos 104 itens
+    com lead time calculado os dois números vão diferir — é esperado, não bug.
+
+    **NÃO grava nada e não é a base do Neidson.** É sugestão, no mesmo espírito do
+    `lead_time_calculado`: quem transforma em `estoque_minimo`/`estoque_maximo` é o gestor,
+    clicando em "Usar calculado".
+
+    Sem consumo não há o que sugerir (0 × qualquer lead time = 0, e gravar 0 como mínimo
+    "sugerido" mandaria o item para a fila de reposição por um número que ninguém calculou):
+    devolve zeros com origem explícita, e a UI mostra "—".
+
+    ⚠️ **`amostras=0` também não sugere nada** — e esta guarda foi paga em dados reais.
+    `consumo_medio_diario` é coluna PERSISTIDA, recalculada só quando o item se move: um
+    item parado guarda para sempre o consumo do dia em que parou. No `mro.db` de 05/08/2026
+    há um caso extremo — o PN 34FR0001 registrou uma saída de 99.999 unidades em 30/06
+    (erro de digitação evidente) e ficou com `consumo_medio_diario` de 3.333/dia, ainda que
+    `consumo_30d` já seja 0. Sem esta guarda, a visão em lote proporia mínimo **66.666**
+    para um item cujo mínimo cadastrado é **5**, e um clique em "aplicar" reescreveria a
+    base do Sr. Neidson com esse número. Zero saídas na janela = o consumo não tem lastro
+    recente, então não há sugestão. `amostras=None` pula a checagem (uso puro da fórmula).
+
+    Os 112 itens que caem aqui não somem da tela: aparecem sem sugestão, como todo item
+    sem consumo — e continuam com a base cadastrada intacta, que é o comportamento seguro."""
+    consumo = _num(item.get("consumo_medio_diario"))
+    lt, lt_origem, _ = lead_time_para_sugestao(item)
+    if consumo <= 0:
+        return {
+            "minimo": 0.0,
+            "maximo": 0.0,
+            "consumo_diario": consumo,
+            "lead_time": lt,
+            "origem": "sem consumo registrado",
+        }
+    if amostras is not None and amostras <= 0:
+        return {
+            "minimo": 0.0,
+            "maximo": 0.0,
+            "consumo_diario": consumo,
+            "lead_time": lt,
+            "origem": f"sem saída nos últimos {JANELA_CONSUMO_DIAS}d (consumo desatualizado)",
+        }
+    return {
+        "minimo": round(consumo * lt, 2),
+        "maximo": round(consumo * HORIZONTE_REPOSICAO_DIAS, 2),
+        "consumo_diario": consumo,
+        "lead_time": lt,
+        "origem": f"consumo {JANELA_CONSUMO_DIAS}d × lead time {lt_origem}",
     }
 
 

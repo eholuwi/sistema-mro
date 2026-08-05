@@ -40,12 +40,17 @@ from services.db_functions import (
     mapa_pn_por_requisicao,
     entregar_requisicao,
     adicionar_itens_requisicao,
+    atualizar_item_requisicao,
+    remover_item_requisicao,
+    reenviar_requisicao,
     cancelar_requisicao,
     listar_requisicoes_abertas,
     listar_emitentes_requisicao,
     exportar_movimentacoes_df,
 )
+from services.ficha import imagem_existente
 from ui.cache import invalidar_leituras
+from ui.componentes.requisicao import aviso_rejeicao
 from ui.tema import paleta_atual
 from ui.formatos import fmt
 from ui.componentes.exportar import botoes_export
@@ -574,6 +579,67 @@ def _fila_visao_almoxarife(autorizadores_lista):
                 st.error(res)
 
 
+def _req_ajustar_e_reenviar(req, chave):
+    """v6.4.0 — Painel de correção do pedido devolvido pelo gestor.
+
+    Fecha o ciclo que `rejeitar_requisicao` abre: o requisitante corrige a quantidade ou
+    tira o item que o gestor apontou e reenvia, e o pedido volta para a fila de aprovação.
+    Só aparece para quem está logado como dono do pedido (`permitir_cancelar`, o mesmo
+    critério que já libera o cancelamento): na simulação sem login qualquer pessoa editaria
+    o pedido de qualquer um.
+
+    Item já entregue não é editável — a guarda é do serviço (`atualizar_item_requisicao` /
+    `remover_item_requisicao`); aqui ele só aparece esmaecido, para o requisitante entender
+    por que não dá para mexer."""
+    st.markdown("###### :material/edit_note: Ajustar o pedido")
+    itens = listar_itens_requisicao(req["id"])
+    for it in itens:
+        atendida = float(it["quantidade_atendida"] or 0)
+        ca, cb, cc = st.columns([3, 1, 1])
+        ca.markdown(f"**{it['part_number']}** — {it['nome_item']} ({it['unidade']})")
+        if atendida > 0:
+            cb.caption(f"Já entregue: {atendida:g}")
+            cc.caption("Não editável")
+            continue
+        nova = cb.number_input(
+            "Qtd",
+            min_value=1.0,
+            step=1.0,
+            value=float(it["quantidade_solicitada"]),
+            key=f"{chave}_qtd_{it['id']}",
+            label_visibility="collapsed",
+        )
+        if nova != float(it["quantidade_solicitada"]):
+            if cc.button("Salvar", key=f"{chave}_salvar_{it['id']}", width="stretch"):
+                ok, msg = atualizar_item_requisicao(it["id"], nova)
+                (st.success if ok else st.error)(msg)
+                if ok:
+                    invalidar_leituras()
+                    st.rerun()
+        elif cc.button("Remover", key=f"{chave}_rm_{it['id']}", width="stretch"):
+            ok, msg = remover_item_requisicao(it["id"])
+            (st.warning if ok else st.error)(msg)
+            if ok:
+                invalidar_leituras()
+                st.rerun()
+
+    if st.button(
+        ":material/send: Reenviar para aprovação",
+        key=f"{chave}_reenviar_{req['id']}",
+        type="primary",
+        width="stretch",
+        disabled=not itens,
+        help="Devolve o pedido corrigido para a fila do gestor.",
+    ):
+        ok, msg = reenviar_requisicao(req["id"])
+        if ok:
+            invalidar_leituras()
+            st.success(msg)
+            st.rerun()
+        else:
+            st.error(msg)
+
+
 def _req_painel_pedidos(reqs, chave, permitir_cancelar=False):
     """Acompanhamento dos pedidos de UMA pessoa: métricas, tabela e detalhe item a item.
 
@@ -623,6 +689,10 @@ def _req_painel_pedidos(reqs, chave, permitir_cancelar=False):
     if not sel_s:
         return
     r_sel = opc_s[sel_s]
+    # v6.4.0 — pedido devolvido pelo gestor abre com o motivo em destaque. É a primeira
+    # coisa que o requisitante tem de ler: sem o motivo, "sua requisição voltou" não diz
+    # o que corrigir, e ele reenviaria exatamente o mesmo pedido.
+    devolvido = aviso_rejeicao(r_sel, para_requisitante=True) and not r_sel.get("reenviado_em")
     for it in listar_itens_requisicao(r_sel["id"]):
         falta = float(it["quantidade_solicitada"]) - float(it["quantidade_atendida"])
         marca = ":material/check_circle:" if falta <= 0 else ":material/pending:"
@@ -635,6 +705,8 @@ def _req_painel_pedidos(reqs, chave, permitir_cancelar=False):
         st.caption(
             f":material/how_to_reg: Aprovado por **{r_sel['aprovado_por']}** em {r_sel['aprovado_em']}"
         )
+    if permitir_cancelar and devolvido:
+        _req_ajustar_e_reenviar(r_sel, chave)
     if permitir_cancelar and r_sel["status"] == "Aberta":
         if st.button(
             ":material/cancel: Cancelar requisição (nada foi entregue)",
@@ -753,26 +825,58 @@ def _req_bloco_identificacao(setor_padrao="", emitente_fixo=None):
     return req_setor, req_emit, req_cc
 
 
-def _req_bloco_materiais(PAL, ajuda_qtd):
+def _saldo_visivel(item, ocultar_saldo):
+    """O saldo deste item pode ser mostrado a quem está montando o pedido? (v6.4.0)
+
+    Duas condições, e as duas importam: `ocultar_saldo` diz QUEM está olhando (só a tela do
+    Requisitante pede o ocultamento — almoxarife e comprador continuam vendo tudo, decisão
+    do Luis), e `mostrar_saldo_requisitante` diz PARA QUAIS itens o almoxarife liberou a
+    visão. Item sem a coluna preenchida (legado, antes da migração) conta como visível: o
+    default da coluna é 1 e esconder saldo por omissão surpreenderia. Pura/testável."""
+    if not ocultar_saldo:
+        return True
+    valor = (item or {}).get("mostrar_saldo_requisitante")
+    return True if valor is None else bool(valor)
+
+
+def _req_bloco_materiais(PAL, ajuda_qtd, ocultar_saldo=False):
     """Bloco 2 — Adicionar Materiais + lista temporária. Comum aos dois fluxos (v5.7.0).
 
     `ajuda_qtd` muda porque o significado de "Qtd Solicitada" muda: na Digital a entrega é
     decidida depois, na Fila; na Padrão o material sai agora. A lista vive em
     `st.session_state.itens_req` e é compartilhada pelos dois fluxos — trocar o seletor não
-    faz o usuário remontar o pedido."""
+    faz o usuário remontar o pedido.
+
+    v6.4.0 — `ocultar_saldo` é ligado SÓ pela tela do Requisitante: o bloco é o mesmo que a
+    Movimentação usa no balcão, e lá quem monta o pedido é o almoxarife, que precisa do
+    saldo para trabalhar. O item ainda pode liberar a visão individualmente (ver
+    `_saldo_visivel`). A **foto do material** aparece para todo mundo — é conferência
+    ("é esta peça mesmo?"), não informação restrita."""
     st.markdown("##### 2. Adicionar Materiais")
     _, item_req_add, _ = sel_material("Pesquise o material para requisitar", "sel_req_add")
 
     if item_req_add:
-        # Card de disponibilidade rápida (cores acompanham o tema via PAL)
-        st.markdown(
-            f"""
+        foto = imagem_existente(item_req_add)
+        if foto:
+            c_foto, c_saldo = st.columns([1, 3])
+            c_foto.image(foto, width="stretch")
+        else:
+            c_saldo = st.container()
+        if _saldo_visivel(item_req_add, ocultar_saldo):
+            # Card de disponibilidade rápida (cores acompanham o tema via PAL)
+            c_saldo.markdown(
+                f"""
             <div style="border: 1px solid {PAL["painel_borda"]}; padding: 10px; border-radius: 5px; background-color: {PAL["painel_bg"]}; margin-bottom: 10px;">
                 <span style="color: {PAL["accent"]}; font-weight: bold;">DISPONÍVEL:</span> {item_req_add.get("estoque_atual", 0)} {item_req_add.get("unidade", "UN")}
             </div>
         """,
-            unsafe_allow_html=True,
-        )
+                unsafe_allow_html=True,
+            )
+        else:
+            c_saldo.caption(
+                ":material/visibility_off: Peça a quantidade que você precisa — o almoxarifado "
+                "confere o saldo na separação."
+            )
 
     with st.form("form_add_item_req", clear_on_submit=True):
         qtd_sol = st.number_input("Qtd Solicitada *", min_value=1.0, step=1.0, value=1.0, help=ajuda_qtd)
@@ -790,6 +894,11 @@ def _req_bloco_materiais(PAL, ajuda_qtd):
                     "unidade": item_req_add.get("unidade", "UN"),
                     "estoque_disponivel": item_req_add.get("estoque_atual", 0),
                     "quantidade_solicitada": qtd_sol,
+                    # v6.4.0 — a permissão de ver saldo viaja com o item na lista: ela
+                    # vive no cadastro (`inventario`), e a lista temporária do
+                    # session_state não guarda o item inteiro para reconsultar.
+                    "mostrar_saldo_requisitante": item_req_add.get("mostrar_saldo_requisitante"),
+                    "imagem_path": item_req_add.get("imagem_path"),
                 }
             )
             st.rerun()
@@ -798,11 +907,18 @@ def _req_bloco_materiais(PAL, ajuda_qtd):
         st.markdown("###### :material/inventory_2: Itens na Requisição Atual:")
         for idx, it in enumerate(st.session_state.itens_req):
             with st.expander(f"{it['part_number']} — {it['nome_item']}", expanded=True):
-                c_info, c_del = st.columns([5, 1])
-                c_info.write(
-                    f"**Solicitado:** {it['quantidade_solicitada']:g} {it['unidade']} "
-                    f"· _saldo hoje:_ {it.get('estoque_disponivel', 0):g}"
+                foto_it = imagem_existente(it)
+                if foto_it:
+                    c_img, c_info, c_del = st.columns([1, 4, 1])
+                    c_img.image(foto_it, width="stretch")
+                else:
+                    c_info, c_del = st.columns([5, 1])
+                saldo_txt = (
+                    f" · _saldo hoje:_ {it.get('estoque_disponivel', 0):g}"
+                    if _saldo_visivel(it, ocultar_saldo)
+                    else ""
                 )
+                c_info.write(f"**Solicitado:** {it['quantidade_solicitada']:g} {it['unidade']}{saldo_txt}")
 
                 if c_del.button("Remover", key=f"rm_req_{idx}", type="primary"):
                     st.session_state.itens_req.pop(idx)

@@ -295,6 +295,10 @@ def criar_banco():
             tipo_fluxo         TEXT,
             aprovado_por       TEXT,
             aprovado_em        TEXT,
+            rejeitado_por      TEXT,
+            rejeitado_em       TEXT,
+            motivo_rejeicao    TEXT,
+            reenviado_em       TEXT,
             data_criacao       TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -796,6 +800,19 @@ def criar_banco():
     # preco_referencia/data_preco_ref: valoração; estoque_seguranca_calculado:
     # sugestão (o estoque_seguranca passa a ser parâmetro MANUAL do gestor).
     cols_inv0 = {r[1] for r in conn.execute("PRAGMA table_info(inventario)")}
+
+    # v6.4.0 — backup ANTES de tocar `inventario`, e só quando há algo a perder. As
+    # colunas abaixo são aditivas e sem backfill destrutivo, mas `inventario` É a base do
+    # Sr. Neidson: a regra do projeto é não alterar o schema dela sem backup (regra
+    # inviolável nº4). O `commit()` vem antes porque `_backup_db` abre uma SEGUNDA conexão
+    # para o `wal_checkpoint(TRUNCATE)` — com transação aberta aqui ele devolve BUSY e o
+    # .bak sai sem o conteúdo do WAL (mesma armadilha do backup do monitor_sc).
+    _cols_v640 = {"minimo_calculado", "maximo_calculado", "min_max_amostras", "min_max_origem"}
+    if not _cols_v640.issubset(cols_inv0) or "mostrar_saldo_requisitante" not in cols_inv0:
+        if conn.execute("SELECT 1 FROM inventario LIMIT 1").fetchone():
+            conn.commit()
+            _backup_db("inventario-minmax-saldo-v640")
+
     for col, tipo in {
         "preco_referencia": "REAL DEFAULT 0",
         "data_preco_ref": "TEXT",
@@ -824,11 +841,37 @@ def criar_banco():
         # v3.4.0 — 2ª locação: 2º ponto de armazenagem do mesmo item (Contagem Física),
         # independente do Ajuste Rápido de Movimentações.
         "local_armazenagem_2": "TEXT",
+        # v6.4.0 — Mín/Máx CALCULADO como sugestão, no mesmo espírito de
+        # `lead_time_calculado`: min = consumo_diário × lead time, max = consumo_diário ×
+        # 60 d (fórmulas travadas pelo Luis em 05/08/2026). NUNCA sobrescrevem
+        # `estoque_minimo`/`estoque_maximo` — só o botão "Usar calculado" da tela grava
+        # na base do Neidson, e só quando o gestor clica.
+        "minimo_calculado": "REAL",
+        "maximo_calculado": "REAL",
+        "min_max_amostras": "INTEGER DEFAULT 0",
+        "min_max_origem": "TEXT",
+        # v6.4.0 — o requisitante vê o saldo deste item? Nasce LIGADA para todo mundo
+        # (pedido do Luis). `ADD COLUMN … DEFAULT 1` já preenche as linhas existentes com
+        # 1 no SQLite, então não há backfill a fazer: a base inteira abre marcada.
+        # Vale só para a tela do Requisitante — almoxarife e comprador seguem vendo tudo.
+        "mostrar_saldo_requisitante": "INTEGER DEFAULT 1",
     }.items():
         if col not in cols_inv0:
             conn.execute(f"ALTER TABLE inventario ADD COLUMN {col} {tipo}")
             logger.info("  -> Migracao: %s em inventario adicionada.", col)
     conn.commit()
+
+    # v6.4.0 — backfill ÚNICO do Mín/Máx calculado. Sem ele, a sugestão só apareceria no
+    # item depois da primeira saída pós-atualização (é `_recalcular_consumo` quem a
+    # mantém em dia), e a tela nasceria vazia justamente para os itens parados. Guardado
+    # por `minimo_calculado not in cols_inv0`: roda na migração e nunca mais.
+    # Import local — `db_functions` importa `database`; no topo seria ciclo.
+    if "minimo_calculado" not in cols_inv0:
+        from services.db_functions import recalcular_min_max_calculado
+
+        n = recalcular_min_max_calculado(conn=conn)
+        conn.commit()
+        logger.info("  -> Migracao v6.4.0: min/max calculado preenchido para %s item(ns).", n)
 
     # v2.4.0 — lead time por linha SC7 em precos_historico (delta Dt.Entrega − DT
     # Emissao). Persiste o dado que a v2.2.1 calculava e descartava, permitindo
@@ -993,6 +1036,31 @@ def _migrar(conn):
         if "aprovado_em" not in cols_req:
             conn.execute("ALTER TABLE requisicoes ADD COLUMN aprovado_em TEXT")
         logger.info("  ↳ Migração v6.2.0: aprovado_por/aprovado_em em requisicoes adicionadas.")
+
+    # v6.4.0 — rejeição do gestor com CICLO DE VOLTA (decisão do Luis, 05/08/2026): o
+    # gestor devolve o pedido com um motivo, o requisitante ajusta e REENVIA, e ele volta
+    # para a fila de aprovação. Por isso são quatro colunas e não três: sem `reenviado_em`
+    # não há como distinguir "rejeitada e parada" de "rejeitada, corrigida e de volta" —
+    # e limpar a rejeição no reenvio apagaria justamente o motivo que o gestor precisa
+    # lembrar ao rever o pedido.
+    #
+    # Mesma filosofia da aprovação da v6.2.0: NENHUM status novo (fora do CHECK de
+    # `status`, de propósito) e nada bloqueado. Aditiva e sem backfill — NULL = "nunca
+    # rejeitada", a verdade sobre todo o legado. O guard olha as QUATRO colunas e cada
+    # ALTER tem o seu `if`: o sqlite3 não abre transação para DDL, então um crash no meio
+    # deixaria as primeiras já commitadas e um guard só na primeira nunca completaria as
+    # demais.
+    _cols_rej = {"rejeitado_por", "rejeitado_em", "motivo_rejeicao", "reenviado_em"}
+    if not _cols_rej.issubset(cols_req):
+        if conn.execute("SELECT 1 FROM requisicoes LIMIT 1").fetchone():
+            # Mesmo motivo dos backups anteriores: os ALTER acima deixam transação aberta
+            # e sem este commit o `wal_checkpoint` devolve BUSY, gravando .bak incompleto.
+            conn.commit()
+            _backup_db("requisicoes-rejeicao-v640")
+        for col in ("rejeitado_por", "rejeitado_em", "motivo_rejeicao", "reenviado_em"):
+            if col not in cols_req:
+                conn.execute(f"ALTER TABLE requisicoes ADD COLUMN {col} TEXT")
+        logger.info("  ↳ Migração v6.4.0: rejeitado_*/reenviado_em em requisicoes adicionadas.")
 
     conn.commit()
 

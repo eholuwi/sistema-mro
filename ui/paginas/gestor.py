@@ -23,11 +23,14 @@ import streamlit as st
 
 from services.db_functions import (
     aprovar_requisicao,
+    listar_itens_requisicao,
     listar_requisicoes_para_aprovacao,
     listar_requisicoes_por_setor,
+    rejeitar_requisicao,
 )
 from ui.auth import usuario_logado
 from ui.cache import invalidar_leituras
+from ui.componentes.requisicao import aviso_rejeicao, tabela_itens_requisicao
 from ui.paginas.movimentacao import _opcoes_setor
 
 LIMITE_APROVADAS = 20
@@ -68,7 +71,12 @@ def _tabela(reqs, extras=None, base=None):
 
 
 def _cartoes(fila, aprovador, mostrar_setor=False):
-    """Um cartão por requisição, com o botão que registra a aprovação."""
+    """Um cartão por requisição: o que está sendo pedido, Aprovar e Devolver.
+
+    v6.4.0 — o cartão ganhou os ITENS (num expander) e o botão de devolução. Até aqui o
+    gestor decidia por número, emitente e contagem de itens: aprovava sem saber o que
+    estava aprovando, e não tinha como dizer "isso está errado". Os dois lados do mesmo
+    problema."""
     for req in fila:
         with st.container(border=True):
             c_info, c_btn = st.columns([4, 1])
@@ -88,6 +96,39 @@ def _cartoes(fila, aprovador, mostrar_setor=False):
                 if ok:
                     invalidar_leituras()
                     st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+            # Rejeição já cumprida e reenviada aparece como histórico — o gestor precisa
+            # lembrar o que pediu para ajustar ao rever o mesmo pedido.
+            aviso_rejeicao(req)
+
+            with st.expander(":material/receipt_long: Ver requisição completa"):
+                tabela_itens_requisicao(listar_itens_requisicao(req["id"]))
+                if req.get("centro_custo"):
+                    st.caption(f"Centro de custo: **{req['centro_custo']}**")
+                if req.get("observacoes"):
+                    st.caption(f"Observações: {req['observacoes']}")
+
+            c_mot, c_rej = st.columns([4, 1])
+            motivo = c_mot.text_input(
+                "Motivo da devolução",
+                key=f"gestor_motivo_{req['id']}",
+                placeholder="Ex.: quantidade acima do necessário; peça 2 em vez de 10.",
+                label_visibility="collapsed",
+            )
+            if c_rej.button(
+                ":material/assignment_return: Devolver",
+                key=f"gestor_rejeitar_{req['id']}",
+                width="stretch",
+                help="Devolve ao requisitante para ajuste. Ele corrige e reenvia — o pedido "
+                "volta para esta fila.",
+            ):
+                ok, msg = rejeitar_requisicao(req["id"], aprovador, motivo)
+                if ok:
+                    invalidar_leituras()
+                    st.warning(msg)
                     st.rerun()
                 else:
                     st.error(msg)
@@ -155,6 +196,38 @@ def _ja_aprovadas(setor):
         "o status nem impede a entrega; o almoxarifado continua separando normalmente."
     )
     _tabela(aprovadas, {"aprovado_por": "Aprovado por", "aprovado_em": "Aprovado em"})
+
+
+def _devolvidas(setor=None, base=None):
+    """v6.4.0 — Terceira metade da tela: o que o gestor devolveu e ainda não voltou.
+
+    Sem esta seção a devolução seria invisível para quem a fez: o pedido some da fila de
+    aprovação e não aparece em "já aprovadas". `setor=None` = visão consolidada do
+    almoxarife, exatamente como nas outras duas listas."""
+    st.markdown("### :material/assignment_return: Devolvidas para ajuste")
+    reqs = (
+        listar_requisicoes_para_aprovacao(so_abertas=True, apenas_rejeitadas=True, limite=LIMITE_APROVADAS)
+        if setor is None
+        else listar_requisicoes_por_setor(
+            setor, so_abertas=True, apenas_rejeitadas=True, limite=LIMITE_APROVADAS
+        )
+    )
+    if not reqs:
+        st.caption("Nenhuma requisição devolvida aguardando ajuste.")
+        return
+    st.caption(
+        "Estão com o requisitante. Assim que ele corrigir e **reenviar**, voltam para a fila "
+        "de aprovação acima — devolver não cancela nem bloqueia a separação."
+    )
+    _tabela(
+        reqs,
+        {
+            "rejeitado_por": "Devolvida por",
+            "rejeitado_em": "Em",
+            "motivo_rejeicao": "Motivo",
+        },
+        base=base,
+    )
 
 
 # ── Ramo do almoxarife (admin) — v6.3.0 ───────────────────────────────────────
@@ -225,17 +298,23 @@ def _render_consolidado(usuario):
     )
     if not aprovadas:
         st.caption("Nenhuma requisição aprovada ainda.")
-        return
-    escopo = "de todos os setores" if setor is None else f"de **{setor}**"
-    st.caption(
-        f"Últimas {LIMITE_APROVADAS} aprovações {escopo}. Somente leitura — aprovar não muda "
-        "o status nem impede a entrega; o almoxarifado continua separando normalmente."
-    )
-    _tabela(
-        aprovadas,
-        {"aprovado_por": "Aprovado por", "aprovado_em": "Aprovado em"},
-        base=COLUNAS_FILA_CONSOLIDADA,
-    )
+    else:
+        escopo = "de todos os setores" if setor is None else f"de **{setor}**"
+        st.caption(
+            f"Últimas {LIMITE_APROVADAS} aprovações {escopo}. Somente leitura — aprovar não muda "
+            "o status nem impede a entrega; o almoxarifado continua separando normalmente."
+        )
+        _tabela(
+            aprovadas,
+            {"aprovado_por": "Aprovado por", "aprovado_em": "Aprovado em"},
+            base=COLUNAS_FILA_CONSOLIDADA,
+        )
+
+    # v6.4.0 — sem `return` acima: a seção de devolvidas tem de aparecer mesmo quando não
+    # há nenhuma aprovação ainda, que é justamente o estado de quem acabou de devolver o
+    # primeiro pedido.
+    st.markdown("---")
+    _devolvidas(setor, base=COLUNAS_FILA_CONSOLIDADA)
 
 
 def render():
@@ -262,3 +341,5 @@ def render():
     _fila_de_aprovacao(setor, aprovador)
     st.markdown("---")
     _ja_aprovadas(setor)
+    st.markdown("---")
+    _devolvidas(setor)

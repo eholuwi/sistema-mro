@@ -227,9 +227,26 @@ def _render_ficha_visao_geral(ficha):
     # ── Estoque / cobertura / giro ────────────────────────────────────
     st.divider()
     e1, e2, e3, e4 = st.columns(4)
+    # v6.4.0 — a sugestão calculada aparece no help, como já acontece com o lead time
+    # (g5): mostra o número sem tocar no cadastrado. Quem transforma sugestão em base é o
+    # botão "Usar calculado" do Cadastro de Itens.
+    _mm_amostras = int(it.get("min_max_amostras") or 0)
+    _mm_origem = it.get("min_max_origem") or "—"
+
+    def _ajuda_mm(calculado):
+        if not calculado:
+            return (
+                "Baseado no reajuste de compras. Sem sugestão calculada (item sem consumo na janela de 30 d)."
+            )
+        return (
+            f"Baseado no reajuste de compras. Sugestão calculada: **{_g1(calculado)}** "
+            f"({_mm_origem}, {_mm_amostras} saída(s) na janela). O cadastrado não é alterado "
+            "automaticamente — use *Cadastro de Itens › Editar* para adotar."
+        )
+
     e1.metric("Estoque atual", _g(it.get("estoque_atual")))
-    e2.metric("Quantidade Mínima", _g(it.get("estoque_minimo")), help="Baseado no reajuste de compras.")
-    e3.metric("Quantidade Máxima", _g(it.get("estoque_maximo")), help="Baseado no reajuste de compras.")
+    e2.metric("Quantidade Mínima", _g(it.get("estoque_minimo")), help=_ajuda_mm(it.get("minimo_calculado")))
+    e3.metric("Quantidade Máxima", _g(it.get("estoque_maximo")), help=_ajuda_mm(it.get("maximo_calculado")))
     e4.metric(
         "Saldo Item (PO)",
         _g(it.get("estoque_em_transito")),
@@ -238,7 +255,7 @@ def _render_ficha_visao_geral(ficha):
 
     cob = it.get("dias_cobertura")
     giro = ficha["giro"]
-    g1, g2, g3, g4, g5 = st.columns(5)
+    g1, g2, g3, g6, g4, g5 = st.columns(6)
     g1.metric(
         "Dias até acabar",
         f"{cob:.0f} d" if cob is not None and cob < PREVISAO_RUPTURA_SEM_RISCO else "—",
@@ -270,6 +287,27 @@ def _render_ficha_visao_geral(ficha):
         "mês mais recente pesando mais (3/2/1). Usa as saídas reais por mês (dias úteis "
         "já embutidos); meses sem saída contam 0 e a média decai se o item parar. A "
         "seta é a mesma tendência do Consumo/dia.",
+    )
+    # v6.4.0 — o consumo pela VIDA ÚTIL do lote, ao lado do ponderado: os dois medem
+    # consumo mensal por caminhos diferentes (mês-calendário × duração do recebimento),
+    # e ver os dois juntos é o ponto — quando divergem muito, o item tem compra
+    # descolada do giro.
+    _vida = (ficha.get("classificacao") or {}).get("vida_util") or {}
+    _cons_lote = _vida.get("consumo_mensal")
+    _min_piso = float(it.get("estoque_minimo") or 0)
+    g6.metric(
+        "Consumo/Mensal (lote)",
+        f"{_g1(_cons_lote)} {un}/mês" if _cons_lote is not None else "—",
+        help=(
+            f"Média de {_vida.get('n_lotes', 0)} lote(s) recebido(s), que duraram "
+            f"{_g1(_vida.get('dias_medio'))} d em média: quantidade recebida ÷ dias até o "
+            f"estoque bater o mínimo ({_g(_min_piso) if _min_piso > 0 else 'zerar — item sem mínimo cadastrado'}) × 30. "
+            f"{_vida.get('n_lotes_vivos', 0)} lote(s) ainda em uso não entram na conta."
+            if _cons_lote is not None
+            else "Sem lote fechado para medir: só recebimento por SC abre lote, e ele precisa "
+            "ter durado ao menos 1 dia acima do mínimo. Ajuste de inventário e entrada "
+            "avulsa não contam."
+        ),
     )
     g4.metric(
         "Giro anual",

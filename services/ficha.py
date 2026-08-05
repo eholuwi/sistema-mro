@@ -60,6 +60,21 @@ def caminho_absoluto_imagem(rel):
     return os.path.join(_base_dir(), rel.replace("/", os.sep))
 
 
+def imagem_existente(item):
+    """Caminho ABSOLUTO da foto do item, ou None se não há foto **ou o arquivo sumiu**.
+
+    v6.4.0 — extraído de `montar_ficha_360`, que já fazia exatamente isto: a tela do
+    Requisitante passou a mostrar a foto do material ao montar o pedido (para conferir que
+    é a peça certa antes de pedir), e as duas telas precisam da mesma resposta.
+
+    A checagem de existência não é zelo excessivo: `imagem_path` é uma referência a um
+    arquivo fora do SQLite (`docs/itens/`), que viaja por OneDrive e pode não ter descido
+    na máquina que está renderizando. Sem ela, o `st.image` estoura a página inteira por
+    causa de uma foto."""
+    caminho = caminho_absoluto_imagem((item or {}).get("imagem_path"))
+    return caminho if caminho and os.path.exists(caminho) else None
+
+
 def _remover_arquivos_item(item_id):
     """Remove qualquer arquivo item_<id>.<ext> (evita órfãos ao trocar de formato).
     O ponto após o id evita casar item_1 com item_10."""
@@ -244,9 +259,7 @@ def montar_ficha_360(item_id, conn=None):
     abc = next((x for x in obter_abc_valor() if x["item_id"] == item_id), None)
 
     imagem_rel = item.get("imagem_path")
-    imagem_abs = caminho_absoluto_imagem(imagem_rel)
-    if imagem_abs and not os.path.exists(imagem_abs):
-        imagem_abs = None  # arquivo sumiu; UI mostra placeholder
+    imagem_abs = imagem_existente(item)  # None = sem foto ou arquivo sumiu (UI: placeholder)
 
     return {
         "item": item,

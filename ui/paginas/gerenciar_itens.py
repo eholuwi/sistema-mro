@@ -33,6 +33,7 @@ from services.db_functions import (
     atualizar_item_inventario,
     alterar_part_number,
     listar_historico_part_number,
+    recalcular_min_max_calculado,
     sugerir_conversao,
 )
 from ui.cache import invalidar_leituras
@@ -61,6 +62,7 @@ CAMPOS_EDICAO = (
     "ed_tem_conv",  # v6.0.0 — o checkbox precisa reler o item novo ao trocar de item
     "ed_uc",
     "ed_fator",
+    "ed_saldo_req",  # v6.4.0 — idem: sem isto, a flag do item anterior seria gravada no novo
 )
 
 # v6.0.0 — a conversão de unidades passou a ficar atrás de um checkbox nas DUAS abas
@@ -86,12 +88,140 @@ def tem_conversao(item):
     return bool(uc) and uc.casefold() != un.casefold()
 
 
+def _difere(calculado, cadastrado, tolerancia=1.0):
+    """A sugestão vale a pena mostrar? True quando difere do cadastrado em ao menos 1
+    unidade. Sem tolerância, um mínimo de 10 contra um calculado de 10,4 apareceria como
+    "divergente" e a lista em lote viraria ruído — a base do Neidson é em unidades
+    inteiras. Pura/testável."""
+    return abs(float(calculado or 0) - float(cadastrado or 0)) >= tolerancia
+
+
+def _sugestoes_min_max(itens):
+    """Linhas da visão em lote: itens COM sugestão calculada que difere do cadastrado.
+
+    Item sem consumo na janela não entra (`minimo_calculado` 0 = "não há o que sugerir",
+    e propor mínimo zero para a base inteira seria o oposto do que a tela existe para
+    fazer). Pura sobre a lista já lida — a UI só monta o DataFrame."""
+    linhas = []
+    for i in itens:
+        min_calc = float(i.get("minimo_calculado") or 0)
+        max_calc = float(i.get("maximo_calculado") or 0)
+        if min_calc <= 0 and max_calc <= 0:
+            continue
+        min_cad = float(i.get("estoque_minimo") or 0)
+        max_cad = float(i.get("estoque_maximo") or 0)
+        if not (_difere(min_calc, min_cad) or _difere(max_calc, max_cad)):
+            continue
+        linhas.append(
+            {
+                "Aplicar": False,
+                "id": i["id"],
+                "PN": i.get("part_number"),
+                "Material": i.get("nome_item"),
+                "Mín atual": min_cad,
+                "Mín calculado": min_calc,
+                "Máx atual": max_cad,
+                "Máx calculado": max_calc,
+                "Saídas (30d)": int(i.get("min_max_amostras") or 0),
+                "Base": i.get("min_max_origem") or "—",
+            }
+        )
+    return sorted(linhas, key=lambda linha: linha["PN"] or "")
+
+
+def _aba_sugestoes_min_max():
+    """Visão em LOTE do Mín/Máx calculado — "concordamos e torna real" de uma vez.
+
+    Existe porque adotar item a item na aba de edição não escala: a base tem centenas de
+    itens e o Luis revisa a lista inteira de uma sentada. Aplicar grava mínimo E máximo
+    do item marcado, pela mesma `atualizar_item_inventario` do botão individual."""
+    st.caption(
+        "Itens cuja sugestão calculada difere do cadastrado em ao menos 1 unidade. "
+        "Fórmulas: **mínimo = consumo/dia × lead time calculado** · "
+        "**máximo = consumo/dia × 60 dias**. "
+        "Marque *Aplicar* nos que você aprova e confirme abaixo — nada é gravado sem isso."
+    )
+
+    # v6.4.0 — recálculo sob demanda. A sugestão é mantida em dia por `_recalcular_consumo`
+    # (a cada saída) e pelo backfill da migração, mas o backfill roda UMA VEZ só na vida do
+    # banco: quem migrou antes de uma mudança de fórmula fica com números da regra antiga
+    # até o item se mexer. Este botão é a saída explícita — e serve também depois de uma
+    # revisão de lead times em massa, sem esperar movimento item a item.
+    cr1, cr2 = st.columns([3, 1])
+    cr1.caption(
+        ":material/info: Os números se atualizam sozinhos a cada saída do item. Use o botão "
+        "se acabou de revisar lead times ou atualizou o sistema e quer refazer a base inteira."
+    )
+    if cr2.button(":material/refresh: Recalcular tudo", key="minmax_recalc", width="stretch"):
+        with st.spinner("Recalculando as sugestões..."):
+            n = recalcular_min_max_calculado()
+        invalidar_leituras()
+        st.success(f"Sugestões recalculadas para {n} item(ns).")
+        time.sleep(1)
+        st.rerun()
+
+    linhas = _sugestoes_min_max(listar_inventario())
+    if not linhas:
+        st.success(
+            ":material/check_circle: Nenhuma divergência: todo item com consumo registrado já tem "
+            "mínimo e máximo alinhados ao calculado."
+        )
+        return
+
+    editado = st.data_editor(
+        pd.DataFrame(linhas),
+        width="stretch",
+        hide_index=True,
+        key="minmax_lote",
+        column_config={
+            "Aplicar": st.column_config.CheckboxColumn("Aplicar", help="Marque para adotar a sugestão."),
+            "id": None,  # chave técnica: usada para gravar, não para ler
+            "Mín atual": st.column_config.NumberColumn(format="%.0f"),
+            "Mín calculado": st.column_config.NumberColumn(format="%.0f"),
+            "Máx atual": st.column_config.NumberColumn(format="%.0f"),
+            "Máx calculado": st.column_config.NumberColumn(format="%.0f"),
+        },
+        disabled=[c for c in linhas[0] if c != "Aplicar"],
+    )
+
+    marcados = [linha for linha in editado.to_dict("records") if linha.get("Aplicar")]
+    st.markdown(f"**{len(marcados)}** item(ns) marcado(s) de {len(linhas)}.")
+    if st.button(
+        ":material/check_circle: Aplicar aos selecionados",
+        type="primary",
+        width="stretch",
+        disabled=not marcados,
+    ):
+        erros = []
+        for linha in marcados:
+            ok, msg = atualizar_item_inventario(
+                int(linha["id"]),
+                {
+                    "estoque_minimo": float(linha["Mín calculado"]),
+                    "estoque_maximo": float(linha["Máx calculado"]),
+                },
+            )
+            if not ok:
+                erros.append(f"{linha['PN']}: {msg}")
+        invalidar_leituras()
+        if erros:
+            st.error("Falhas ao aplicar:\n\n" + "\n".join(f"- {e}" for e in erros))
+        else:
+            st.success(f"{len(marcados)} item(ns) atualizado(s) com o Mín/Máx calculado.")
+            time.sleep(1)
+            st.rerun()
+
+
 def render() -> None:
     st.title(":material/add: Cadastro de Itens MRO")
 
     # --- TABS PARA ORGANIZAÇÃO ---
-    tab_editar, tab_novo = st.tabs(
-        [":material/edit: Editar Item Existente", ":material/fiber_new: Cadastrar Novo Item"]
+    tab_editar, tab_novo, tab_minmax = st.tabs(
+        [
+            ":material/edit: Editar Item Existente",
+            ":material/fiber_new: Cadastrar Novo Item",
+            ":material/rule: Sugestões de Mín/Máx",
+        ]
     )
 
     # === TAB 1: CADASTRAR NOVO ===
@@ -294,6 +424,21 @@ def render() -> None:
                     # Nota: Estoque atual NÃO deve ser editado aqui, apenas via Movimentação/Inventário
                     st.markdown(f"**Estoque Atual:** `{item_sel['estoque_atual']}` (Alterar em *Inventário*)")
                     st.markdown(f"**Status:** `{item_sel['status_material']}`")
+                    # v6.4.0 — nasce MARCADA em todo item (default 1 na coluna). Vale só
+                    # para a tela do Requisitante; almoxarife e comprador seguem vendo o
+                    # saldo em qualquer item.
+                    ed_saldo_req = st.checkbox(
+                        "Mostrar saldo para o requisitante",
+                        value=bool(
+                            item_sel.get("mostrar_saldo_requisitante")
+                            if item_sel.get("mostrar_saldo_requisitante") is not None
+                            else 1
+                        ),
+                        key="ed_saldo_req",
+                        help="Desmarque para que o requisitante peça sem ver o estoque atual "
+                        "deste material. Ele continua conseguindo pedir; a conferência do "
+                        "saldo passa a ser do almoxarifado, na separação.",
+                    )
 
                 # ── Conversão de unidades (curadoria v2.9.0) ─────────────────────
                 # v6.0.0: escondida atrás de um checkbox. Ele NASCE MARCADO quando o item
@@ -371,6 +516,7 @@ def render() -> None:
                         "fator_conversao": (
                             ed_fator if (ed_tem_conv and ed_fator > 0) else FATOR_CONVERSAO_PADRAO
                         ),
+                        "mostrar_saldo_requisitante": int(ed_saldo_req),
                     }
                     ok, msg = atualizar_item_inventario(item_sel["id"], dados_edicao)
                     if ok:
@@ -401,6 +547,48 @@ def render() -> None:
                         if ok:
                             invalidar_leituras()
                             st.success(f"Lead time atualizado para {int(_lt_calc)}d.")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+                # ── Mín/Máx: cadastrado vs calculado (sugestão) — v6.4.0 ────────
+                # Mesmo padrão do bloco de lead time acima: mostra a sugestão ao lado do
+                # cadastrado e só grava na base do Neidson quando o gestor clica. Os dois
+                # botões são separados de propósito — dá para concordar com o mínimo e
+                # discordar do máximo, e um botão único obrigaria a engolir os dois.
+                _min_calc = float(item_sel.get("minimo_calculado") or 0)
+                _max_calc = float(item_sel.get("maximo_calculado") or 0)
+                if _min_calc > 0 or _max_calc > 0:
+                    _min_cad = float(item_sel.get("estoque_minimo") or 0)
+                    _max_cad = float(item_sel.get("estoque_maximo") or 0)
+                    st.markdown("---")
+                    mm1, mm2, mm3 = st.columns([2, 1, 1])
+                    mm1.info(
+                        f":material/rule: **Mín/Máx sugerido** — mínimo: cadastrado **{_min_cad:g}** · "
+                        f"calculado **{_min_calc:g}** · máximo: cadastrado **{_max_cad:g}** · "
+                        f"calculado **{_max_calc:g}**. Base: {item_sel.get('min_max_origem') or '—'} "
+                        f"({int(item_sel.get('min_max_amostras') or 0)} saída(s) na janela). "
+                        "É sugestão — o cadastro de Compras não é alterado automaticamente."
+                    )
+                    if _difere(_min_calc, _min_cad) and mm2.button(
+                        "Usar mínimo", key="btn_usar_min_calc", width="stretch"
+                    ):
+                        ok, msg = atualizar_item_inventario(item_sel["id"], {"estoque_minimo": _min_calc})
+                        if ok:
+                            invalidar_leituras()
+                            st.success(f"Estoque mínimo atualizado para {_min_calc:g}.")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    if _difere(_max_calc, _max_cad) and mm3.button(
+                        "Usar máximo", key="btn_usar_max_calc", width="stretch"
+                    ):
+                        ok, msg = atualizar_item_inventario(item_sel["id"], {"estoque_maximo": _max_calc})
+                        if ok:
+                            invalidar_leituras()
+                            st.success(f"Estoque máximo atualizado para {_max_calc:g}.")
                             time.sleep(1)
                             st.rerun()
                         else:
@@ -461,3 +649,7 @@ def render() -> None:
                             width="stretch",
                             hide_index=True,
                         )
+
+    # === TAB 3: SUGESTÕES DE MÍN/MÁX EM LOTE (v6.4.0) ===
+    with tab_minmax:
+        _aba_sugestoes_min_max()

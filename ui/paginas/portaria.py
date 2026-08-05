@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import json
 
-import pandas as pd
 import streamlit as st
 
-from services.db_functions import buscar_requisicao_por_numero
+from services.db_functions import buscar_requisicao_por_numero, buscar_requisicoes_por_emitente
+from ui.componentes.requisicao import aviso_rejeicao, tabela_itens_requisicao
 
 MARCA_STATUS = {
     "Aberta": ":material/pending: **Aberta** — nada entregue ainda.",
@@ -56,6 +56,10 @@ def _cartao(req):
         )
     if req.get("aprovado_por"):
         st.markdown(f":material/how_to_reg: **Aprovado por** {req['aprovado_por']} em {req['aprovado_em']}")
+    # v6.4.0 — a guarita precisa ver que o gestor devolveu o pedido. Não é uma trava (a
+    # rejeição não bloqueia a entrega, como a aprovação não a libera), mas é a informação
+    # que faz o porteiro perguntar antes de liberar o material.
+    aviso_rejeicao(req)
     if req.get("sesmt"):
         st.markdown(f":material/engineering: **SESMT:** {req.get('sesmt_responsavel') or '—'}")
     if req.get("observacoes"):
@@ -68,28 +72,7 @@ def _cartao(req):
             st.markdown(f"- :material/person: {d}")
 
     st.markdown("#### :material/inventory_2: Itens")
-    itens = req.get("itens") or []
-    if not itens:
-        st.caption("Requisição sem itens registrados.")
-        return
-    df = pd.DataFrame(itens).reindex(
-        columns=["part_number", "nome_item", "unidade", "quantidade_solicitada", "quantidade_atendida"]
-    )
-    st.dataframe(
-        df,
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "part_number": "PN",
-            "nome_item": "Material",
-            "unidade": "Un.",
-            "quantidade_solicitada": st.column_config.NumberColumn("Solicitado", format="%.0f"),
-            "quantidade_atendida": st.column_config.NumberColumn("Entregue", format="%.0f"),
-        },
-    )
-    pendentes = [
-        i for i in itens if float(i["quantidade_atendida"] or 0) < float(i["quantidade_solicitada"] or 0)
-    ]
+    pendentes = tabela_itens_requisicao(req.get("itens") or [])
     if pendentes:
         st.warning(
             f":material/pending: {len(pendentes)} item(ns) ainda não saíram por completo — "
@@ -97,23 +80,10 @@ def _cartao(req):
         )
 
 
-def render():
-    st.title(":material/badge: Consulta de Saída — Portaria")
-    st.caption(
-        "Informe o número da requisição para conferir o pedido e a baixa. Consulta pública — "
-        "não requer login e não altera nada no sistema."
-    )
-
-    with st.form("form_portaria"):
-        numero = st.text_input("Número da requisição", placeholder="ex.: REQ-20260802-001")
-        consultar = st.form_submit_button(":material/search: Consultar", type="primary")
-
-    if not consultar:
-        return
+def _consulta_por_numero(numero):
     if not numero.strip():
         st.warning("Digite o número da requisição.")
         return
-
     req = buscar_requisicao_por_numero(numero)
     if req is None:
         st.info(
@@ -122,3 +92,65 @@ def render():
         )
         return
     _cartao(req)
+
+
+def _consulta_por_nome(nome):
+    """v6.4.0 — Busca pelo nome de quem pediu. Continua LEITURA PURA, como toda a tela.
+
+    Com mais de um resultado, a guarita escolhe na lista qual pedido conferir: o mesmo
+    requisitante costuma ter vários pedidos abertos, e adivinhar qual é "o certo" seria
+    mostrar o material errado."""
+    if not nome.strip():
+        st.warning("Digite o nome do requisitante.")
+        return
+    reqs = buscar_requisicoes_por_emitente(nome)
+    if not reqs:
+        st.info(
+            f"Nenhuma requisição encontrada para **{nome.strip()}**. Confira a grafia do nome "
+            "ou consulte pelo número."
+        )
+        return
+    if len(reqs) == 1:
+        _cartao(reqs[0])
+        return
+    st.caption(f"**{len(reqs)}** requisição(ões) de **{reqs[0]['emitente']}** — escolha qual conferir.")
+    opcoes = {f"{r['numero_requisicao']} · {r['data_hora']} · {r['status']}": r for r in reqs}
+    escolha = st.selectbox("Requisição", [""] + list(opcoes), key="portaria_escolha_nome")
+    if escolha:
+        _cartao(opcoes[escolha])
+
+
+def render():
+    st.title(":material/badge: Consulta de Saída — Portaria")
+    st.caption(
+        "Confira o pedido e a baixa pelo número da requisição ou pelo nome de quem pediu. "
+        "Consulta pública — não requer login e não altera nada no sistema."
+    )
+
+    modo = st.radio(
+        "Buscar por",
+        ["Número da requisição", "Nome do requisitante"],
+        horizontal=True,
+        key="portaria_modo",
+    )
+    por_nome = modo.startswith("Nome")
+
+    # ⚠️ O `st.form` fica FORA do ramo por nome: o seletor de qual requisição conferir é um
+    # widget que precisa reagir ao clique, e dentro de um form nada roda até o submit —
+    # a guarita escolheria na lista e a tela não mudaria.
+    if por_nome:
+        with st.form("form_portaria_nome"):
+            termo = st.text_input("Nome do requisitante", placeholder="ex.: Sidinei Barbosa")
+            consultar = st.form_submit_button(":material/search: Consultar", type="primary")
+        # O resultado sobrevive ao rerun do seletor: o nome fica no session_state do form.
+        if consultar or st.session_state.get("portaria_ultimo_nome"):
+            if consultar:
+                st.session_state["portaria_ultimo_nome"] = termo
+            _consulta_por_nome(st.session_state.get("portaria_ultimo_nome", ""))
+        return
+
+    with st.form("form_portaria"):
+        numero = st.text_input("Número da requisição", placeholder="ex.: REQ-20260802-001")
+        consultar = st.form_submit_button(":material/search: Consultar", type="primary")
+    if consultar:
+        _consulta_por_numero(numero)

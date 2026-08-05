@@ -13,13 +13,28 @@
 
 ---
 
-## 🔧 DEMANDA ABERTA — v6.4.0 · Consumo por vida útil · Min/Max · Gestor · Requisitante · Portaria (Luis, 05/08/2026)
+## 🟡 EM VALIDAÇÃO — v6.4.0 · Consumo por vida útil · Min/Max · Gestor · Requisitante · Portaria (Luis, 05/08/2026)
 
-> **Aberta em 05/08/2026.** O Luis confirmou 3,5 meses de histórico de consumo (16/04 → 31/07/2026,
-> 228 itens com saída real). **Fórmulas travadas pelo Luis na entrevista.** Siga a skill
-> `atualizar-sistema-mro`, feche cada etapa com `.\verify.ps1` verde e PARE para aprovação
-> antes de commit. A demanda antiga de v6.4.0 (vínculo gestor ↔ requisitante) foi **movida
-> para v6.5.0** (seção abaixo).
+> **Aberta e IMPLEMENTADA em 05/08/2026**, gate verde (886 testes). Ver `changelog/6.4.0.md` e o
+> STATUS ATUAL do `docs/HANDOFF.md`. Os 5 épicos entraram na ordem B → C → D → E → F, com duas
+> migrações aditivas (`.bak` gravado), provadas contra uma **cópia** do `mro.db` de produção.
+> **Falta:** validação no app real → OK do Luis → commit → `graphify update .`.
+>
+> **Decisões do Luis que fecharam o que esta seção deixava em aberto:**
+> - **Épico B — só recebimento de SC abre lote** (`sc_item_id` preenchido). Ajuste de inventário e
+>   entrada avulsa mexem no saldo, mas não abrem lote. Vários lotes → **média simples**.
+>   ⚠️ **Cobertura real: 20 de 362 itens.** Dos 94 com recebimento de SC, 20 têm lote fechado,
+>   45 têm só lote vivo e 29 não abriram lote. É o histórico de 3,5 meses, não bug — cresce
+>   sozinho. A alavanca, se ficar vazio demais, é a regra de "que entrada abre lote".
+> - **Épico D — rejeitar é um CICLO, não um "não" final:** o gestor devolve com motivo, o
+>   requisitante ajusta e reenvia, e o pedido volta para a fila. Puxou a coluna `reenviado_em` e a
+>   função `atualizar_item_requisicao` (o requisitante só sabia remover item, não corrigir qtd).
+> - **Épico C ganhou uma guarda não prevista:** `consumo_medio_diario` é coluna persistida e
+>   congela; zero saídas na janela de 30 d ⇒ **sem sugestão**. Sem ela, o PN 34FR0001 (saída de
+>   99.999 un. em 30/06, erro de digitação) proporia mínimo 66.666 para um item de mínimo 5.
+>
+> **A demanda antiga de v6.4.0 (vínculo gestor ↔ requisitante) segue movida para v6.5.0** (seção
+> abaixo).
 
 ### Épico B — Consumo mensal por vida útil do lote
 
@@ -101,38 +116,46 @@ Independente de CC/setor.
 
 ---
 
-## 🔧 DEMANDA ADIADA — v6.5.0 · Vínculo gestor ↔ requisitante (Luis, 03/08/2026)
+## 🔧 DEMANDA ADIADA — v6.5.0 · Gestor escolhido pelo requisitante na requisição (Luis, 03/08/2026)
 
 > **Aberta em 03/08/2026, ADIADA de v6.4.0 para v6.5.0 em 05/08/2026** — a v6.4.0 foi
-> preenchida pelas 5 demandas acima. **Substitui** o item "fila do gestor agrupada por
-> solicitante": em vez de agrupar a fila por `emitente`, o Luis propôs amarrar cada
-> requisitante ao seu gestor no cadastro — resolve o problema de raiz, não a aparência.
+> preenchida pelas 5 demandas acima. **Decisão do Luis em 05/08/2026:** o gestor é
+> **escolhido pelo requisitante a cada requisição** (atributo da requisição), e NÃO um
+> vínculo fixo no cadastro do usuário — "o requisitante vai selecionar o gestor, é melhor
+> do que vincular". **Substitui** o item "fila do gestor agrupada por solicitante": em vez
+> de agrupar por `emitente` ou casar setor × departamento, o pedido **carrega** o seu gestor.
 
-**O problema de raiz:** a fila do gestor casa `requisicoes.setor` com `usuarios.departamento`,
-dois vocabulários diferentes — **59 setores × 19 departamentos, com 9 de interseção** (medido
-no `mro.db` em 02/08/2026). O fluxo novo casa porque a tela do Requisitante pré-preenche o
-setor com o departamento, mas isso é coincidência mantida à mão, não vínculo.
+**O problema de raiz:** a fila do gestor hoje casa `requisicoes.setor` com
+`usuarios.departamento`, dois vocabulários diferentes — **59 setores × 19 departamentos, com
+9 de interseção** (medido no `mro.db` em 02/08/2026). O fluxo novo casa porque a tela do
+Requisitante pré-preenche o setor com o departamento, mas isso é coincidência mantida à mão,
+não vínculo.
 
-**Como deve ficar:** cada requisitante aponta para o seu gestor, e a fila do gestor passa a
-ser "os pedidos das **minhas pessoas**" — exato, independente de como o setor foi grafado.
+**Como deve ficar:** ao criar a requisição, o requisitante **seleciona o gestor** (campo
+novo no bloco de identificação). A fila do gestor passa a ser "os pedidos **que me marcaram
+como gestor**" — exato, independente de como o setor foi grafado.
 
 **Esboço (detalhar em plano próprio, com AskUserQuestion antes):**
-- `usuarios.gestor_id` — nullable, FK para `usuarios.id`. Migração **aditiva**, com
-  `_backup_db` antes (padrão `tipo_fluxo` da v5.7.0 / `aprovado_*` da v6.2.0).
-- **Seletor "Gestor" no formulário do requisitante**, em Configurações › Usuários — o
-  formulário de edição por usuário já existe (`ui/paginas/configuracoes.py:168`, o
-  `selectbox` "Usuário" + campos abaixo). O seletor lista usuários ativos com papel `gestor`.
-- Fila do gestor = requisições cujo `emitente` está entre as suas pessoas. O match por nome
-  já tem precedente testado: `listar_requisicoes(emitente=...)` compara com `UPPER(TRIM())`,
-  e a tela do Requisitante trava o emitente no nome da sessão — para pedido novo o match é
-  exato.
-- O filtro por **setor** vira **visão alternativa** (não some): serve ao gestor ainda sem
-  equipe cadastrada e a quem precisa acompanhar outra área.
+- `requisicoes.gestor` — TEXT nullable (nome do gestor, grafia como o `emitente`).
+  Migração **aditiva**, com `_backup_db` antes (padrão `aprovado_*` da v6.2.0). Sem backfill:
+  `NULL` = "sem gestor marcado" (o legado fica de fora da fila do gestor, alcançável pelo
+  filtro de setor — mesma negativa por omissão do setor vazio).
+- **Seletor "Gestor" no bloco de identificação da requisição** (`ui/paginas/movimentacao.py`
+  `_req_bloco_identificacao`), pré-preenchido e editável, listando usuários ativos com papel
+  `gestor` (via `services/usuarios`). O Requisitante (tela própria) também usa o mesmo bloco.
+- Fila do gestor = requisições cujo `gestor` == nome do gestor logado (match `UPPER(TRIM())`,
+  mesmo padrão de `buscar_requisicao_por_numero`/`listar_requisicoes(emitente=...)`). A tela
+  do Requisitante já trava o emitente no nome da sessão; o gestor pode ser gravado no mesmo
+  padrão (nome digitado no seletor ou id? decidir no plano — **preferência: guardar o nome**,
+  coerente com `emitente`, `aprovado_por`).
+- O filtro por **setor** vira **visão alternativa** (não some): serve ao gestor com pedidos
+  legados sem gestor marcado e a quem precisa acompanhar outra área.
+- A **Portaria** passa a exibir o gestor da requisição.
 
-⚠️ **Confirmar antes de mexer no schema:** "seletor de gestor no formulário do requisitante"
-foi lido como **cadastro do usuário** (o gestor é atributo da pessoa). A leitura alternativa
-seria o requisitante escolher o gestor **a cada pedido** (atributo da requisição, coluna em
-`requisicoes`). As duas são defensáveis e o schema é diferente — perguntar.
+⚠️ **Pergunta aberta para o plano:** guardar o **nome** do gestor (`requisicoes.gestor` TEXT,
+coerente com `emitente`/`aprovado_por`) ou o **id** (`requisicoes.gestor_id` INTEGER, mais
+estável a renomeações)? O Luis escolheu o modelo "selecionar a cada pedido"; a coluna em si
+ainda decide-se no plano.
 
 ---
 

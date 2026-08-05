@@ -48,8 +48,17 @@ graph.json
 Inventário Improdutivo*.xlsx
 Inventário Improdutivo*.csv
 
+# Planilha de controle antiga do almoxarifado (118 MB): 1.004 itens com PN,
+# descrição, estoque diário e 402 fotos embutidas. É a MESMA informação dos
+# exports acima, em outro formato — e o volume ainda deixaria o clone inviável.
+# Fonte do `scripts/importar_imagens_planilha.py`; vive ao lado do repo, não dentro.
+Material MRO*.xlsx
+
 # Vault Obsidian (segundo cérebro). Foi escrito sob a premissa de que era
 # ignorado pelo git; a premissa mudou para sincronizar entre máquinas, sem
 # reauditar o conteúdo. Contém colegas nomeados com cargo, valores em R$ reais da
 # operação e material de outro setor. Sincroniza pelo OneDrive, como o resto.
 vault/
+
+Minhas conversas com o claude
+docs/claude/

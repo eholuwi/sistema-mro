@@ -13,6 +13,11 @@ Com ~3 meses de histórico, o período do SBC é a SEMANA (mês daria só 3 pont
 usa o consumo MENSAL e a Sazonalidade só é liberada com ≥12 meses (1 ciclo anual) —
 até lá a UI mostra o rótulo de maturidade, sem inventar perfil.
 
+v6.4.0 acrescenta um TERCEIRO jeito de ler o consumo, ao lado do mensal por
+mês-calendário e do ponderado: a **vida útil do lote** (`_vida_util_from_movimentos`) —
+quanto tempo cada recebimento durou até o estoque bater o mínimo. É a leitura que o
+almoxarifado faz no papel, e a única que responde "quanto dura uma compra deste item".
+
 As funções `_*_from_*` são PURAS (operam sobre listas de eventos/valores) para permitir
 testes determinísticos sem banco; as funções públicas apenas leem o banco e delegam.
 """
@@ -178,6 +183,90 @@ def _ponderado_from_serie(serie, hoje, n=3, pesos=None):
     return round(sum(v * p for v, p in zip(valores, pesos)) / sum(pesos), 2)
 
 
+def _vida_util_from_movimentos(movimentos, minimo):
+    """Consumo mensal medido pela VIDA ÚTIL de cada lote recebido (v6.4.0).
+
+    `movimentos` = lista de `(datetime, tipo, quantidade, saldo_apos|None, abre_lote)` em
+    ordem cronológica — o ledger INTEIRO do item, não só as saídas: entrada e devolução
+    também mexem no saldo, e é o saldo que diz quando o lote acabou.
+
+    Regra travada pelo Luis em 05/08/2026: cada recebimento abre um lote, que dura da data
+    em que chegou até o instante em que o estoque **bate o mínimo cadastrado** — e não até
+    zerar. `consumo_mensal = qtd recebida ÷ dias de duração × 30`; o número do item é a
+    **média simples** dos lotes fechados (escolha do Luis entre média, mediana e ponderada).
+
+    Quatro decisões que a fórmula não cobre e o ledger obriga a tomar:
+
+    - **Saldo corrente**: usa `saldo_apos` quando gravado; sem ele, acumula ± quantidade.
+      O `mro.db` real não tem nulos, mas movimentação inserida direto no banco (fixtures,
+      importação antiga) pode não ter a coluna — cair para o acumulado mantém a conta viva
+      em vez de devolver um número errado em silêncio.
+    - **`minimo <= 0` → o piso vira 0**, i.e. o lote dura até zerar (fallback pedido no
+      backlog para os itens sem mínimo cadastrado).
+    - **Lote que nasce já no piso não conta.** Recebimento que não levanta o estoque acima
+      do mínimo não tem vida útil a medir: ele "bate o mínimo" na própria chegada, e
+      contá-lo produziria "durou 1 dia" — 30× a quantidade recebida — justamente nos itens
+      cronicamente em falta, que são os que mais aparecem na fila de reposição.
+    - **Lote ainda vivo não conta** (sem data de fim; não se inventa "hoje" como fim), e
+      lote de menos de 1 dia é descartado — mesmo filtro que `_gravar_lead_time_calculado`
+      aplica ao lead time, e o que evita a divisão por zero.
+
+    Lotes podem se sobrepor: dois recebimentos antes de o saldo cair fecham no mesmo
+    instante, cada um com a duração contada da SUA chegada.
+    """
+    piso = max(float(minimo or 0), 0.0)
+    abertos = []  # [(datetime da chegada, qtd recebida)] — lotes sem fim ainda
+    fechados = []
+    saldo = 0.0
+
+    for dt, tipo, qtd, saldo_apos, abre_lote in sorted(movimentos, key=lambda m: m[0]):
+        q = float(qtd or 0)
+        if saldo_apos is not None:
+            saldo = float(saldo_apos)
+        elif tipo in ("entrada", "devolucao"):
+            saldo += q
+        else:
+            saldo -= q
+
+        if abre_lote and q > 0:
+            # A entrada acabou de subir o saldo: ela nunca fecha lote, só abre — e só
+            # quando de fato tirou o estoque de cima do mínimo (ver docstring).
+            if saldo > piso:
+                abertos.append((dt, q))
+            continue
+
+        if saldo <= piso and abertos:
+            for inicio, qtd_lote in abertos:
+                dias = (dt - inicio).days
+                if dias >= 1:
+                    fechados.append(
+                        {
+                            "inicio": inicio,
+                            "fim": dt,
+                            "dias": dias,
+                            "quantidade": round(qtd_lote, 2),
+                            "consumo_mensal": round(qtd_lote / dias * 30, 2),
+                        }
+                    )
+            abertos = []
+
+    if not fechados:
+        return {
+            "consumo_mensal": None,
+            "n_lotes": 0,
+            "n_lotes_vivos": len(abertos),
+            "dias_medio": None,
+            "lotes": [],
+        }
+    return {
+        "consumo_mensal": round(sum(x["consumo_mensal"] for x in fechados) / len(fechados), 2),
+        "n_lotes": len(fechados),
+        "n_lotes_vivos": len(abertos),
+        "dias_medio": round(sum(x["dias"] for x in fechados) / len(fechados), 1),
+        "lotes": fechados,
+    }
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # LEITURA DO BANCO — busca as saídas reais e delega ao núcleo puro
 # ══════════════════════════════════════════════════════════════════════════════
@@ -211,6 +300,47 @@ def _eventos_item(c, item_id):
         if dt is not None and q > 0:
             out.append((dt, q))
     return out
+
+
+def _movimentos_item(c, item_id):
+    """Ledger COMPLETO do item → `[(datetime, tipo, quantidade, saldo_apos|None, abre_lote)]`.
+
+    Irmã de `_eventos_item`, que lê só as saídas reais: aqui entram entrada e devolução
+    também, porque a vida útil do lote é medida pelo SALDO, e o saldo se move nos três
+    tipos. `abre_lote` marca o que conta como **recebimento** — entrada com `sc_item_id`
+    preenchido, o mesmo predicado de `ENTRADA_REAL_WHERE`. Decisão do Luis em 05/08/2026:
+    ajuste de inventário e entrada avulsa mexem no saldo mas NÃO abrem lote (só material
+    que chegou por uma SC tem "data em que chegou").
+
+    `ORDER BY data_hora, id` — o desempate por id importa: recebimento e baixa no mesmo
+    segundo trocariam de ordem conforme o plano de consulta, e a ordem decide se o lote
+    abriu antes ou depois da saída que o fecharia.
+    """
+    rows = c.execute(
+        """SELECT data_hora, tipo, quantidade, saldo_apos, sc_item_id
+           FROM movimentacoes WHERE item_id=?
+           ORDER BY data_hora, id""",
+        (item_id,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        dt = _parse_dt(r["data_hora"])
+        if dt is None:
+            continue
+        saldo_apos = None if r["saldo_apos"] is None else float(r["saldo_apos"])
+        abre_lote = r["tipo"] == "entrada" and r["sc_item_id"] is not None
+        out.append((dt, r["tipo"], float(r["quantidade"] or 0), saldo_apos, abre_lote))
+    return out
+
+
+def consumo_por_vida_util(item_id, conn=None):
+    """Consumo mensal do item pela vida útil dos lotes recebidos. Ver
+    `_vida_util_from_movimentos` — aqui só se busca o mínimo cadastrado e o ledger."""
+    with transaction(conn) as c:
+        row = c.execute("SELECT estoque_minimo FROM inventario WHERE id=?", (item_id,)).fetchone()
+        minimo = float(row["estoque_minimo"] or 0) if row else 0.0
+        movimentos = _movimentos_item(c, item_id)
+    return _vida_util_from_movimentos(movimentos, minimo)
 
 
 def consumo_mensal(item_id, conn=None):
@@ -260,9 +390,16 @@ def perfil_sazonal(item_id, conn=None):
 
 
 def classificar_item(item_id, conn=None):
-    """Reúne demanda + XYZ + consumo mensal + sazonalidade de um item (para a Ficha 360)."""
+    """Reúne demanda + XYZ + consumo mensal + sazonalidade + vida útil do lote (Ficha 360).
+
+    v6.4.0 — `vida_util` entra por aqui, e não por uma consulta nova em `services/ficha.py`,
+    porque a Ficha já recebe este dict inteiro (`ficha["classificacao"]`). Fica de fora de
+    `classificar_todos` de propósito: aquela função roda para a base inteira dentro de
+    `listar_inventario`, e varrer o ledger completo de 362 itens a cada listagem é
+    exatamente o N+1 que ela existe para evitar."""
     with transaction(conn) as c:
         eventos = _eventos_item(c, item_id)
+        vida_util = consumo_por_vida_util(item_id, c)
     serie = _meses_from_eventos(eventos)
     return {
         "demanda": _demanda_from_eventos(eventos),
@@ -270,6 +407,7 @@ def classificar_item(item_id, conn=None):
         "consumo_mensal": serie,
         "consumo_mensal_ponderado": _ponderado_from_serie(serie, date.today()),
         "sazonalidade": _sazonalidade_from_serie(serie),
+        "vida_util": vida_util,
     }
 
 

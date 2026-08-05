@@ -78,7 +78,16 @@ def test_render_pagina_recusa_pagina_inexistente():
 def _render_em_apptest(nome):
     script = f"from ui.router import render_pagina\nrender_pagina({nome!r})\n"
     at = AppTest.from_string(script)
-    at.run()
+    # ⚠️ `timeout` EXPLÍCITO. O default do AppTest é 3 s, e a PRIMEIRA rota renderizada no
+    # processo paga sozinha o import de toda a árvore `ui/` + `services/` (pandas, plotly,
+    # o motor de reposição). Com a suíte inteira rodando e a máquina disputada, esses 3 s
+    # estouram na rota que vier primeiro em ordem alfabética — em 05/08/2026 foi
+    # "Aprovações do Setor", que rende em 0,17 s quando os imports já estão quentes.
+    # Este teste responde "a página renderiza sem exceção?"; deixar um limite de tempo
+    # apertado decidir o veredito é uma asserção de performance disfarçada de smoke, e
+    # produz gate vermelho intermitente sem nenhum defeito por trás. 30 s continua pegando
+    # travamento de verdade.
+    at.run(timeout=30)
     return at
 
 

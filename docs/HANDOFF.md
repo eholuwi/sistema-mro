@@ -9,7 +9,7 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 05/08/2026
+## STATUS ATUAL — atualizado em 05/08/2026 (v6.4.0 implementada)
 
 - **Branch de trabalho: `feat/v5.0.0`.**
   **Primeiro comando de qualquer sessão:** `git fetch --all --prune` e `git checkout feat/v5.0.0`.
@@ -18,22 +18,129 @@
   `requirements.txt` **sem pin** — descartado por decisão do Luis, nada a resgatar. As duas branches
   agora apontam para o mesmo commit; quem clonar o repositório cai no estado atual.
 
-- **v6.4.0 PLANEJADA — 5 demandas do Luis (05/08/2026), QUEM IMPLEMENTA É O CLAUDE.**
-  Ver `docs/prompt.md` (seção "v6.4.0") e `changelog/6.4.0.md` (esqueleto). Escopo travado:
-  1. **Consumo mensal por vida útil do lote** — duração = chegada → bateu o mínimo;
-     `consumo_mensal = qtd ÷ dias × 30`; `services/classificacao.py` + Ficha 360.
-  2. **Sugestão de Min/Max** — `min = consumo_diário × lead_time` · `max = consumo_diário × 60d`;
-     colunas `minimo_calculado`/`maximo_calculado`/`min_max_amostras`/`min_max_origem` (migração
-     aditiva com backup) + "Usar calculado" e visão em lote.
-  3. **Gestor rejeita + vê requisição completa** — `rejeitar_requisicao(req, gestor, motivo)`,
-     colunas `rejeitado_*`, expander com itens no cartão; rejeição visível na Portaria.
-  4. **Requisitante** — checkbox `mostrar_saldo_requisitante` (default 1) em Gerenciar Itens
-     (esconde saldo de `movimentacao.py:771`/`:804` quando desligada) + **imagem do material na
-     requisição** via `imagem_path` (Ficha 360/`caminho_absoluto_imagem`).
-  5. **Portaria busca por nome** do requisitante (`buscar_requisicoes_por_emitente`, case/trim).
-  - **Demanda antiga de v6.4.0 (gestor ↔ requisitante) ADIADA para v6.5.0** (seção própria no
+- **v6.4.0 IMPLEMENTADA, gate verde (891 testes), ⏳ AGUARDANDO VALIDAÇÃO NO APP REAL E OK PARA
+  COMMIT.** Ver `changelog/6.4.0.md`. Os 5 épicos do Luis (05/08/2026) entraram na ordem
+  B → C → D → E → F, mais duas correções que ele pediu ao revisar. **Duas migrações aditivas**,
+  ambas com `.bak`.
+
+  - **⚠️ O `mro.db` DE PRODUÇÃO JÁ ESTÁ MIGRADO** (05/08/2026 13:39). Aconteceu durante a
+    verificação da migração, sem intenção. **Nada foi perdido** — contagens conferidas contra o
+    backup imediatamente anterior: 362 itens, 1.132 requisições, 2.973 movimentações, 726 itens de
+    SC e estoque total 55.310 **idênticos** nos dois. A rede de segurança funcionou como projetada:
+    `backups/mro.db.bak-20260805-133938-inventario-minmax-saldo-v640` e
+    `…-requisicoes-rejeicao-v640` são o estado pré-migração, caso se queira voltar.
+    Consequência prática: ao subir a v6.4.0 as migrações **não vão rodar de novo** (são
+    idempotentes) e o `.bak` do servidor não será gerado — a prova de que migrou passa a ser a
+    presença das colunas, não o arquivo.
+
+  - **⚠️ O BACKFILL DO MÍN/MÁX RODA UMA VEZ SÓ NA VIDA DO BANCO** (guardado por
+    `minimo_calculado not in cols_inv0`). Quem migrou antes de uma mudança de fórmula fica com os
+    números da regra antiga até o item se mexer — foi o que aconteceu aqui: o banco migrou com a
+    versão que preferia o lead time **cadastrado**, e a troca para o **calculado** não apareceria
+    sozinha. Por isso existe o botão **"Recalcular tudo"** em *Cadastro de Itens › Sugestões de
+    Mín/Máx*. **Já foi aplicado ao `mro.db` real**: 362 itens recalculados, 116 com sugestão, dos
+    quais **50 usando o lead time calculado**; `estoque_minimo` intacto. **Vale para qualquer
+    mudança futura de fórmula: o caminho é o botão, não a migração.**
+
+  - **Decisões que o Luis fechou em 05/08/2026 e o `prompt.md` deixava em aberto:**
+    - Épico B — **só recebimento de SC abre lote** (`sc_item_id` preenchido); ajuste de inventário
+      e entrada avulsa mexem no saldo mas não abrem lote. Vários lotes → **média simples**.
+    - Épico D — rejeitar **não é um "não" final, é um ciclo**: gestor devolve com motivo →
+      requisitante ajusta e reenvia → volta para a fila do gestor. Isso puxou uma 4ª coluna
+      (`reenviado_em`) e uma função nova (`atualizar_item_requisicao`), porque até aqui o
+      requisitante só sabia *remover* item, não corrigir quantidade.
+
+  - **⚠️ COBERTURA REAL DO ÉPICO B: 20 de 362 itens têm número.** Não é bug — é o histórico de
+    3,5 meses. Dos **94** itens com recebimento de SC: **20** têm lote fechado (viram número),
+    **45** têm só lote vivo (o estoque nunca caiu ao mínimo desde que chegou) e **29** não abriram
+    lote (chegou já no/abaixo do mínimo, ou fechou em < 1 dia). O número cresce sozinho conforme os
+    lotes fecharem. Se o Luis achar vazio demais, **a alavanca é a regra de "que entrada abre
+    lote"**, uma linha em `_movimentos_item` — não o resto do cálculo.
+
+  - **⚠️ ACHADO NA BASE REAL, VALE PARA ALÉM DESTA VERSÃO: `consumo_medio_diario` é coluna
+    PERSISTIDA e congela.** Ela só é recalculada quando o item se move, então um item parado guarda
+    para sempre o consumo do dia em que parou. O **PN 34FR0001** tem uma saída de **99.999
+    unidades** em 30/06/2026 (erro de digitação evidente) e está com 3.333/dia no banco, embora
+    `consumo_30d` já seja 0. Isso **já distorce hoje** o ROP e a fila de reposição, independente da
+    v6.4.0 — vale corrigir a movimentação na operação.
+    A v6.4.0 se protegeu: `min_max_amostras` (nº de saídas em 30 d) entra **na fórmula**, não só no
+    rótulo, e zero amostras ⇒ sem sugestão. Sem essa guarda a visão em lote proporia **mínimo
+    66.666** para um item de mínimo **5**, e um clique reescreveria a base do Neidson. Efeito:
+    116 itens com sugestão (todos com lastro) em vez de 228 (112 sem movimento recente).
+
+  - **⚠️ Armadilha de timestamp paga:** o predicado "o pedido voltou?" NÃO compara datas. A primeira
+    versão usava `reenviado_em > rejeitado_em` e o teste do ciclo completo reprovou — `data_hora`
+    tem resolução de **segundo**, e rejeitar/reenviar no mesmo segundo empata a comparação,
+    deixando o pedido preso fora da fila. Como `rejeitar_requisicao` **sempre zera `reenviado_em`**,
+    o predicado virou `rejeitado_em IS NOT NULL AND reenviado_em IS NULL`. **Vale para qualquer
+    par de colunas de data neste schema.**
+
+  - **DEVOLVIDA NÃO SAI DO ALMOXARIFADO** (decisão do Luis em 05/08/2026, revisando a assunção
+    que eu havia deixado em aberto: *"se não foi aprovada pelo gestor então não podemos entregar o
+    material"*). A requisição devolvida sai da fila de separação **e** `entregar_requisicao` a
+    recusa — a trava vive no serviço, porque sumir da lista é conveniência de tela e qualquer outro
+    caminho até a entrega passaria por cima dela. Volta sozinha ao ser reenviada.
+    ⚠️ **Isso NÃO tornou a aprovação obrigatória:** só a rejeição **explícita** bloqueia. A
+    fronteira está fixada por teste (`test_nao_aprovada_continua_entregavel`) e o motivo é
+    concreto — exigir aprovação para toda entrega **pararia a operação**: o `mro.db` tem 1.132
+    requisições e **zero** aprovadas.
+
+  - **O lead time da SUGESTÃO é o calculado** (2ª correção do Luis): `lead_time_para_sugestao` é
+    deliberadamente o **inverso** de `lead_time_efetivo` — a sugestão prefere o **calculado**, o
+    ROP continua preferindo o **cadastrado** (base do Neidson decide compra real). Consequência:
+    **o mínimo sugerido não é mais idêntico ao ROP**, e isso é intencional. No `mro.db`, 104 itens
+    têm lead time calculado e **103 divergem** do cadastrado (que é quase sempre um `20` genérico;
+    o calculado varia de 6 a 100 dias).
+
+  - **Esconder saldo é da TELA, não do item.** `_saldo_visivel` exige **duas** condições: quem está
+    olhando (só a tela do Requisitante pede ocultamento) **e** o que o cadastro liberou. O mesmo
+    `_req_bloco_materiais` roda na Movimentação do balcão, onde quem monta o pedido é o almoxarife.
+
+  - **SCRIPT DAS FOTOS PRONTO (Épico A) — `scripts/importar_imagens_planilha.py`.**
+    Simulação é o padrão; `--aplicar` grava, com `_backup_db` antes da 1ª escrita, e reusa
+    `services/ficha.salvar_imagem_item` (mesma validação e mesmo `docs/itens/item_<id>.ext`).
+    **Medido:** 351 PNs com foto na planilha, **327 casam** com o inventário (90%), 24 sem
+    item (não são criados), 4 já tinham foto (pulados sem `--substituir`). ~90 MB em
+    `docs/itens/`, que já está no `.gitignore`.
+    - **O vínculo foto→item é EXATO, não por ordem.** As fotos estão *dentro da célula*
+      (rich data do Excel 365) e o script segue a cadeia
+      `célula vm=N → metadata.xml → rdrichvalue.xml → richValueRel.xml → _rels → xl/media/`.
+      O "plano B" do prompt original (extrair na ordem e casar com as linhas) foi
+      **descartado**: a cadeia existe e é exata, e foto errada no item errado é pior que
+      foto nenhuma.
+    - **Conferido visualmente em 3 amostras**, incluindo duas linhas adjacentes que só
+      diferem na cor (`17ME0019` CANETA AZUL → BIC azul; `17ME0021` CANETA VERMELHA → BIC
+      vermelha) — um deslocamento de uma linha teria aparecido. Repetir esse teste se a
+      planilha for trocada.
+    - PN sai da **coluna B**; a foto da **coluna E**. GERAL começa na linha 4 (cabeçalho na
+      3), ENTRADA na 2. GERAL vence quando o PN aparece nas duas.
+
+  - **⚠️ IMAGEM: a exibição está pronta, o conteúdo não (até rodar o script acima).** O requisitante já vê a foto do material
+    (Épico E), mas hoje **0 de 362 itens** renderizariam alguma: são 4 `imagem_path` gravados e
+    **nenhum** dos arquivos existe em `docs/itens/` (que tem 1 arquivo órfão, sem referência no
+    banco). A guarda de existência (`imagem_existente`) é o que evita a tela estourar nesses 4.
+    **Para as fotos aparecerem falta rodar o Épico A** — extrair as 402 fotos de
+    `Material MRO 2026.xlsx` e casar por PN; prompt pronto em
+    `docs/prompt_importar_planilha_mro.md`, sessão própria. O upload item a item já existe na
+    Ficha 360 desde a v2.6.0.
+
+  - **Gate intermitente corrigido (fora do escopo, mas bloqueava):** `test_v500_router.py` reprovou
+    uma vez com `AppTest script run timed out after 3(s)` em "Aprovações do Setor". Não é lentidão
+    — medido, a página renderiza em **0,17 s**, a mais rápida das dez; ela é só a **primeira em
+    ordem alfabética** e paga sozinha o import de toda a árvore `ui/`+`services/`. O `at.run()`
+    agora tem `timeout=30` explícito e comentado. **Se outro teste de `AppTest` flakear igual, a
+    causa é a mesma** — e o próximo passo seria aquecer os imports uma vez no `conftest.py`.
+
+  - **O que conferir no app** (roteiro completo na seção "Verificação" do plano da v6.4.0): Ficha
+    360 de item **com recebimento de SC** mostra o card de vida útil e os demais mostram "—";
+    "Usar mínimo/máximo" grava e a aba em lote **não** mexe em quem não foi marcado; o gestor abre
+    "Ver requisição completa", devolve com motivo, o pedido some da fila e aparece em "Devolvidas",
+    o requisitante ajusta, reenvia e ele **volta**; desmarcar "mostrar saldo" esconde só na tela do
+    Requisitante; Portaria acha por nome com caixa/espaço trocados e não lista nada com o campo
+    vazio.
+
+  - **Demanda antiga de v6.4.0 (gestor ↔ requisitante) segue ADIADA para v6.5.0** (seção própria no
     `docs/prompt.md`).
-  - **Fórmulas travadas pelo Luis na entrevista de 05/08/2026** — não reabrir sem ele.
 
 - **Planilha MRO encontrada e documentada (05/08/2026).**
   `sistema-mro\Material MRO 2026.xlsx` (118 MB) — controle antigo de entrada/saída com **402
@@ -70,11 +177,11 @@
     diferentes e **não** recebe o aviso de cadastro incompleto; a coluna Setor vem em 2º; o
     filtro mostra só setores com pedido e a contagem bate; gestor continua restrito ao seu
     setor. Roteiro completo na seção "Verificação" do plano da v6.3.0.
-  - **Feedback do Luis registrado como v6.5.0** (`docs/prompt.md`): **vínculo gestor ↔
-    requisitante** no cadastro (`usuarios.gestor_id` + seletor no formulário do requisitante),
-    para a fila do gestor deixar de depender do casamento `setor` × `departamento`. Substitui a
-    ideia antiga de "agrupar a fila por solicitante". ⚠️ Confirmar antes de mexer no schema se o
-    gestor é atributo da **pessoa** (leitura assumida) ou da **requisição**.
+  - **Feedback do Luis registrado como v6.5.0** (`docs/prompt.md`): o requisitante **seleciona o
+    gestor a cada requisição** (`requisicoes.gestor`, TEXT nullable) — decisão do Luis em
+    05/08/2026, "é melhor do que vincular". Substitui a ideia antiga de "agrupar a fila por
+    solicitante" e de vínculo no cadastro do usuário. Pergunta aberta: guardar nome ou id do
+    gestor.
 
 - **v6.2.0 COMMITADA (`e33711a`), gate verde (793 testes), ⏳ VALIDAÇÃO NO APP REAL INCOMPLETA.**
   Ver `changelog/6.2.0.md` e o plano em `docs/claude/Sessão 3/PLANO_V620_TELAS_SELF_SERVICE.md`
@@ -127,8 +234,8 @@
     no modo público a sidebar tem de ter UM item só. Se aparecerem 10, é falha de acesso.
   - **Feedback do Luis (02/08/2026) — ambos os itens já encaminhados:** (1) admin ver tudo de
     todos os setores → **entregue na v6.3.0**, acima; (2) fila do gestor agrupada por
-    solicitante → **substituída** pelo vínculo gestor ↔ requisitante da v6.4.0
-    (`docs/prompt.md`, topo), que ataca a raiz em vez da aparência.
+    solicitante → **substituída** pela decisão de 05/08/2026: o **requisitante seleciona o
+    gestor a cada requisição** (v6.5.0, `docs/prompt.md`), atacando a raiz em vez da aparência.
 
 - **v6.1.0 COMMITADA, gate verde (760 testes), ✅ VALIDADA NO APP REAL PELO LUIS (02/08/2026).**
   Ver `changelog/6.1.0.md` e o plano em `docs/PLANO_V610_USUARIOS_LOGIN.md` (seguido integralmente).

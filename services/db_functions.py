@@ -1059,6 +1059,11 @@ def _recalcular_consumo(conn, item_id):
                 item_id,
             ),
         )
+        # v6.4.0 — a sugestão de Mín/Máx é `consumo × lead time` e `consumo × 60 d`:
+        # acabou de mudar a metade "consumo" da conta, então ela é recalculada aqui, na
+        # mesma transação. Sem isso a sugestão envelheceria em silêncio, e a tela
+        # ofereceria "usar calculado" com um número de semanas atrás.
+        recalcular_min_max_calculado(item_id, c)
 
 
 def _data_limite_sql(data, fim_do_dia=False):
@@ -1551,13 +1556,31 @@ def entregar_requisicao(
     try:
         with transaction() as conn:
             req = conn.execute(
-                "SELECT id, numero_requisicao, setor, emitente, centro_custo, status FROM requisicoes WHERE id=?",
+                """SELECT id, numero_requisicao, setor, emitente, centro_custo, status,
+                          rejeitado_por, rejeitado_em, motivo_rejeicao, reenviado_em
+                   FROM requisicoes WHERE id=?""",
                 (req_id,),
             ).fetchone()
             if not req:
                 raise Exception("Requisição não encontrada.")
             if req["status"] not in ("Aberta", "Parcial"):
                 raise Exception(f"Requisição {req['status']}: não é possível entregar.")
+            # v6.4.0 — requisição DEVOLVIDA pelo gestor não sai do almoxarifado (decisão do
+            # Luis em 05/08/2026: "se não foi aprovada pelo gestor, não podemos entregar o
+            # material"). A trava vive AQUI, e não só no filtro da fila: sumir da lista é
+            # conveniência de tela, e qualquer outro caminho até a entrega — link direto,
+            # tela futura, chamada de serviço — passaria por cima dela.
+            #
+            # ⚠️ Isto NÃO torna a aprovação obrigatória. Só a rejeição EXPLÍCITA bloqueia;
+            # requisição que o gestor ainda não olhou continua entregável, como desde a
+            # v6.2.0. Exigir aprovação para toda entrega pararia a operação inteira: em
+            # 05/08/2026 o `mro.db` tem 1.132 requisições e ZERO aprovadas.
+            if req["rejeitado_em"] and not req["reenviado_em"]:
+                raise Exception(
+                    f"Requisição devolvida por {req['rejeitado_por']} em {req['rejeitado_em']} "
+                    f"(motivo: {req['motivo_rejeicao'] or '—'}). O requisitante precisa ajustar "
+                    "e reenviar antes de o material sair."
+                )
             for e in entregas:
                 q = float(e["quantidade"])
                 ir = conn.execute(
@@ -1645,6 +1668,43 @@ def remover_item_requisicao(item_req_id):
         return False, str(e)
 
 
+def atualizar_item_requisicao(item_req_id, quantidade):
+    """v6.4.0 — Corrige a quantidade solicitada de um item ainda NÃO atendido.
+
+    Nasce com o ciclo de rejeição: o gestor devolve o pedido dizendo "10 é demais, peça 2",
+    e até aqui o requisitante só sabia REMOVER o item e adicioná-lo de novo — perdendo a
+    ordem da lista e exigindo dois passos para uma correção de um número.
+
+    Mesmas guardas de `remover_item_requisicao`, e pelos mesmos motivos: item já entregue
+    (parcial ou total) não se mexe, porque a quantidade solicitada é a referência contra a
+    qual a baixa foi conferida; e requisição fora de Aberta/Parcial não se edita.
+    Quantidade tem de ser > 0 — zerar seria remover pela porta dos fundos, sem passar pela
+    checagem de item já atendido."""
+    try:
+        qtd = float(quantidade)
+    except (TypeError, ValueError):
+        return False, "Quantidade inválida."
+    if qtd <= 0:
+        return False, "A quantidade deve ser maior que zero (para tirar o item, use Remover)."
+    try:
+        with transaction() as conn:
+            ir = conn.execute(
+                "SELECT id, requisicao_id, quantidade_atendida FROM itens_requisicao WHERE id=?",
+                (item_req_id,),
+            ).fetchone()
+            if not ir:
+                raise Exception("Item não encontrado.")
+            if float(ir["quantidade_atendida"] or 0) > 0:
+                raise Exception("Item já entregue (parcial/total): a quantidade não pode ser alterada.")
+            req = conn.execute("SELECT status FROM requisicoes WHERE id=?", (ir["requisicao_id"],)).fetchone()
+            if req and req["status"] not in ("Aberta", "Parcial"):
+                raise Exception(f"Requisição {req['status']}: não pode ser editada.")
+            conn.execute("UPDATE itens_requisicao SET quantidade_solicitada=? WHERE id=?", (qtd, item_req_id))
+        return True, f"Quantidade alterada para {qtd:g}."
+    except Exception as e:
+        return False, str(e)
+
+
 def cancelar_requisicao(req_id):
     """v4.7.0 — Cancela uma requisição **Aberta** (nada entregue, nada a estornar)."""
     try:
@@ -1683,13 +1743,24 @@ def aprovar_requisicao(req_id, gestor_nome):
     try:
         with transaction() as conn:
             req = conn.execute(
-                "SELECT numero_requisicao, status, aprovado_por, aprovado_em FROM requisicoes WHERE id=?",
+                """SELECT numero_requisicao, status, aprovado_por, aprovado_em,
+                          rejeitado_por, rejeitado_em, reenviado_em
+                   FROM requisicoes WHERE id=?""",
                 (req_id,),
             ).fetchone()
             if not req:
                 raise Exception("Requisição não encontrada.")
             if req["status"] == "Cancelada":
                 raise Exception("Requisição Cancelada: não pode ser aprovada.")
+            # v6.4.0 — guarda simétrica à de `rejeitar_requisicao`: enquanto o pedido está
+            # com o requisitante, aprová-lo deixaria a Portaria com dois carimbos
+            # contraditórios. Não é beco sem saída — basta o requisitante reenviar (mesmo
+            # sem mudar nada) para o pedido voltar e poder ser aprovado.
+            if req["rejeitado_em"] and not req["reenviado_em"]:
+                raise Exception(
+                    f"Requisição devolvida por {req['rejeitado_por']} e ainda não reenviada "
+                    "pelo requisitante: não pode ser aprovada."
+                )
             if req["aprovado_por"]:
                 return True, f"Já aprovada por {req['aprovado_por']} em {req['aprovado_em']}."
             conn.execute(
@@ -1697,6 +1768,91 @@ def aprovar_requisicao(req_id, gestor_nome):
                 (gestor, agora, req_id),
             )
         return True, f"Requisição {req['numero_requisicao']} aprovada."
+    except Exception as e:
+        return False, str(e)
+
+
+def rejeitar_requisicao(req_id, gestor_nome, motivo):
+    """v6.4.0 — O gestor DEVOLVE a requisição ao requisitante, com o motivo.
+
+    Decisão do Luis (05/08/2026): rejeitar não é um "não" final, é o começo de um ciclo —
+    o requisitante lê o motivo, ajusta o pedido e reenvia (`reenviar_requisicao`), e ele
+    volta para a fila do gestor. Por isso o **motivo é obrigatório**: é o único canal que
+    diz à outra ponta o que corrigir, e uma rejeição muda faz o requisitante reenviar o
+    mesmo pedido.
+
+    Como a aprovação da v6.2.0, **não é bloqueante e não cria status**: o pedido sai da
+    fila de aprovação (via `_clausulas_aprovacao`), mas continua na fila de separação do
+    almoxarife, que segue podendo entregar. Rejeição registra a posição do setor; quem
+    libera material continua sendo o almoxarifado.
+
+    Ao contrário de `aprovar_requisicao` — onde a PRIMEIRA aprovação vence, porque é
+    carimbo de auditoria e a 2ª chamada é quase sempre duplo-clique — rejeitar de novo
+    **sobrescreve**: é o estado corrente de um ciclo que pode se repetir, e o motivo que
+    vale é sempre o último (o requisitante precisa ver o que ainda está errado, não o que
+    já corrigiu).
+
+    Requisição já aprovada é recusada: aprovado e rejeitado ao mesmo tempo deixaria a
+    Portaria com dois carimbos contraditórios e ninguém sabendo qual vale."""
+    gestor = str(gestor_nome or "").strip()
+    motivo_txt = str(motivo or "").strip()
+    if not gestor:
+        return False, "Informe o nome de quem está rejeitando."
+    if not motivo_txt:
+        return False, "Explique o motivo — é o que diz ao requisitante o que ajustar."
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with transaction() as conn:
+            req = conn.execute(
+                "SELECT numero_requisicao, status, aprovado_por FROM requisicoes WHERE id=?",
+                (req_id,),
+            ).fetchone()
+            if not req:
+                raise Exception("Requisição não encontrada.")
+            if req["status"] == "Cancelada":
+                raise Exception("Requisição Cancelada: não há o que rejeitar.")
+            if req["aprovado_por"]:
+                raise Exception(f"Requisição já aprovada por {req['aprovado_por']}: não pode ser rejeitada.")
+            conn.execute(
+                """UPDATE requisicoes
+                   SET rejeitado_por=?, rejeitado_em=?, motivo_rejeicao=?, reenviado_em=NULL
+                   WHERE id=?""",
+                (gestor, agora, motivo_txt, req_id),
+            )
+        return True, f"Requisição {req['numero_requisicao']} devolvida ao requisitante."
+    except Exception as e:
+        return False, str(e)
+
+
+def reenviar_requisicao(req_id):
+    """v6.4.0 — O requisitante devolve à fila do gestor a requisição que foi rejeitada.
+
+    Fecha o ciclo aberto por `rejeitar_requisicao`. Grava `reenviado_em` em vez de LIMPAR
+    `rejeitado_*`: assim o gestor reencontra o pedido sabendo o que ele mesmo havia pedido
+    para ajustar. É `reenviado_em > rejeitado_em` que devolve o pedido à fila (ver
+    `_clausulas_aprovacao`), e é por isso que uma nova rejeição zera este campo — o ciclo
+    pode se repetir quantas vezes for preciso.
+
+    Recusa reenvio sem rejeição pendente: reenviar o que ninguém devolveu não significa
+    nada, e deixaria `reenviado_em` preenchido num pedido que nunca saiu da fila."""
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with transaction() as conn:
+            req = conn.execute(
+                """SELECT numero_requisicao, status, rejeitado_em, reenviado_em
+                   FROM requisicoes WHERE id=?""",
+                (req_id,),
+            ).fetchone()
+            if not req:
+                raise Exception("Requisição não encontrada.")
+            if req["status"] == "Cancelada":
+                raise Exception("Requisição Cancelada: não pode ser reenviada.")
+            if not req["rejeitado_em"]:
+                raise Exception("Esta requisição não foi rejeitada — não há o que reenviar.")
+            if req["reenviado_em"]:
+                return True, "Já reenviada — está na fila do gestor."
+            conn.execute("UPDATE requisicoes SET reenviado_em=? WHERE id=?", (agora, req_id))
+        return True, f"Requisição {req['numero_requisicao']} reenviada para aprovação."
     except Exception as e:
         return False, str(e)
 
@@ -1709,7 +1865,14 @@ def listar_requisicoes_abertas(incluir_entregues=False):
     (que desde a v5.7.0 as reabre como `Parcial`) seja alcançável pela tela. Sem esse
     parâmetro a requisição Entregue não é selecionável na fila e a liberação no serviço
     ficaria inútil na prática. `Cancelada` nunca entra: não aceita item novo.
-    O default preserva a fila de trabalho do almoxarife — só o que falta separar."""
+    O default preserva a fila de trabalho do almoxarife — só o que falta separar.
+
+    v6.4.0 — requisição **devolvida** pelo gestor sai da fila (decisão do Luis em
+    05/08/2026: sem o aval do gestor o material não sai). Volta sozinha quando o
+    requisitante reenviar, pelo mesmo `DEVOLVIDA_WHERE` que rege as filas de aprovação —
+    uma regra só, para a fila do almoxarife e a do gestor nunca discordarem sobre o que
+    está em aberto. A trava de verdade está em `entregar_requisicao`; aqui é a metade que
+    tira o pedido da frente de quem separa."""
     status = "('Aberta','Parcial','Entregue')" if incluir_entregues else "('Aberta','Parcial')"
     with transaction() as conn:
         rows = conn.execute(f"""
@@ -1719,6 +1882,7 @@ def listar_requisicoes_abertas(incluir_entregues=False):
             FROM requisicoes r
             LEFT JOIN itens_requisicao ir ON ir.requisicao_id = r.id
             WHERE r.status IN {status}
+              AND NOT ({DEVOLVIDA_WHERE})
             GROUP BY r.id
             ORDER BY r.data_hora ASC
         """).fetchall()
@@ -1785,20 +1949,73 @@ def buscar_requisicao_por_numero(numero):
     return req
 
 
-def _clausulas_aprovacao(so_abertas, apenas_aprovadas):
+# v6.4.0 — requisição DEVOLVIDA ao requisitante: o gestor rejeitou e ela ainda não voltou.
+#
+# O predicado não compara datas de propósito. A primeira versão perguntava
+# `reenviado_em > rejeitado_em`, e o teste do ciclo completo mostrou o furo: `data_hora`
+# tem resolução de SEGUNDO, então rejeitar e reenviar no mesmo segundo empata a comparação
+# e o pedido fica preso fora da fila. Como `rejeitar_requisicao` **sempre zera
+# `reenviado_em`**, vale o invariante "reenviado_em não-nulo ⇒ o reenvio é posterior à
+# última rejeição" — e a pergunta vira simplesmente "voltou ou não voltou", sem relógio
+# nenhum no meio. O ciclo continua se repetindo quantas vezes for preciso.
+#
+# Nenhum ramo produz NULL (`IS NULL`/`IS NOT NULL` nunca são NULL), então o `NOT (...)` do
+# outro lado é seguro para quem nunca foi rejeitado.
+DEVOLVIDA_WHERE = "r.rejeitado_em IS NOT NULL AND r.reenviado_em IS NULL"
+
+
+def buscar_requisicoes_por_emitente(nome, limit=50):
+    """v6.4.0 — Consulta da Portaria pelo NOME de quem pediu, com os itens de cada uma.
+
+    Quem chega na guarita sem o papel na mão sabe o próprio nome, não o número do pedido.
+    Devolve o shape de `listar_requisicoes` com a chave extra `itens`, igual a
+    `buscar_requisicao_por_numero` — a tela desenha o mesmo cartão nos dois caminhos.
+
+    É um envelope sobre `listar_requisicoes(emitente=…)`, que já faz o casamento
+    `UPPER(TRIM())`: escrever um segundo SELECT com o mesmo filtro daria duas versões da
+    mesma busca para manter em sincronia.
+
+    ⚠️ **Nome vazio devolve `[]` sem consultar.** `listar_requisicoes(emitente="")` cai no
+    ramo "sem filtro" e devolve a base INTEIRA — na Portaria isso seria despejar as
+    requisições de todos os funcionários para quem apertasse Consultar com o campo em
+    branco. Mesma negativa por omissão de `buscar_requisicao_por_numero`."""
+    nome = str(nome or "").strip()
+    if not nome:
+        return []
+    reqs = listar_requisicoes(limit=limit, emitente=nome)
+    for req in reqs:
+        req["itens"] = listar_itens_requisicao(req["id"])
+    return reqs
+
+
+def _clausulas_aprovacao(so_abertas, apenas_aprovadas, apenas_rejeitadas=False):
     """v6.3.0 — Recorte comum às duas filas de aprovação (por setor e consolidada).
 
     Só o `WHERE` inicial difere entre elas; status e metade aprovada/não aprovada são a
     mesma regra, e uma cópia num dos lados faria a fila do gestor e a do almoxarife
-    divergirem em silêncio — o pedido some de uma e continua na outra."""
+    divergirem em silêncio — o pedido some de uma e continua na outra.
+
+    v6.4.0 — as filas passam a ter TRÊS metades, não duas: aguardando, já aprovadas e
+    **devolvidas ao requisitante**. Quem foi rejeitado sai de "aguardando" (senão o gestor
+    reveria para sempre o pedido que ele mesmo devolveu) e volta assim que o requisitante
+    reenviar. A regra mora aqui, uma vez só, pelo mesmo motivo da v6.3.0."""
     partes = []
     if so_abertas:
         partes.append("AND r.status IN ('Aberta','Parcial')")
-    partes.append("AND r.aprovado_por IS NOT NULL" if apenas_aprovadas else "AND r.aprovado_por IS NULL")
+    if apenas_rejeitadas:
+        partes.append("AND r.aprovado_por IS NULL")
+        partes.append(f"AND ({DEVOLVIDA_WHERE})")
+    elif apenas_aprovadas:
+        partes.append("AND r.aprovado_por IS NOT NULL")
+    else:
+        partes.append("AND r.aprovado_por IS NULL")
+        partes.append(f"AND NOT ({DEVOLVIDA_WHERE})")
     return partes
 
 
-def listar_requisicoes_para_aprovacao(so_abertas=True, apenas_aprovadas=False, limite=100):
+def listar_requisicoes_para_aprovacao(
+    so_abertas=True, apenas_aprovadas=False, apenas_rejeitadas=False, limite=100
+):
     """v6.3.0 — Fila CONSOLIDADA: tudo o que há para aprovar, de TODOS os setores.
 
     É a visão do almoxarife (admin), que não tem departamento cadastrado e precisa da fila
@@ -1814,11 +2031,13 @@ def listar_requisicoes_para_aprovacao(so_abertas=True, apenas_aprovadas=False, l
 
     Demais parâmetros e shape idênticos aos da irmã, inclusive a ordem ASC (fila se atende
     pelo começo)."""
-    filtro = " ".join(["WHERE 1=1", *_clausulas_aprovacao(so_abertas, apenas_aprovadas)])
+    filtro = " ".join(["WHERE 1=1", *_clausulas_aprovacao(so_abertas, apenas_aprovadas, apenas_rejeitadas)])
     return _consultar_requisicoes(filtro, [], ordem="r.data_hora ASC", limit=limite)
 
 
-def listar_requisicoes_por_setor(setor, so_abertas=True, apenas_aprovadas=False, limite=100):
+def listar_requisicoes_por_setor(
+    setor, so_abertas=True, apenas_aprovadas=False, apenas_rejeitadas=False, limite=100
+):
     """v6.2.0 — Requisições de um SETOR, para a tela "Aprovações do Setor" (Gestor).
 
     O filtro é igualdade simples de setor (case/trim insensível), decisão do Luis em
@@ -1843,7 +2062,7 @@ def listar_requisicoes_por_setor(setor, so_abertas=True, apenas_aprovadas=False,
         return []
     filtro = [
         "WHERE UPPER(TRIM(r.setor)) = UPPER(TRIM(?))",
-        *_clausulas_aprovacao(so_abertas, apenas_aprovadas),
+        *_clausulas_aprovacao(so_abertas, apenas_aprovadas, apenas_rejeitadas),
     ]
     return _consultar_requisicoes(" ".join(filtro), [setor], ordem="r.data_hora ASC", limit=limite)
 
@@ -3827,6 +4046,69 @@ def _recalcular_lead_time_calculado(conn, item_id):
         logger.exception("Erro ao recalcular lead time (recebimento): %s", e)
 
 
+def _amostras_consumo_30d(c, item_id=None):
+    """{item_id: nº de saídas na janela de 30 d} — o "quantas amostras" da sugestão de
+    Mín/Máx, irmão de `lead_time_calculado_amostras`.
+
+    Conta por `tipo='saida'` (e não por `SAIDA_REAL_WHERE`) de propósito: é exatamente o
+    recorte que `_consumo_janela` usa para calcular `consumo_medio_diario`, a base da
+    sugestão. Contar por um filtro mais estrito diria "3 amostras" para um número tirado de
+    5 saídas — o rótulo tem de descrever o dado que realmente entrou na conta."""
+    where = "AND item_id=?" if item_id else ""
+    params = (f"-{JANELA_CONSUMO_DIAS} days", item_id) if item_id else (f"-{JANELA_CONSUMO_DIAS} days",)
+    rows = c.execute(
+        f"""SELECT item_id, COUNT(*) AS n FROM movimentacoes
+            WHERE tipo='saida' AND data_hora >= datetime('now', ?) {where}
+            GROUP BY item_id""",
+        params,
+    ).fetchall()
+    return {r["item_id"]: r["n"] for r in rows}
+
+
+def recalcular_min_max_calculado(item_id=None, conn=None):
+    """Recalcula e GRAVA a sugestão de Mín/Máx (v6.4.0). `item_id=None` → base inteira.
+
+    Irmã de `_gravar_lead_time_calculado`: escreve só nas colunas `*_calculado` e jamais em
+    `estoque_minimo`/`estoque_maximo` — a base do Sr. Neidson continua sendo alterada
+    apenas por quem clica em "Usar calculado".
+
+    Roda junto de `_recalcular_consumo` (a cada saída/devolução) e em
+    `atualizar_item_inventario` quando o lead time muda, que são as DUAS entradas da
+    fórmula. Assim a sugestão fica exatamente tão fresca quanto o `consumo_medio_diario`
+    que a alimenta — nem mais nem menos.
+
+    ⚠️ **`planejamento` é importado aqui dentro**, não no topo: ele importa
+    `db_functions` (`listar_inventario`, `obter_fornecedores_por_item`), e um import no
+    topo fecharia o ciclo. Mesmo recurso usado por `listar_inventario` com
+    `classificar_todos`. A leitura é direta de `inventario` (e não via
+    `listar_inventario`) porque a fórmula só precisa de consumo + lead time: passar pelo
+    inventário completo arrastaria a curva ABC e a classificação de demanda da base
+    inteira para gravar dois números."""
+    from services import planejamento as P
+
+    where, params = ("WHERE id=?", (item_id,)) if item_id else ("", ())
+    with transaction(conn) as c:
+        rows = c.execute(
+            f"""SELECT id, consumo_medio_diario, lead_time_dias, lead_time_calculado,
+                       lead_time_calculado_amostras, lead_time_calculado_origem
+                FROM inventario {where}""",
+            params,
+        ).fetchall()
+        amostras = _amostras_consumo_30d(c, item_id)
+        for r in rows:
+            # As amostras entram na fórmula, não só no rótulo: zero saídas na janela
+            # significa `consumo_medio_diario` sem lastro recente (coluna persistida, só
+            # recalculada quando o item se move) — e nesse caso não há sugestão a dar.
+            sug = P.calcular_min_max_sugerido(dict(r), amostras=amostras.get(r["id"], 0))
+            c.execute(
+                """UPDATE inventario SET
+                     minimo_calculado=?, maximo_calculado=?, min_max_amostras=?, min_max_origem=?
+                   WHERE id=?""",
+                (sug["minimo"], sug["maximo"], amostras.get(r["id"], 0), sug["origem"], r["id"]),
+            )
+    return len(rows)
+
+
 def atualizar_item_inventario(item_id, dados_atualizados):
     """
     Atualiza um item no inventário.
@@ -3864,6 +4146,10 @@ def atualizar_item_inventario(item_id, dados_atualizados):
                 # confirmar; não sobrescreve automaticamente).
                 "unidade_compra",
                 "fator_conversao",
+                # v6.4.0 — o requisitante vê o saldo deste item? (default 1). As colunas
+                # `minimo_calculado`/`maximo_calculado`/`min_max_*` NÃO entram nesta lista:
+                # são derivadas de `recalcular_min_max_calculado`, não campos de formulário.
+                "mostrar_saldo_requisitante",
             ]
             for key in allowed_fields:
                 if key in dados_atualizados:
@@ -3875,6 +4161,11 @@ def atualizar_item_inventario(item_id, dados_atualizados):
             values.append(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             values.append(item_id)
             conn.execute(f"UPDATE inventario SET {', '.join(fields)} WHERE id=?", values)
+            # v6.4.0 — lead time é a outra metade da fórmula do Mín/Máx sugerido. Mudou
+            # aqui, a sugestão tem de acompanhar na mesma transação: senão a tela mostraria
+            # "mínimo calculado" pelo lead time antigo logo depois de o gestor corrigi-lo.
+            if "lead_time_dias" in dados_atualizados:
+                recalcular_min_max_calculado(item_id, conn)
         return True, "Item atualizado com sucesso!"
     except Exception as e:
         return False, str(e)
