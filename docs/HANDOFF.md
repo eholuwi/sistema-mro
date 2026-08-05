@@ -9,7 +9,7 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 02/08/2026
+## STATUS ATUAL — atualizado em 05/08/2026
 
 - **Branch de trabalho: `feat/v5.0.0`.**
   **Primeiro comando de qualquer sessão:** `git fetch --all --prune` e `git checkout feat/v5.0.0`.
@@ -18,7 +18,65 @@
   `requirements.txt` **sem pin** — descartado por decisão do Luis, nada a resgatar. As duas branches
   agora apontam para o mesmo commit; quem clonar o repositório cai no estado atual.
 
-- **v6.2.0 IMPLEMENTADA, gate verde (793 testes), ⏳ AGUARDANDO VALIDAÇÃO NO APP REAL E OK PARA COMMIT.**
+- **v6.4.0 PLANEJADA — 5 demandas do Luis (05/08/2026), QUEM IMPLEMENTA É O CLAUDE.**
+  Ver `docs/prompt.md` (seção "v6.4.0") e `changelog/6.4.0.md` (esqueleto). Escopo travado:
+  1. **Consumo mensal por vida útil do lote** — duração = chegada → bateu o mínimo;
+     `consumo_mensal = qtd ÷ dias × 30`; `services/classificacao.py` + Ficha 360.
+  2. **Sugestão de Min/Max** — `min = consumo_diário × lead_time` · `max = consumo_diário × 60d`;
+     colunas `minimo_calculado`/`maximo_calculado`/`min_max_amostras`/`min_max_origem` (migração
+     aditiva com backup) + "Usar calculado" e visão em lote.
+  3. **Gestor rejeita + vê requisição completa** — `rejeitar_requisicao(req, gestor, motivo)`,
+     colunas `rejeitado_*`, expander com itens no cartão; rejeição visível na Portaria.
+  4. **Requisitante** — checkbox `mostrar_saldo_requisitante` (default 1) em Gerenciar Itens
+     (esconde saldo de `movimentacao.py:771`/`:804` quando desligada) + **imagem do material na
+     requisição** via `imagem_path` (Ficha 360/`caminho_absoluto_imagem`).
+  5. **Portaria busca por nome** do requisitante (`buscar_requisicoes_por_emitente`, case/trim).
+  - **Demanda antiga de v6.4.0 (gestor ↔ requisitante) ADIADA para v6.5.0** (seção própria no
+    `docs/prompt.md`).
+  - **Fórmulas travadas pelo Luis na entrevista de 05/08/2026** — não reabrir sem ele.
+
+- **Planilha MRO encontrada e documentada (05/08/2026).**
+  `sistema-mro\Material MRO 2026.xlsx` (118 MB) — controle antigo de entrada/saída com **402
+  fotos embutidas em célula** (recurso "rich data" do Excel; `xl/richData/richValueRel.xml` +
+  `_rels` mapeiam para as células, NÃO os drawings) + 1 logo (image403, ignorar). Abas `GERAL`
+  (1004 itens, estoque diário jan→abr/2026), `ENTRADA` (recebimentos por data). **961 PNs únicos;
+  só 330 existem no `inventario`** (362 itens). Prompt de migração pronto:
+  `docs/prompt_importar_planilha_mro.md` — extrair fotos → casar por PN → `docs/itens/` +
+  `imagem_path`. **Não versionar a planilha** (dado operacional; está untracked — deixar assim).
+
+- **v6.3.0 IMPLEMENTADA, gate verde, ⏳ AGUARDANDO VALIDAÇÃO NO APP REAL E OK PARA COMMIT.**
+  Ver `changelog/6.3.0.md`. **Sem migração de schema.** Resolve o item nº1 do feedback da
+  v6.2.0: o papel `almoxarife` abre **Aprovações do Setor** com a fila consolidada de TODOS os
+  setores (antes caía no ramo do gestor e, sem departamento cadastrado, não via nada).
+  - **A negativa por omissão do gestor não foi tocada.** `listar_requisicoes_por_setor` com
+    setor vazio continua devolvendo `[]`; o consolidado é a **função irmã**
+    `listar_requisicoes_para_aprovacao()`, **sem parâmetro de setor**. A alternativa
+    (`setor=None` com semântica diferente de `""`) faria um `departamento` faltando — o caso
+    exato que a negativa cobre — entregar a empresa inteira, com a diferença entre negar e
+    liberar tudo morando num `None` × `""` no meio da UI. As duas funções compartilham
+    `_clausulas_aprovacao`, para as filas não divergirem em silêncio.
+  - **Decisões do Luis (03/08/2026):** o filtro de setor lista **só os setores que têm pedido**
+    na fila, com contagem (a união Configurações + histórico passa de 60 valores, quase todos
+    sem pedido); e com `exigir_login` **desligada** a tela fica **como estava** (ramo simulação)
+    — o consolidado é do almoxarife **autenticado**.
+  - **⚠️ Armadilha de Streamlit paga:** o `selectbox` do filtro é **sem `key=`**. Aprovar pode
+    tirar o último pedido de um setor e mudar as opções; com `key`, a identidade congela
+    (`key_as_main_identity`) e um valor guardado que sumiu das opções levanta
+    `StreamlitAPIException`. Sem key, o widget é recriado e o filtro volta a "Todos".
+  - **Agregação por setor normaliza** (`UPPER(TRIM())`): `'TI'` × `'ti '` × `' Ti'` viram uma
+    opção só. É a mesma armadilha que `setor_dominante_por_item` paga desde a v5.9.0 — vale
+    para **qualquer** agregação nova por setor.
+  - **O que conferir no app:** almoxarife logado SEM departamento vê pedidos de setores
+    diferentes e **não** recebe o aviso de cadastro incompleto; a coluna Setor vem em 2º; o
+    filtro mostra só setores com pedido e a contagem bate; gestor continua restrito ao seu
+    setor. Roteiro completo na seção "Verificação" do plano da v6.3.0.
+  - **Feedback do Luis registrado como v6.5.0** (`docs/prompt.md`): **vínculo gestor ↔
+    requisitante** no cadastro (`usuarios.gestor_id` + seletor no formulário do requisitante),
+    para a fila do gestor deixar de depender do casamento `setor` × `departamento`. Substitui a
+    ideia antiga de "agrupar a fila por solicitante". ⚠️ Confirmar antes de mexer no schema se o
+    gestor é atributo da **pessoa** (leitura assumida) ou da **requisição**.
+
+- **v6.2.0 COMMITADA (`e33711a`), gate verde (793 testes), ⏳ VALIDAÇÃO NO APP REAL INCOMPLETA.**
   Ver `changelog/6.2.0.md` e o plano em `docs/claude/Sessão 3/PLANO_V620_TELAS_SELF_SERVICE.md`
   (seguido integralmente; a análise técnica prévia está em `Etapa 2 Plan.md`, na mesma pasta).
   **Telas self-service**: os três papéis órfãos da v6.1.0 ganharam rota — Requisitante ("Minhas
@@ -67,10 +125,10 @@
     a validação no meio para entender o fluxo. **Antes de evoluir, rodar `docs/ROTEIRO_TESTES_V620.md`**
     (~20 min, 7 partes). Os 4 pontos que importam estão no fim do roteiro; o crítico é o **6.6** —
     no modo público a sidebar tem de ter UM item só. Se aparecerem 10, é falha de acesso.
-  - **Feedback do Luis já registrado como v6.3.0** (`docs/prompt.md`, topo): (1) **admin deveria ver
-    tudo que há para aprovar, de todos os setores, sem escolher departamento** — hoje o almoxarife
-    cai no mesmo ramo do gestor e, sem departamento cadastrado, não vê nada; (2) fila do gestor
-    agrupada por solicitante (ideia não fechada — perguntar antes).
+  - **Feedback do Luis (02/08/2026) — ambos os itens já encaminhados:** (1) admin ver tudo de
+    todos os setores → **entregue na v6.3.0**, acima; (2) fila do gestor agrupada por
+    solicitante → **substituída** pelo vínculo gestor ↔ requisitante da v6.4.0
+    (`docs/prompt.md`, topo), que ataca a raiz em vez da aparência.
 
 - **v6.1.0 COMMITADA, gate verde (760 testes), ✅ VALIDADA NO APP REAL PELO LUIS (02/08/2026).**
   Ver `changelog/6.1.0.md` e o plano em `docs/PLANO_V610_USUARIOS_LOGIN.md` (seguido integralmente).

@@ -97,9 +97,11 @@ Crie **dois pedidos** aqui (um para aprovar, outro para entregar sem aprovação
 | 4.4 | Clicar **Aprovar** em UM deles | Mensagem de sucesso; ele **some** da fila e migra para "Já aprovadas" com "Aprovado por / em" |
 | 4.5 | Conferir o status do pedido aprovado | Continua **Aberta** — aprovar **não** muda status |
 
-> ⚠️ **Limitação conhecida, já no backlog:** o **almoxarife** hoje também cai no seletor de
-> setor. Você pediu que o admin veja tudo de todos os setores de uma vez — está anotado
-> como item nº1 da próxima sessão (`docs/prompt.md`).
+> ✅ **RESOLVIDO na v6.3.0** (03/08/2026): o **almoxarife** não cai mais no seletor de setor —
+> ele abre a tela já com a fila consolidada de **todos os setores**, e o seletor virou filtro
+> opcional ("Todos os setores" por padrão, listando só os setores que têm pedido). O passo 4.1
+> continua valendo para o papel **gestor**; para conferir o ramo do admin, use o roteiro da
+> v6.3.0 (seção "Verificação" do plano) ou simplesmente abra a tela logado como você.
 
 ---
 

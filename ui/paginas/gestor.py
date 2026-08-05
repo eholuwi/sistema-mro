@@ -9,6 +9,11 @@ Filtro = igualdade simples entre `requisicoes.setor` e o setor escolhido (case/t
 insensível). `requisicoes.setor` e `usuarios.departamento` são vocabulários diferentes e
 só se cruzam em parte; o fluxo novo casa porque a tela do Requisitante já pré-preenche o
 setor com o departamento, e o seletor editável alcança o que ficou de fora.
+
+v6.3.0 — a tela passou a ter **dois públicos**. O almoxarife (admin) cai num ramo próprio,
+com a fila CONSOLIDADA de todos os setores: ele não tem departamento cadastrado, então no
+ramo do gestor a tela não lhe mostrava nada, e mesmo com um cadastrado ele veria um setor
+por vez. Gestor e simulação seguem exatamente como na v6.2.0.
 """
 
 from __future__ import annotations
@@ -16,12 +21,17 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from services.db_functions import aprovar_requisicao, listar_requisicoes_por_setor
+from services.db_functions import (
+    aprovar_requisicao,
+    listar_requisicoes_para_aprovacao,
+    listar_requisicoes_por_setor,
+)
 from ui.auth import usuario_logado
 from ui.cache import invalidar_leituras
 from ui.paginas.movimentacao import _opcoes_setor
 
 LIMITE_APROVADAS = 20
+LIMITE_FILA = 100
 
 COLUNAS_FILA = {
     "numero_requisicao": "Nº",
@@ -31,12 +41,56 @@ COLUNAS_FILA = {
     "status": "Status",
 }
 
+# v6.3.0 — na fila consolidada o Setor deixa de ser redundante (era sempre o mesmo) e
+# vira a informação principal: é por ele que o almoxarife sabe para quem está aprovando.
+COLUNAS_FILA_CONSOLIDADA = {
+    "numero_requisicao": "Nº",
+    "setor": "Setor",
+    "data_hora": "Aberta em",
+    "emitente": "Emitente",
+    "status": "Status",
+}
 
-def _tabela(reqs, extras=None):
+
+def _norm(setor) -> str:
+    """Setor comparável. `requisicoes.setor` tem a mesma área grafada de várias formas
+    ('TI' × 'ti', 'ADAPTADOR' × 'ADAPTADOR '), e agrupar sem normalizar parte o setor em
+    duas linhas do filtro — a armadilha que `setor_dominante_por_item` já paga desde a
+    v5.9.0."""
+    return str(setor or "").strip().upper()
+
+
+def _tabela(reqs, extras=None, base=None):
     """Tabela das requisições no shape de `listar_requisicoes_por_setor`."""
-    colunas = dict(COLUNAS_FILA) | (extras or {})
+    colunas = dict(base or COLUNAS_FILA) | (extras or {})
     df = pd.DataFrame(reqs).reindex(columns=list(colunas))
     st.dataframe(df, width="stretch", hide_index=True, column_config=colunas)
+
+
+def _cartoes(fila, aprovador, mostrar_setor=False):
+    """Um cartão por requisição, com o botão que registra a aprovação."""
+    for req in fila:
+        with st.container(border=True):
+            c_info, c_btn = st.columns([4, 1])
+            setor = f"{req['setor']} · " if mostrar_setor else ""
+            c_info.markdown(
+                f"**{req['numero_requisicao']}** · {setor}{req['emitente']} · "
+                f"{req['data_hora']} · {int(req['total_itens'] or 0)} item(ns) · "
+                f"status **{req['status']}**"
+            )
+            if c_btn.button(
+                ":material/how_to_reg: Aprovar",
+                key=f"gestor_aprovar_{req['id']}",
+                type="primary",
+                width="stretch",
+            ):
+                ok, msg = aprovar_requisicao(req["id"], aprovador)
+                if ok:
+                    invalidar_leituras()
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
 
 
 def _escolher_setor(usuario):
@@ -45,7 +99,7 @@ def _escolher_setor(usuario):
     Logado: setor = departamento do cadastro, mas o select continua EDITÁVEL (pedido
     explícito do Luis: ele precisa testar aprovações de mais de um setor). Sem login:
     simulação — escolhe setor e digita em nome de quem está aprovando, no mesmo espírito
-    da Visão do Solicitante."""
+    da Visão do Solicitante. O almoxarife não passa por aqui (v6.3.0)."""
     if not usuario:
         st.warning(
             ":material/science: **Sem login — simulação.** Escolha o setor e diga quem está "
@@ -85,27 +139,7 @@ def _fila_de_aprovacao(setor, aprovador):
         return
 
     _tabela(fila, {"total_itens": "Itens"})
-    for req in fila:
-        with st.container(border=True):
-            c_info, c_btn = st.columns([4, 1])
-            c_info.markdown(
-                f"**{req['numero_requisicao']}** · {req['emitente']} · "
-                f"{req['data_hora']} · {int(req['total_itens'] or 0)} item(ns) · "
-                f"status **{req['status']}**"
-            )
-            if c_btn.button(
-                ":material/how_to_reg: Aprovar",
-                key=f"gestor_aprovar_{req['id']}",
-                type="primary",
-                width="stretch",
-            ):
-                ok, msg = aprovar_requisicao(req["id"], aprovador)
-                if ok:
-                    invalidar_leituras()
-                    st.success(msg)
-                    st.rerun()
-                else:
-                    st.error(msg)
+    _cartoes(fila, aprovador)
 
 
 def _ja_aprovadas(setor):
@@ -123,6 +157,87 @@ def _ja_aprovadas(setor):
     _tabela(aprovadas, {"aprovado_por": "Aprovado por", "aprovado_em": "Aprovado em"})
 
 
+# ── Ramo do almoxarife (admin) — v6.3.0 ───────────────────────────────────────
+
+
+def _filtro_setor(fila):
+    """Seletor opcional de setor, montado a partir da PRÓPRIA fila. Devolve o setor
+    normalizado escolhido, ou None para "todos".
+
+    As opções saem do que existe na fila (com a contagem), e não de
+    `listar_setores_conhecidos()`: a união Configurações + histórico passa de 60 valores,
+    dos quais um punhado tem pedido aguardando — filtrar por um setor vazio seria o único
+    resultado provável. Requisição sem setor preenchido (legado) continua aparecendo em
+    "todos"; ela só não vira uma opção do filtro, porque "" é justamente o valor que
+    `listar_requisicoes_por_setor` recusa.
+
+    **Sem `key=` de propósito:** aprovar um pedido pode tirar o último do setor e mudar as
+    opções. Com `key`, a identidade do widget congela (`key_as_main_identity`) e um valor
+    guardado que sumiu das opções levanta `StreamlitAPIException`; sem ela, a mudança de
+    opções recria o widget e o filtro volta a "Todos os setores"."""
+    contagem = {}
+    for req in fila:
+        setor = _norm(req["setor"])
+        if setor:
+            contagem[setor] = contagem.get(setor, 0) + 1
+    opcoes = [None] + sorted(contagem)
+    return st.selectbox(
+        "Setor",
+        opcoes,
+        format_func=lambda s: "Todos os setores" if s is None else f"{s} ({contagem[s]})",
+        help="Opcional. O padrão é ver tudo o que há para aprovar, de todos os setores.",
+    )
+
+
+def _render_consolidado(usuario):
+    """Fila de tudo o que há para aprovar, de todos os setores (papel `almoxarife`)."""
+    st.markdown("### :material/pending_actions: Aguardando aprovação")
+    fila = listar_requisicoes_para_aprovacao(so_abertas=True, apenas_aprovadas=False, limite=LIMITE_FILA)
+    setor = _filtro_setor(fila)
+    if setor:
+        fila = [r for r in fila if _norm(r["setor"]) == setor]
+
+    if not fila:
+        st.info(
+            "Nenhuma requisição aguardando aprovação."
+            if setor is None
+            else f"Nenhuma requisição de **{setor}** aguardando aprovação."
+        )
+    else:
+        n_setores = len({_norm(r["setor"]) for r in fila})
+        st.caption(
+            f"**{len(fila)}** requisição(ões) aguardando aprovação, em **{n_setores}** setor(es). "
+            "Aprovar registra a autorização e não muda o status nem trava a entrega."
+        )
+        _tabela(fila, {"total_itens": "Itens"}, base=COLUNAS_FILA_CONSOLIDADA)
+        _cartoes(fila, usuario["nome"], mostrar_setor=True)
+        if len(fila) == LIMITE_FILA:
+            st.caption(f":material/info: Mostrando as {LIMITE_FILA} mais antigas — pode haver mais na fila.")
+
+    st.markdown("---")
+    st.markdown("### :material/task_alt: Já aprovadas")
+    aprovadas = (
+        listar_requisicoes_para_aprovacao(so_abertas=False, apenas_aprovadas=True, limite=LIMITE_APROVADAS)
+        if setor is None
+        else listar_requisicoes_por_setor(
+            setor, so_abertas=False, apenas_aprovadas=True, limite=LIMITE_APROVADAS
+        )
+    )
+    if not aprovadas:
+        st.caption("Nenhuma requisição aprovada ainda.")
+        return
+    escopo = "de todos os setores" if setor is None else f"de **{setor}**"
+    st.caption(
+        f"Últimas {LIMITE_APROVADAS} aprovações {escopo}. Somente leitura — aprovar não muda "
+        "o status nem impede a entrega; o almoxarifado continua separando normalmente."
+    )
+    _tabela(
+        aprovadas,
+        {"aprovado_por": "Aprovado por", "aprovado_em": "Aprovado em"},
+        base=COLUNAS_FILA_CONSOLIDADA,
+    )
+
+
 def render():
     st.title(":material/fact_check: Aprovações do Setor")
     st.caption(
@@ -131,6 +246,14 @@ def render():
         "autorização registrada na entrega."
     )
     usuario = usuario_logado()
+
+    # v6.3.0 — o admin vê tudo de uma vez. A checagem é pelo PAPEL da sessão: sem login
+    # (`exigir_login` desligada) a tela segue no ramo de simulação, que pede o setor —
+    # decisão do Luis em 03/08/2026, para o modo legado não mudar de comportamento.
+    if usuario and usuario.get("papel") == "almoxarife":
+        _render_consolidado(usuario)
+        return
+
     setor, aprovador = _escolher_setor(usuario)
     if not setor:
         st.info("Escolha um setor para ver as requisições.")

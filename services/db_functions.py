@@ -1785,6 +1785,39 @@ def buscar_requisicao_por_numero(numero):
     return req
 
 
+def _clausulas_aprovacao(so_abertas, apenas_aprovadas):
+    """v6.3.0 — Recorte comum às duas filas de aprovação (por setor e consolidada).
+
+    Só o `WHERE` inicial difere entre elas; status e metade aprovada/não aprovada são a
+    mesma regra, e uma cópia num dos lados faria a fila do gestor e a do almoxarife
+    divergirem em silêncio — o pedido some de uma e continua na outra."""
+    partes = []
+    if so_abertas:
+        partes.append("AND r.status IN ('Aberta','Parcial')")
+    partes.append("AND r.aprovado_por IS NOT NULL" if apenas_aprovadas else "AND r.aprovado_por IS NULL")
+    return partes
+
+
+def listar_requisicoes_para_aprovacao(so_abertas=True, apenas_aprovadas=False, limite=100):
+    """v6.3.0 — Fila CONSOLIDADA: tudo o que há para aprovar, de TODOS os setores.
+
+    É a visão do almoxarife (admin), que não tem departamento cadastrado e precisa da fila
+    inteira de uma vez — não de um setor por vez (pedido do Luis em 02/08/2026, ao testar a
+    v6.2.0). O setor deixa de ser filtro e vira a informação principal da lista.
+
+    **Função irmã de `listar_requisicoes_por_setor`, e não um valor especial dela, de
+    propósito.** Lá, setor vazio devolve `[]` para negar por omissão: gestor sem
+    departamento não pode virar administrador por acidente. Se "todos os setores" fosse um
+    `setor=None` daquela função, um `usuario["departamento"]` faltando — exatamente o caso
+    que a negativa existe para cobrir — passaria a entregar a empresa inteira. Aqui não há
+    parâmetro de setor: chegar ao consolidado exige chamar esta função pelo nome.
+
+    Demais parâmetros e shape idênticos aos da irmã, inclusive a ordem ASC (fila se atende
+    pelo começo)."""
+    filtro = " ".join(["WHERE 1=1", *_clausulas_aprovacao(so_abertas, apenas_aprovadas)])
+    return _consultar_requisicoes(filtro, [], ordem="r.data_hora ASC", limit=limite)
+
+
 def listar_requisicoes_por_setor(setor, so_abertas=True, apenas_aprovadas=False, limite=100):
     """v6.2.0 — Requisições de um SETOR, para a tela "Aprovações do Setor" (Gestor).
 
@@ -1803,14 +1836,15 @@ def listar_requisicoes_por_setor(setor, so_abertas=True, apenas_aprovadas=False,
       começo.
 
     `setor` vazio → lista vazia, sem consultar (nega por omissão: gestor sem departamento
-    não pode acabar vendo o setor de todo mundo)."""
+    não pode acabar vendo o setor de todo mundo). Quem precisa de TODOS os setores chama
+    `listar_requisicoes_para_aprovacao` — esta função não tem valor que faça isso."""
     setor = str(setor or "").strip()
     if not setor:
         return []
-    filtro = ["WHERE UPPER(TRIM(r.setor)) = UPPER(TRIM(?))"]
-    if so_abertas:
-        filtro.append("AND r.status IN ('Aberta','Parcial')")
-    filtro.append("AND r.aprovado_por IS NOT NULL" if apenas_aprovadas else "AND r.aprovado_por IS NULL")
+    filtro = [
+        "WHERE UPPER(TRIM(r.setor)) = UPPER(TRIM(?))",
+        *_clausulas_aprovacao(so_abertas, apenas_aprovadas),
+    ]
     return _consultar_requisicoes(" ".join(filtro), [setor], ordem="r.data_hora ASC", limit=limite)
 
 

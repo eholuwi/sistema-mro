@@ -1,52 +1,157 @@
 # Backlog / prompt de continuidade — Sistema MRO
 
-> Atualizado em 02/08/2026, ao planejar a **v6.2.0** (Telas self-service: Requisitante · Gestor ·
-> Portaria). A v6.1.0 (Usuários e Login) saiu desta lista — entregue, validada no app real e
-> commitada (`cded88c`).
-> As demandas antigas desta lista foram entregues entre a v4.8 e a v5.6 e saíram daqui.
+> Atualizado em **05/08/2026**, ao planejar a **v6.4.0** (5 demandas do Luis — a planilha MRO,
+> consumo por vida útil, sugestão de Min/Max, gestor rejeita + vê a requisição completa,
+> requisitante sem saldo/imagem, portaria por nome). **Quem implementa é o Claude** em sessão
+> própria; este arquivo + `changelog/6.4.0.md` + `docs/HANDOFF.md` são o handoff.
+> A v6.1.0 (Usuários e Login) saiu desta lista — entregue, validada no app real e commitada
+> (`cded88c`); a v6.2.0 (Telas self-service) está commitada (`e33711a`) e aguarda a validação
+> no app real; a v6.3.0 (Fila de aprovação consolidada) está implementada, gate verde, e
+> aguarda validação + OK para commit.
 > O estudo das requisições digitais segue em `docs/REQUISICOES_DIGITAIS_ESTUDO.md`, a decisão
-> de arquitetura do login em `docs/DECISAO_ENTREGA_FINAL_LOGIN.md` e o plano da fase atual em
-> `docs/PLANO_V620_TELAS_SELF_SERVICE.md`.
+> de arquitetura do login em `docs/DECISAO_ENTREGA_FINAL_LOGIN.md`.
 
 ---
 
-## 🔧 DEMANDA ABERTA — v6.3.0 · Ajustes das telas self-service (feedback do Luis, 02/08/2026)
+## 🔧 DEMANDA ABERTA — v6.4.0 · Consumo por vida útil · Min/Max · Gestor · Requisitante · Portaria (Luis, 05/08/2026)
 
-> **Aberta em 02/08/2026**, ao testar a v6.2.0 no app real. São dois ajustes de **usabilidade
-> da tela do Gestor** — nenhum muda regra de negócio. A v6.2.0 fica como está (commitada e
-> verde); estes entram na próxima sessão.
+> **Aberta em 05/08/2026.** O Luis confirmou 3,5 meses de histórico de consumo (16/04 → 31/07/2026,
+> 228 itens com saída real). **Fórmulas travadas pelo Luis na entrevista.** Siga a skill
+> `atualizar-sistema-mro`, feche cada etapa com `.\verify.ps1` verde e PARE para aprovação
+> antes de commit. A demanda antiga de v6.4.0 (vínculo gestor ↔ requisitante) foi **movida
+> para v6.5.0** (seção abaixo).
 
-### 1. Admin não deveria escolher setor — deveria ver TUDO que há para aprovar (prioridade)
+### Épico B — Consumo mensal por vida útil do lote
 
-**Como está:** `ui/paginas/gestor.py::_escolher_setor` trata todo usuário logado igual — lê
-`usuario["departamento"]` e, se estiver vazio, **para** com um aviso. Para o almoxarife
-(admin) isso é duplamente ruim: ele normalmente **não tem departamento** cadastrado, então a
-tela não mostra nada; e mesmo cadastrando um, ele veria só um setor por vez.
+**Regra (ajustada pelo Luis):** para cada **entrada** (recebimento) de um item, medir quantos
+dias o material durou **desde a data que chegou até a data que bateu o mínimo**
+(`estoque_minimo`) — **não** até zerar. `consumo_mensal = qtd recebida ÷ dias de duração × 30`.
+Independente de CC/setor.
 
-**Como deve ficar (palavras do Luis):** *"deveria mostrar tudo que tem pra aprovar logo de
-todos os setores pra perfil de admin"*. Ou seja: papel `almoxarife` → fila **consolidada**,
-de todos os setores, sem seletor obrigatório (o seletor vira filtro opcional, com "Todos"
-como padrão). Gestor continua no seu departamento.
+- **Fonte:** `movimentacoes` atuais (FIFO: entrada abre lote, saídas consomem até o estoque
+  atingir o mínimo cadastrado; lote vivo = sem data de fim, não conta ou conta parcial).
+- **Onde:** função nova em `services/classificacao.py` (padrão `_eventos_item`) + card na
+  Ficha 360 ao lado do "Consumo/Mensal". Sem migração de schema (calculado na leitura).
+- **Testes:** sem entrada, lote ainda vivo, múltiplos lotes, mínimo zero (usar zerar como
+  fallback), ajustes/entradas avulsas.
 
-**Onde mexer:**
-- `services/db_functions.listar_requisicoes_por_setor` — hoje `setor` vazio devolve `[]` de
-  propósito (nega por omissão, para gestor sem departamento não virar admin). **Não afrouxar
-  essa função**: criar um caminho explícito para "todos os setores" (parâmetro `setor=None`
-  com semântica diferente de `""`, ou função irmã `listar_requisicoes_para_aprovacao()`), para
-  que a negativa por omissão do gestor continue intacta. Há teste fixando o comportamento
-  atual: `test_listar_requisicoes_por_setor_sem_setor_nega`.
-- `ui/paginas/gestor.py::_escolher_setor` — ramo por papel: `almoxarife` → consolidado;
-  `gestor` → departamento; sem login → simulação (como hoje).
-- A fila consolidada precisa mostrar a coluna **Setor** com destaque (hoje ela já vem no
-  `_tabela`, mas com um setor só ela é redundante — com todos, é a informação principal).
+### Épico C — Sugestão de Min/Max (padrão do lead time calculado)
 
-### 2. Tela do gestor agrupada por solicitante (a confirmar)
+**Fórmula (travada pelo Luis):** `min = consumo_diário × lead_time do sistema` (≈1 mês);
+`max = consumo_diário × 60d` (≈2 meses). Base = `consumo_medio_diario` (o mesmo do ROP).
 
-*"em perfis de gestor deveria aparecer por solicitante eu acho"* — ideia ainda **não
-fechada** (o "eu acho" é do Luis). Confirmar antes de implementar: agrupar a fila por
-`emitente` (expander por pessoa, com contagem), em vez da lista plana por data. Decidir se
-substitui a ordenação por data (fila do mais antigo) ou se é uma visão alternativa —
-**perguntar antes**, porque a ordem por data é o que faz "fila" significar alguma coisa.
+- **Schema:** colunas novas `minimo_calculado`, `maximo_calculado`, `min_max_amostras`,
+  `min_max_origem` — migração aditiva com `_backup_db` antes (padrão `aprovado_*` da v6.2.0).
+  NUNCA tocar `estoque_minimo`/`estoque_maximo` (base do Neidson).
+- **UI:** Ficha 360 mostra a sugestão (como o lead time); Gerenciar Itens ganha "Usar
+  calculado" para min e max (padrão do bloco de lead time, `gerenciar_itens.py:384`) +
+  **visão em lote** para "concordamos e torna real" de uma vez.
+- **Testes:** migração idempotente, fórmula, bordas (item sem consumo, mínimo cadastrado maior
+  que a sugestão), botão em lote.
+
+### Épico D — Gestor: rejeitar requisição + ver a requisição completa
+
+- **Rejeição:** `rejeitar_requisicao(req_id, gestor_nome, motivo)` — grava
+  `rejeitado_por`/`rejeitado_em`/`motivo_rejeicao` (migração aditiva com backup, mesmo padrão
+  da aprovação v6.2.0). Não cria status novo (mesma filosofia da aprovação não bloqueante);
+  a Portaria passa a exibir a rejeição se houver.
+- **Ver completa:** o cartão do gestor (`ui/paginas/gestor.py::_cartoes`) ganha um expander
+  "Ver requisição completa" com os **itens** (reutilizar `buscar_requisicao_por_numero`/o
+  shape com `itens`), para o gestor saber o que o requisitante está pedindo antes de decidir.
+- **UI:** botão **Rejeitar** com campo de justificativa ao lado do Aprovar. Na fila consolidada
+  (almoxarife) também vale.
+- **Testes:** rejeição (motivo obrigatório, requisição inexistente, já rejeitada), exibição na
+  Portaria, tela com os dois botões.
+
+### Épico E — Requisitante: checkbox "mostrar saldo" + imagem do material na requisição
+
+1. **Checkbox "mostrar saldo para requisitante"** em Gerenciar Itens → Editar
+   (`ui/paginas/gerenciar_itens.py`). **Default marcada em todos os itens.** Desmarcada → o
+   requisitante NÃO vê o saldo atual do material (o almoxarife/comprador continuam vendo
+   normal). Schema: `inventario.mostrar_saldo_requisitante INTEGER DEFAULT 1` + backfill 1
+   (migração aditiva com backup).
+   - Pontos de exibição a respeitar: `ui/paginas/movimentacao.py:771` ("DISPONÍVEL") e o
+     `saldo hoje` na lista (`movimentacao.py:804`), e equivalentes na tela do Requisitante
+     (reusam os mesmos blocos).
+2. **Imagem do material na requisição:** ao selecionar o item (`movimentacao.py:766`) e na
+   lista de itens da requisição, mostrar a foto via `imagem_path` → `caminho_absoluto_imagem`
+   (`services/ficha.py`) → `st.image`. O requisitante confere que é o material certo antes de
+   pedir. Sem imagem → não quebra (só não mostra).
+
+- **Testes:** flag desligada esconde saldo nas duas telas; flag ligada mostra; imagem aparece
+  quando há `imagem_path`; smoke das telas.
+
+### Épico F — Portaria: buscar pelo nome do requisitante
+
+- `buscar_requisicoes_por_emitente(nome)` em `services/db_functions.py` (case/trim,
+  `UPPER(TRIM())`, padrão `buscar_requisicao_por_numero`), devolvendo lista com `itens`.
+- `ui/paginas/portaria.py`: além do número, input por **nome** → lista de requisições do
+  requisitante → clica e vê o cartão. **Leitura pura** (a Portaria não escreve).
+- **Testes:** case/trim, nome vazio, múltiplos resultados, smoke da tela.
+
+### 📋 Escopo travado para a v6.4.0
+
+- **Vínculo gestor ↔ requisitante fica FORA** (movido para v6.5.0 — seção abaixo).
+- **Migração da planilha MRO é Épico A** (documento): `docs/prompt_importar_planilha_mro.md`
+  — extrair as 402 fotos de `Material MRO 2026.xlsx` e gravar em `docs/itens/` +
+  `imagem_path`, casando por PN (961 únicos; só 330 no inventário). Execução por Claude em
+  sessão própria, não é parte do código da v6.4.0.
+- **Versionamento:** a versão do código (`services/constants.py:VERSAO`) vai para `6.4.0`.
+- **Gate:** `.\verify.ps1` verde + validação no app real com o Luis antes de cada commit.
+
+---
+
+## 🔧 DEMANDA ADIADA — v6.5.0 · Vínculo gestor ↔ requisitante (Luis, 03/08/2026)
+
+> **Aberta em 03/08/2026, ADIADA de v6.4.0 para v6.5.0 em 05/08/2026** — a v6.4.0 foi
+> preenchida pelas 5 demandas acima. **Substitui** o item "fila do gestor agrupada por
+> solicitante": em vez de agrupar a fila por `emitente`, o Luis propôs amarrar cada
+> requisitante ao seu gestor no cadastro — resolve o problema de raiz, não a aparência.
+
+**O problema de raiz:** a fila do gestor casa `requisicoes.setor` com `usuarios.departamento`,
+dois vocabulários diferentes — **59 setores × 19 departamentos, com 9 de interseção** (medido
+no `mro.db` em 02/08/2026). O fluxo novo casa porque a tela do Requisitante pré-preenche o
+setor com o departamento, mas isso é coincidência mantida à mão, não vínculo.
+
+**Como deve ficar:** cada requisitante aponta para o seu gestor, e a fila do gestor passa a
+ser "os pedidos das **minhas pessoas**" — exato, independente de como o setor foi grafado.
+
+**Esboço (detalhar em plano próprio, com AskUserQuestion antes):**
+- `usuarios.gestor_id` — nullable, FK para `usuarios.id`. Migração **aditiva**, com
+  `_backup_db` antes (padrão `tipo_fluxo` da v5.7.0 / `aprovado_*` da v6.2.0).
+- **Seletor "Gestor" no formulário do requisitante**, em Configurações › Usuários — o
+  formulário de edição por usuário já existe (`ui/paginas/configuracoes.py:168`, o
+  `selectbox` "Usuário" + campos abaixo). O seletor lista usuários ativos com papel `gestor`.
+- Fila do gestor = requisições cujo `emitente` está entre as suas pessoas. O match por nome
+  já tem precedente testado: `listar_requisicoes(emitente=...)` compara com `UPPER(TRIM())`,
+  e a tela do Requisitante trava o emitente no nome da sessão — para pedido novo o match é
+  exato.
+- O filtro por **setor** vira **visão alternativa** (não some): serve ao gestor ainda sem
+  equipe cadastrada e a quem precisa acompanhar outra área.
+
+⚠️ **Confirmar antes de mexer no schema:** "seletor de gestor no formulário do requisitante"
+foi lido como **cadastro do usuário** (o gestor é atributo da pessoa). A leitura alternativa
+seria o requisitante escolher o gestor **a cada pedido** (atributo da requisição, coluna em
+`requisicoes`). As duas são defensáveis e o schema é diferente — perguntar.
+
+---
+
+## 🟡 EM VALIDAÇÃO — v6.3.0 · Fila de aprovação consolidada para o admin
+
+> **Implementada em 03/08/2026**, gate verde. Ver `changelog/6.3.0.md`. Resolve o item nº1 do
+> feedback do Luis sobre a v6.2.0: o papel `almoxarife` abre **Aprovações do Setor** com a
+> fila de **todos os setores** e um filtro de setor opcional. **Sem migração de schema.**
+>
+> **Decisões travadas em 03/08/2026 (Luis):**
+> - O filtro lista **só os setores que têm pedido na fila**, com contagem — não os ~60
+>   setores conhecidos, em que quase toda opção devolveria lista vazia.
+> - Com `exigir_login` **desligada** a tela fica **como estava** (ramo simulação, escolher
+>   setor): a fila consolidada é do almoxarife **autenticado**.
+> - `listar_requisicoes_por_setor` **não foi afrouxada** — o consolidado é a função irmã
+>   `listar_requisicoes_para_aprovacao()`, sem parâmetro de setor. A negativa por omissão do
+>   gestor segue fixada por teste, agora em dois arquivos.
+>
+> **Falta:** validação no app real → OK do Luis → commit → `graphify update .`.
 
 ---
 
