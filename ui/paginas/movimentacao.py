@@ -96,10 +96,13 @@ def _limpar_editores_recebimento(chave_viva):
         st.session_state.pop(k, None)
 
 
-def _receber_por_sc(centros):
+def _receber_por_sc():
     """v3.4.0 — Recebimento começando pela SC/PO: escolhe uma SC aberta e recebe todos
     os itens pendentes de uma vez (itera `registrar_recebimento_sc` por item, mesma função
-    do fluxo por material — sem duplicar conversão/ledger). Complementa o 'Por Material'."""
+    do fluxo por material — sem duplicar conversão/ledger). Complementa o 'Por Material'.
+    v6.5.0 — Centro de Custo saiu da tela: todo recebimento é MRO/Almoxarifado, gravado
+    com `centro_custo=""` (já pertence a `CC_GENERICOS`; `categoria_movimentacao` devolve
+    "Entrada"). Requisição continua com CC escolhido pelo solicitante."""
     scs = listar_scs(apenas_abertas=True)
     if not scs:
         st.info("Nenhuma SC aberta para receber. Importe o Relatório de SCs ou crie uma SC.")
@@ -143,14 +146,9 @@ def _receber_por_sc(centros):
                 + ". O pendente abaixo segue o que o MRO conferiu.]"
             )
 
-        h1, h2, h3 = st.columns(3)
+        h1, h2 = st.columns(2)
         forn = h1.text_input("Fornecedor", value=sc.get("fornecedor") or "", key="rec_sc_forn")
         dt_r = h2.date_input("Data Recebimento", value=date.today(), key="rec_sc_dt")
-        _cc_opts = centros if centros else ["—"]
-        _cc_def = next((i for i, c in enumerate(_cc_opts) if "ALMOXARIFADO" in str(c).upper()), 0)
-        cc_r = h3.selectbox(
-            "Centro de Custo", _cc_opts, index=_cc_def, key="rec_sc_cc", help="Padrão MRO: Almoxarifado."
-        )
 
         base = pd.DataFrame(
             [
@@ -215,7 +213,7 @@ def _receber_por_sc(centros):
                     sc_id=sc["id"],
                     item_sc_id=int(r["_item_sc_id"]),
                     qtd_recebida=qtd,
-                    centro_custo=cc_r,
+                    centro_custo="",
                     solicitante="Almoxarifado",
                     emitente="Almoxarifado",
                     fornecedor=forn,
@@ -253,13 +251,12 @@ def _render_receber_material():
         help="Por Material começa pelo item; Por SC / PO escolhe a SC e recebe todos os itens pendentes de uma vez.",
     )
     if _modo_rec == "📋 Por SC / PO":
-        _receber_por_sc(listar_valores("centro_custo"))
+        _receber_por_sc()
         return
     with st.container(border=True):
         st.markdown("### :material/inventory_2: Registrar Recebimento de Material")
         st.caption("Vincule a uma SC aberta ou registre como entrada avulsa.")
 
-        centros = listar_valores("centro_custo")
         _, item_rec, _ = sel_material("Material *", "sel_rec")
 
         if item_rec:
@@ -338,16 +335,6 @@ def _render_receber_material():
                 )
                 dt_r = c3.date_input("Data Recebimento", value=date.today())
 
-                # v2.7.1: CC não é obrigatório — recebimentos MRO caem no Almoxarifado
-                # por padrão (quase todas as SCs deste time vão para o MRO).
-                _cc_opts = centros if centros else ["—"]
-                _cc_default = next((i for i, c in enumerate(_cc_opts) if "ALMOXARIFADO" in str(c).upper()), 0)
-                cc_r = st.selectbox(
-                    "Centro de Custo",
-                    _cc_opts,
-                    index=_cc_default,
-                    help="Padrão MRO: Almoxarifado. Ajuste se necessário.",
-                )
                 obs_nf = st.text_input("Nota Fiscal / Documento *" if sc_sel else "Obs / Nota Fiscal")
 
                 rec_b = st.form_submit_button(
@@ -363,7 +350,7 @@ def _render_receber_material():
                         sc_id=sc_sel["id"],
                         item_sc_id=sc_sel["item_sc_id"],
                         qtd_recebida=qtd_r,
-                        centro_custo=cc_r,
+                        centro_custo="",
                         solicitante="Almoxarifado",
                         emitente="Almoxarifado",
                         fornecedor=forn,
@@ -391,7 +378,7 @@ def _render_receber_material():
                         item_id=item_rec["id"],
                         tipo="entrada",
                         quantidade=_qtd_estoque,
-                        centro_custo=cc_r,
+                        centro_custo="",
                         solicitante="Almoxarifado",
                         emitente="Almoxarifado",
                         observacao=f"Fornecedor: {forn} | {obs_nf}{_obs_conv}",
