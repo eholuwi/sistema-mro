@@ -9,12 +9,34 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 11/08/2026 (v6.5.0 · Task 4 implementada)
+## STATUS ATUAL — atualizado em 11/08/2026 (v6.5.0 · Task 3 aplicada, aguardando commit)
 
-- **v6.5.0 EM ANDAMENTO — Tasks 2, 1 e 4 commitadas e VALIDADAS NO APP REAL pelo Luis
-  (11/08/2026). Falta a Task 3 (limpeza do banco), que depende do OK do relatório de auditoria.**
+- **v6.5.0 — Tasks 2, 1 e 4 commitadas e VALIDADAS NO APP REAL pelo Luis (11/08/2026). Task 3
+  (limpeza do banco) IMPLEMENTADA E APLICADA no `mro.db` real em 11/08/2026, gate verde (954
+  testes) — falta só a validação no app real e o OK explícito do Luis para commitar.**
   Plano aprovado em `docs/claude/Sessão 4/Plano Gerado Etapa 0.md`; changelog em
   `changelog/6.5.0.md`.
+
+  - **Task 3 — limpeza do banco (só teste/junk).** `scripts/limpeza_teste_v650.py` reaudita o
+    banco a cada execução (mesmas queries da seção B do relatório aprovado) e só aplica se os
+    ids baterem com o aprovado — `_bate_com_aprovado` é o freio de segurança. Simulação é o
+    padrão; `--aplicar` faz `_backup_db` e apaga tudo numa transação atômica. **Executado
+    contra o `mro.db` real**: 9 requisições de teste + 9 `itens_requisicao` (CASCADE) + 9
+    movimentações (8 em cascata + `#231`, ajuste manual avulso) + 2 guarda-chuva ("Miguel do
+    papel"/"Miguel das luva") removidos; lista `setor=TESTE` **desativada** (`ativo=0`), não
+    apagada. Backup em `backups/mro.db.bak-20260811-153031-pre-limpeza-teste-v650`.
+    Verificado pós-exclusão: zero órfãs, as 14 requisições reais de "ENG TESTE" e as
+    movimentações #661/#662 (ajustes físicos reais) intactas, cadastro (`inventario`,
+    `fornecedores`, `solicitantes_mro`, `usuarios`, `solicitacoes_compra`) com a mesma
+    contagem de antes. Nada foi recalculado no estoque — os 4 itens afetados já tinham
+    contagem física posterior conferida na Etapa 0.
+
+  - **⚠️ Falha de gate observada não é regressão desta Task.** `test_v550_backup.py::
+    test_criar_banco_nao_gasta_o_busy_timeout` (limite 2,0s) falhou nesta sessão mesmo numa
+    árvore limpa via `git stash` (sem nenhum arquivo da Task 3) — 3,5–46s dependendo da carga
+    da máquina no momento. É um teste de timing sensível a I/O/antivírus, não uma regressão de
+    código; mesma classe de flakiness já documentada para `test_v500_router.py` na v6.4.0.
+    Reexecutar o gate isoladamente numa máquina ociosa antes de decidir se vale investigar.
 
   - **Task 4 — numeração sequencial simples: `REQ-AAAAMMDD-NNN` → `1..N`.** Renumeração global
     por `data_hora` (desempate `id`) num bloco novo de `_migrar()`, com `.bak` antes e rollback
