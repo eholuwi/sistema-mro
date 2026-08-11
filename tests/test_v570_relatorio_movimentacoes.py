@@ -297,6 +297,13 @@ def test_fallback_de_texto_cobre_o_legado_sem_fk(db, make_item):
     assert req["Nº Requisição"] == "REQ-20260504-006"
     assert req["Observação"] == ""
 
+    # v6.5.0 — o número virou sequencial, mas as 2.320 observações antigas não foram
+    # reescritas: o regex tem de reconhecer OS DOIS formatos, ou o legado volta a sujar a
+    # coluna Observação com o texto que já virou coluna própria.
+    novo = _linha(db, item, observacao="Req 123", quantidade=4)
+    assert novo["Nº Requisição"] == "123"
+    assert novo["Observação"] == ""
+
     nf = _linha(db, item, tipo="entrada", quantidade=3, observacao="NF: NF 315900")
     assert nf["NF"] == "NF 315900"
     assert nf["Observação"] == ""

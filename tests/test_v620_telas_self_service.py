@@ -92,7 +92,13 @@ def test_migracao_aprovacao_gestor(db):
 
 def test_migracao_faz_backup_e_preserva_o_legado(db):
     """Banco no estado da v6.1.0 (sem as colunas) e COM requisição: a migração grava o
-    `.bak` antes do ALTER e não perde nem reescreve a linha legada."""
+    `.bak` antes do ALTER e não perde a linha legada.
+
+    v6.5.0 — a busca deixou de ser pelo número. O `_migrar` que roda aqui é o mesmo do
+    boot, e ele agora inclui a renumeração sequencial, que REESCREVE o número de propósito
+    (`REQ-V610` → `1`). Procurar a linha por `data_hora`, que é imutável, mantém a
+    pergunta original — "a migração perdeu a linha ou mexeu no que não devia?" — sem
+    depender do formato do número. As duas asserções de valor continuam idênticas."""
     with db.transaction() as conn:
         conn.execute(
             "INSERT INTO requisicoes (numero_requisicao,data_hora,setor,emitente,centro_custo,status) "
@@ -106,9 +112,13 @@ def test_migracao_faz_backup_e_preserva_o_legado(db):
 
     baks = os.listdir(db.diretorio_backups())
     assert any("aprovacao-gestor-v620" in nome for nome in baks), baks
-    legada = _req("REQ-V610")
+    with database.transaction() as conn:
+        legada = dict(
+            conn.execute("SELECT * FROM requisicoes WHERE data_hora='2026-07-01 08:00:00'").fetchone()
+        )
     assert legada["status"] == "Entregue"  # o CHECK de status não foi tocado
     assert legada["aprovado_por"] is None and legada["aprovado_em"] is None
+    assert legada["numero_requisicao"] == "1"  # renumerada pela v6.5.0, e não perdida
 
 
 # ══════════════════════════════════════════════════════════════════════════════

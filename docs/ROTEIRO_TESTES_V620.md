@@ -76,7 +76,7 @@ vocabulários diferentes).
 | 3.1 | Logar como o requisitante do passo 2.2 — **nome completo** ou `ana.carvalho` | Entra |
 | 3.2 | Olhar o menu | **Um item só**: "Minhas Requisições" |
 | 3.3 | Aba "Nova Requisição" | **Setor já vem preenchido** com o departamento do cadastro (e dá para trocar); **Emitente travado** no nome dele |
-| 3.4 | Adicionar 1 material e clicar CRIAR REQUISIÇÃO | Recibo "Requisição REQ-… criada!" — **estoque NÃO baixa** (é o fluxo Digital) |
+| 3.4 | Adicionar 1 material e clicar CRIAR REQUISIÇÃO | Recibo "Requisição … criada!" com o número sequencial (v6.5.0: `1`, `2`, `3`…) — **estoque NÃO baixa** (é o fluxo Digital) |
 | 3.5 | Aba "Meus Pedidos" | O pedido aparece como **Aberta**, com "pedido × recebido" por item |
 | 3.6 | Selecionar o pedido e cancelar | Botão "Cancelar requisição" só aparece em pedido **Aberta** |
 

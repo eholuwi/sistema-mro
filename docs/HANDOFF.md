@@ -9,12 +9,32 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 10/08/2026 (v6.5.0 · Task 1 implementada)
+## STATUS ATUAL — atualizado em 11/08/2026 (v6.5.0 · Task 4 implementada)
 
-- **v6.5.0 EM ANDAMENTO — Task 2 commitada (`183fe6e`), Task 1 IMPLEMENTADA e ⏳ aguardando
-  validação no app real. Faltam Task 4 (numeração sequencial) e Task 3 (limpeza do banco).**
+- **v6.5.0 EM ANDAMENTO — Tasks 2, 1 e 4 commitadas e VALIDADAS NO APP REAL pelo Luis
+  (11/08/2026). Falta a Task 3 (limpeza do banco), que depende do OK do relatório de auditoria.**
   Plano aprovado em `docs/claude/Sessão 4/Plano Gerado Etapa 0.md`; changelog em
   `changelog/6.5.0.md`.
+
+  - **Task 4 — numeração sequencial simples: `REQ-AAAAMMDD-NNN` → `1..N`.** Renumeração global
+    por `data_hora` (desempate `id`) num bloco novo de `_migrar()`, com `.bak` antes e rollback
+    explícito. **Migração de DADO, não de schema** — a coluna já era `TEXT UNIQUE NOT NULL`,
+    então não há `ALTER TABLE`. `_gerar_numero_requisicao` virou `MAX + 1` global, e
+    `_inserir_requisicao` ganhou retry de `IntegrityError` (só do número).
+
+  - **⚠️ AO SUBIR ESTA VERSÃO NO SERVIDOR, A PROVA DE QUE MIGROU É O `.bak`**
+    `…-requisicoes-numero-sequencial-v650` em `backups/`, nunca um HTTP 200 — o Streamlit só
+    executa `app.py` quando uma sessão de navegador conecta. Depois disso o guard não acha mais
+    trabalho e a migração nunca mais roda.
+
+  - **⚠️ OS CARTÕES `REQ-…` JÁ IMPRESSOS DEIXAM DE ACHAR A REQUISIÇÃO.** O número foi reescrito;
+    a busca continua ACEITANDO o formato antigo (não explode), mas devolve "não encontrada". Na
+    guarita o caminho passa a ser a **consulta por nome**, que já existe desde a v6.4.0. Vale
+    avisar a portaria antes de subir.
+
+  - **As 2.320 observações `"Req REQ-…"` em `movimentacoes` continuam como estão, de propósito.**
+    A FK é a fonte da verdade; o texto é fallback do legado. O regex `_RX_OBS_REQ` aceita os dois
+    formatos — mexer nas 2.320 linhas seria risco sem ganho.
 
   - **Task 1 — Consumo Mensal por PEDIDO DE COMPRA (SC7) substituiu a vida útil do lote.**
     Tabela nova `consumo_sc7` (aditiva, criada em `criar_banco()`, **sem `_backup_db`** — nova e

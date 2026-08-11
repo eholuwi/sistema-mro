@@ -1089,6 +1089,43 @@ def _migrar(conn):
                 conn.execute(f"ALTER TABLE requisicoes ADD COLUMN {col} TEXT")
         logger.info("  ↳ Migração v6.4.0: rejeitado_*/reenviado_em em requisicoes adicionadas.")
 
+    # v6.5.0 — numeração sequencial simples: `REQ-AAAAMMDD-NNN` → `1, 2, 3, … N`, na ordem
+    # em que os pedidos nasceram. Quem lê o número é o porteiro, em voz alta, com o cartão
+    # na mão; a data que o formato antigo carregava já vive em `data_hora`, que é o que a
+    # Portaria e o cartão continuam exibindo — o número não precisava carregá-la duas vezes.
+    #
+    # É migração de DADO, não de schema: a coluna segue `TEXT UNIQUE NOT NULL` guardando o
+    # inteiro como texto, e por isso este bloco não tem `ALTER TABLE` nenhum.
+    #
+    # Guard idempotente: "sobrou algum número com caractere não-dígito?". Na segunda
+    # execução o SELECT não acha nada e o bloco inteiro é pulado. `GLOB '*[^0-9]*'` é a
+    # pergunta exata ("tem ao menos um não-dígito"), diferente de `NOT GLOB '[0-9]*'`, que
+    # só olharia o primeiro caractere.
+    #
+    # O `UNIQUE` não colide em nenhum estado intermediário: os dois formatos são disjuntos
+    # (o velho sempre tem letras, o novo nunca tem), então um número já reescrito jamais
+    # topa com um ainda por reescrever. E as FKs sobrevivem por construção —
+    # `itens_requisicao.requisicao_id` e `movimentacoes.requisicao_id` apontam para
+    # `requisicoes.id`, que este bloco não toca.
+    if conn.execute("SELECT 1 FROM requisicoes WHERE numero_requisicao GLOB '*[^0-9]*' LIMIT 1").fetchone():
+        # Mesmo motivo dos backups anteriores: `_backup_db` abre uma SEGUNDA conexão e o
+        # `wal_checkpoint(TRUNCATE)` devolve BUSY com transação aberta aqui. O commit vem
+        # ANTES porque este é o último instante em que os números antigos existem.
+        conn.commit()
+        _backup_db("requisicoes-numero-sequencial-v650")
+        ids = [r["id"] for r in conn.execute("SELECT id FROM requisicoes ORDER BY data_hora, id")]
+        try:
+            for seq, req_id in enumerate(ids, start=1):
+                conn.execute("UPDATE requisicoes SET numero_requisicao=? WHERE id=?", (str(seq), req_id))
+            conn.commit()
+        except Exception:
+            # Tudo ou nada, explicitamente. Uma renumeração pela metade deixaria os dois
+            # formatos convivendo e o `MAX(...)+1` da geração apontando para um número já
+            # em uso — o `.bak` acima só serve para o desastre, não para o meio-termo.
+            conn.rollback()
+            raise
+        logger.info("  ↳ Migração v6.5.0: %d requisições renumeradas para 1..N.", len(ids))
+
     conn.commit()
 
 

@@ -1303,7 +1303,7 @@ def _render_requisicao():
             # (emitente, autorizador, centro de custo, setor e a lista de itens).
             st.markdown("#### :material/search: Detalhes da Requisição")
             opcoes_req = {
-                f"REQ-{r['numero_requisicao']} | {r['setor']} | {str(r['data_hora'])[:10]}": r
+                f"Req {r['numero_requisicao']} | {r['setor']} | {str(r['data_hora'])[:10]}": r
                 for r in fil.to_dict("records")
             }
             sel_req = st.selectbox(
@@ -1314,7 +1314,7 @@ def _render_requisicao():
                 r_det = opcoes_req[sel_req]
                 with st.container(border=True):
                     st.markdown(
-                        f"**Resumo REQ-{r_det['numero_requisicao']}** · "
+                        f"**Resumo Req {r_det['numero_requisicao']}** · "
                         f"{str(r_det.get('data_hora', ''))[:16]} · "
                         f"Status: **{r_det.get('status') or '—'}**"
                     )

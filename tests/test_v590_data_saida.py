@@ -8,7 +8,7 @@ O que este arquivo trava:
 - retroativo grava a data informada em `movimentacoes.data_hora`;
 - o padrão (sem `data_saida`) continua gravando agora — retrocompatível;
 - data FUTURA é recusada (envenenaria as janelas `datetime('now','-N days')`);
-- `requisicoes.data_hora` NÃO retroage (a numeração REQ-YYYYMMDD-NNN deriva dela);
+- `requisicoes.data_hora` NÃO retroage (é o carimbo de auditoria do pedido);
 - a janela de consumo de 30 dias enxerga o movimento na data retroagida.
 """
 
@@ -155,8 +155,8 @@ def test_data_futura_e_recusada_e_nada_e_gravado(db, make_item):
 
 
 def test_requisicao_nao_retroage_so_a_movimentacao(db, make_item):
-    """`_gerar_numero_requisicao` deriva REQ-YYYYMMDD-NNN da data da requisição:
-    retroagi-la colidiria a numeração. Só o material carrega a data de saída."""
+    """`requisicoes.data_hora` é o carimbo de QUANDO O PEDIDO FOI FEITO — retroagi-lo
+    reescreveria auditoria. Só o material carrega a data de saída."""
     item = make_item("PN-NUM", estoque=100)
     req_id = _criar_requisicao_aberta(item)
     itens = listar_itens_requisicao(req_id)
@@ -296,11 +296,14 @@ def test_padrao_desmarcado_grava_a_data_informada_e_nao_retroage_a_requisicao(te
     assert len(movs) == 1
     assert movs[-1]["data_hora"][:10] == ONTEM.strftime("%Y-%m-%d")
 
-    # A requisição em si continua sendo de hoje: a numeração REQ-YYYYMMDD-NNN vem dela.
+    # A requisição em si continua sendo de hoje. v6.5.0: o número virou sequencial e não
+    # carrega mais a data, então o invariante que este teste guarda passa a ser afirmado
+    # onde ele de fato mora — em `data_hora`, com o número apenas provando que a criação
+    # veio pelo gerador (numérico) e não de um INSERT direto da fixture.
     conn = database.get_connection()
     try:
         req = conn.execute("SELECT data_hora, numero_requisicao FROM requisicoes").fetchone()
     finally:
         conn.close()
     assert req["data_hora"][:10] == HOJE.strftime("%Y-%m-%d")
-    assert HOJE.strftime("%Y%m%d") in req["numero_requisicao"]
+    assert req["numero_requisicao"].isdigit()

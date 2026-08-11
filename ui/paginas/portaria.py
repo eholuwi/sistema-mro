@@ -87,8 +87,8 @@ def _consulta_por_numero(numero):
     req = buscar_requisicao_por_numero(numero)
     if req is None:
         st.info(
-            f"Requisição **{numero.strip()}** não encontrada. Confira o número — ele tem o "
-            "formato `REQ-AAAAMMDD-000`."
+            f"Requisição **{numero.strip()}** não encontrada. Confira o número — ele é só o "
+            "número impresso no cartão (ex.: `123`)."
         )
         return
     _cartao(req)
@@ -150,7 +150,7 @@ def render():
         return
 
     with st.form("form_portaria"):
-        numero = st.text_input("Número da requisição", placeholder="ex.: REQ-20260802-001")
+        numero = st.text_input("Número da requisição", placeholder="ex.: 123")
         consultar = st.form_submit_button(":material/search: Consultar", type="primary")
     if consultar:
         _consulta_por_numero(numero)

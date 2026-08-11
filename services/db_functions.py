@@ -1192,17 +1192,36 @@ FLUXO_PADRAO = "Padrão"
 FLUXO_DIGITAL = "Digital"
 
 
+# v6.5.0 — quantas vezes reemitir o número quando o `UNIQUE` reprova a inserção. Três
+# basta: cada tentativa relê o `MAX` já com a linha do concorrente commitada, então só
+# perderia de novo quem levasse mais um empate exato — e a alternativa a errar três vezes
+# seguidas é o erro na tela, não um laço infinito segurando a transação aberta.
+TENTATIVAS_NUMERO_REQUISICAO = 3
+
+
 def _gerar_numero_requisicao(conn):
-    hoje = datetime.now().strftime("%Y%m%d")
-    r = conn.execute(
-        """
-        SELECT COUNT(*) AS n FROM requisicoes
-        WHERE data_hora LIKE ?
-    """,
-        (f"{datetime.now().strftime('%Y-%m-%d')}%",),
-    ).fetchone()
-    seq = (r["n"] if r else 0) + 1
-    return f"REQ-{hoje}-{seq:03d}"
+    """v6.5.0 — numeração sequencial simples e GLOBAL: 1, 2, 3, … N.
+
+    Até a v6.4.0 o número era `REQ-AAAAMMDD-NNN`, derivado de um `COUNT(*)` do dia. A
+    operação pediu o número curto que se lê em voz alta na guarita, e a data — único
+    conteúdo que o formato antigo carregava — já vive em `data_hora`, que é o que a
+    Portaria e o cartão exibem.
+
+    `MAX + 1` sobre os números puramente numéricos. O filtro `GLOB` importa em dois
+    momentos: ele ignora o legado `REQ-…` de um banco que ainda não migrou e os números
+    sintéticos dos testes ('REQ-TEST-3-1'), que envenenariam o `CAST` — `CAST('12A' AS
+    INTEGER)` é 12, e um número inventado por fixture passaria a ditar o próximo da fila.
+
+    Continua sendo read-then-write não atômico, exatamente como o `COUNT` que substituiu:
+    a barreira real sempre foi o `UNIQUE` da coluna. O que muda é que o contador deixou de
+    ser por dia e virou global, o que alarga a janela entre dois almoxarifes criando
+    pedidos ao mesmo tempo — por isso `_inserir_requisicao` agora tenta de novo em vez de
+    devolver o `IntegrityError` cru."""
+    r = conn.execute("""
+        SELECT MAX(CAST(numero_requisicao AS INTEGER)) AS ultimo FROM requisicoes
+        WHERE numero_requisicao NOT GLOB '*[^0-9]*'
+    """).fetchone()
+    return str(int((r["ultimo"] if r else None) or 0) + 1)
 
 
 def _inserir_requisicao(
@@ -1227,30 +1246,45 @@ def _inserir_requisicao(
 
     Nasce **Aberta** nos dois fluxos; quem baixa estoque corrige o status depois, via
     `_calcular_status_requisicao`. Não abre transação: o chamador é o dono dela — é o que
-    permite à Padrão criar e baixar atomicamente. Devolve `(req_id, numero_requisicao)`."""
-    num = _gerar_numero_requisicao(conn)
-    cur = conn.execute(
-        """INSERT INTO requisicoes
-        (numero_requisicao,data_hora,setor,emitente,centro_custo,autorizador_tipo,
-         autorizador_nome,entrega_individual,destinatarios,sesmt,sesmt_responsavel,
-         observacoes,status,tipo_fluxo)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'Aberta', ?)""",
-        (
-            num,
-            agora,
-            setor,
-            emitente,
-            centro_custo,
-            autorizador_tipo,
-            autorizador_nome,
-            1 if entrega_individual else 0,
-            json.dumps(destinatarios or [], ensure_ascii=False),
-            1 if sesmt else 0,
-            sesmt_responsavel,
-            observacoes,
-            tipo_fluxo,
-        ),
-    )
+    permite à Padrão criar e baixar atomicamente. Devolve `(req_id, numero_requisicao)`.
+
+    v6.5.0 — com o número sequencial GLOBAL (antes era por dia), duas criações simultâneas
+    passam a disputar o mesmo `MAX + 1`. A colisão sempre foi barrada pelo `UNIQUE`; o que
+    faltava era reagir a ela. O `IntegrityError` da coluna do número vira nova tentativa —
+    o SQLite faz rollback só do INSERT que falhou (`ON CONFLICT ABORT`), então a transação
+    do chamador continua íntegra e a Padrão não perde a baixa de estoque que já fez.
+    Qualquer OUTRO `IntegrityError` sobe na hora: repetir uma FK inválida três vezes só
+    esconderia o defeito real."""
+    for tentativa in range(TENTATIVAS_NUMERO_REQUISICAO):
+        num = _gerar_numero_requisicao(conn)
+        try:
+            cur = conn.execute(
+                """INSERT INTO requisicoes
+                (numero_requisicao,data_hora,setor,emitente,centro_custo,autorizador_tipo,
+                 autorizador_nome,entrega_individual,destinatarios,sesmt,sesmt_responsavel,
+                 observacoes,status,tipo_fluxo)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'Aberta', ?)""",
+                (
+                    num,
+                    agora,
+                    setor,
+                    emitente,
+                    centro_custo,
+                    autorizador_tipo,
+                    autorizador_nome,
+                    1 if entrega_individual else 0,
+                    json.dumps(destinatarios or [], ensure_ascii=False),
+                    1 if sesmt else 0,
+                    sesmt_responsavel,
+                    observacoes,
+                    tipo_fluxo,
+                ),
+            )
+            break
+        except sqlite3.IntegrityError as e:
+            if "numero_requisicao" not in str(e) or tentativa == TENTATIVAS_NUMERO_REQUISICAO - 1:
+                raise
+            logger.warning("Número de requisição %s já em uso; reemitindo.", num)
     req_id = cur.lastrowid
     for it in itens:
         conn.execute(
@@ -1938,10 +1972,19 @@ def buscar_requisicao_por_numero(numero):
     'REQ-20260802-001'): quem digita é o porteiro num terminal compartilhado, lendo o
     número de um papel. Devolve o mesmo shape de `listar_requisicoes` com a chave extra
     `itens` (de `listar_itens_requisicao`). Número vazio/None → None, sem consultar o
-    banco — string vazia não pode casar com requisição nenhuma."""
+    banco — string vazia não pode casar com requisição nenhuma.
+
+    v6.5.0 — com o número virando o inteiro `1..N`, entrada só de dígitos perde os zeros à
+    esquerda ('0123' acha 123): quem copia de um papel escrito à mão não tem como saber
+    quantos zeros o sistema guardou, e a busca não pode punir isso. O `str(int(...))`
+    também normaliza '000' para '0', que simplesmente não acha nada — correto, porque
+    número de requisição começa em 1. O formato antigo `REQ-…` continua aceito
+    literalmente: os cartões já impressos não voltam para reimprimir."""
     numero = str(numero or "").strip()
     if not numero:
         return None
+    if numero.isdigit():
+        numero = str(int(numero))
     reqs = _consultar_requisicoes("WHERE UPPER(TRIM(r.numero_requisicao)) = UPPER(TRIM(?))", [numero])
     if not reqs:
         return None
@@ -3829,7 +3872,12 @@ def exportar_inventario_df():
 # voltam a ser dado. Só entram como FALLBACK do legado — a FK sempre ganha, porque o
 # texto mente: há linha cuja Observação é 'F61846' (que é o PO) e cujo `documento_nf`
 # real é 169357.
-_RX_OBS_REQ = re.compile(r"\b(?:requisi[cç][aã]o|req)\s+(REQ-\d{8}-\d{3})\b", re.I)
+# v6.5.0 — as duas grafias do número convivem POR DECISÃO. A renumeração reescreveu
+# `requisicoes.numero_requisicao`, mas NÃO as 2.320 observações que citam o número antigo:
+# o texto é histórico, a FK é a fonte da verdade (é a regra do bloco acima), e reescrever
+# 2.320 strings para corrigir uma coluna de fallback seria trocar risco por nada. A
+# alternativa `REQ-…` vem primeiro na ordem porque `\d+` sozinho não casaria com ela.
+_RX_OBS_REQ = re.compile(r"\b(?:requisi[cç][aã]o|req)\s+(REQ-\d{8}-\d{3}|\d+)\b", re.I)
 _RX_OBS_NF = re.compile(r"^\s*NF:\s*([^|·]+)", re.I)
 _RX_OBS_VINCULO_SC = re.compile(r"\(\s*vinculado\s+[àa]\s+SC\s+\d+\s*\)", re.I)
 _RX_OBS_AJUSTE = re.compile(r"^\s*(?:ajuste:|ajuste\s*[—-])\s*", re.I)

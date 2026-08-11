@@ -42,6 +42,17 @@ def _texto(at):
     )
 
 
+def _cartao(numero):
+    """O começo EXATO do cartão daquela requisição (`gestor.py:85`).
+
+    v6.5.0 — o número virou o inteiro `1..N` e procurá-lo solto no texto deixou de provar
+    coisa alguma: '2' aparece em '2026-08-11' e '1' em '1 item(ns)', então `sai not in
+    texto` passava a falhar sempre e `fica in texto` passava a valer sempre. Ancorar nos
+    asteriscos do markdown devolve ao teste a pergunta que ele sempre fez — "esta
+    requisição tem cartão na fila?" — sem depender do formato do número."""
+    return f"**{numero}** ·"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 1. Serviço — a fila consolidada
 # ══════════════════════════════════════════════════════════════════════════════
@@ -129,7 +140,7 @@ def test_admin_ve_fila_de_todos_os_setores(db, make_item):
     assert not at.exception, [e.value for e in at.exception]
     assert not any("departamento" in w.value for w in at.warning), [w.value for w in at.warning]
     texto = _texto(at)
-    assert a in texto and b in texto
+    assert _cartao(a) in texto and _cartao(b) in texto
     # O setor entra no cartão: sem ele o admin não sabe para quem está aprovando.
     assert SETOR in texto and OUTRO_SETOR in texto
 
@@ -178,8 +189,8 @@ def test_filtro_do_admin_restringe_a_fila(db, make_item):
 
     assert not at.exception, [e.value for e in at.exception]
     texto = _texto(at)
-    assert fica in texto
-    assert sai not in texto
+    assert _cartao(fica) in texto
+    assert _cartao(sai) not in texto
 
 
 def test_admin_sem_nada_para_aprovar_nao_quebra(db):
@@ -206,8 +217,8 @@ def test_gestor_continua_no_seu_setor(db, make_item):
 
     assert not at.exception, [e.value for e in at.exception]
     texto = _texto(at)
-    assert meu in texto
-    assert alheio not in texto
+    assert _cartao(meu) in texto
+    assert _cartao(alheio) not in texto
 
 
 def test_gestor_sem_departamento_continua_avisando(db, make_item):
