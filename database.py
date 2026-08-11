@@ -670,6 +670,29 @@ def criar_banco():
         )
     """)
 
+    # v6.5.0 — linhas de Pedido de Compra (Protheus SC7) com Entregue/Saldo. Hoje a aba
+    # SC7 só vira `precos_historico` (preço + lead time) e o Saldo é descartado; o consumo
+    # mensal por pedido ATENDIDO precisa da linha inteira. Sem FK para `inventario`: o SC7
+    # traz PNs que não estão no MRO e eles não podem ser perdidos (mesma lição de
+    # `itens_sc_externos`). Tabela NOVA e vazia ao migrar ⇒ aditiva, sem `_backup_db`.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS consumo_sc7 (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            numero_pc       TEXT NOT NULL,
+            produto         TEXT NOT NULL,
+            dt_emissao      TEXT,
+            descricao       TEXT,
+            unidade         TEXT,
+            quantidade      REAL DEFAULT 0,
+            qtd_entregue    REAL DEFAULT 0,
+            saldo           REAL DEFAULT 0,
+            dt_entrega      TEXT,
+            data_importacao TEXT DEFAULT CURRENT_TIMESTAMP,
+            origem          TEXT,
+            UNIQUE(numero_pc, produto)
+        )
+    """)
+
     # v6.1.0 — Usuários e login local (100% local, sem dependência externa: nem OIDC,
     # nem API do SCM, nem TI). Tabela NOVA e vazia ao migrar — não toca linha existente,
     # portanto aditiva e sem `_backup_db` (mesmo padrão de `itens_sc_externos`, v5.1.0).
@@ -789,6 +812,10 @@ def criar_banco():
     # v6.1.0 — o filtro de menu por papel e a guarda do "último almoxarife" consultam
     # por papel a cada render; `ident_norm`/`nome_norm` já têm índice via UNIQUE.
     c.execute("CREATE INDEX IF NOT EXISTS idx_usuarios_papel ON usuarios(papel)")
+    # v6.5.0 — o consumo por pedido casa `consumo_sc7.produto` com `inventario.part_number`
+    # (join por TEXTO, sem FK) numa varredura única da base inteira; sem este índice o
+    # join vira full scan a cada Ficha 360 e a cada recálculo de Mín/Máx.
+    c.execute("CREATE INDEX IF NOT EXISTS idx_consumo_sc7_produto ON consumo_sc7(produto)")
 
     conn.commit()
     _migrar(conn)

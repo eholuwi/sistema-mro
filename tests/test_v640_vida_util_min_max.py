@@ -1,23 +1,22 @@
-"""v6.4.0 — Consumo por vida útil do lote (Épico B) + sugestão de Mín/Máx (Épico C).
+"""v6.4.0 — sugestão automática de Mín/Máx (Épico C).
+
+⚠️ **Os 14 testes do Épico B (consumo por vida útil do lote) saíram na v6.5.0**, junto com
+o cálculo que protegiam: a vida útil foi substituída pelo consumo por PEDIDO DE COMPRA
+atendido (`tests/test_v650_consumo_sc7.py`). O arquivo mantém o nome porque o Épico C, que
+continua aqui inteiro, nasceu nesta mesma versão.
 
 O que estes testes protegem:
 
-- **Só recebimento de SC abre lote.** Decisão do Luis em 05/08/2026, medida contra o
-  `mro.db` real: das 579 entradas, 145 têm `sc_item_id`. Se um ajuste de inventário
-  passasse a abrir lote, o número mudaria para ~270 itens sem ninguém perceber — e a
-  carga inicial de 16/04 viraria "um recebimento" que nunca aconteceu.
-- **Lote vivo não conta e lote de menos de 1 dia é descartado.** Os dois protegem o mesmo:
-  inventar duração produz consumo mensal absurdo (dividir por zero, ou por "hoje").
-- **Média simples entre lotes** — a escolha do Luis entre média, mediana e ponderada.
 - **A base do Sr. Neidson não é tocada pelo cálculo.** `minimo_calculado` existe
   justamente para NÃO ser `estoque_minimo`; a única escrita na base é o botão da tela.
+- **A sugestão prefere o lead time CALCULADO ao cadastrado** — inverso proposital do ROP.
+- **Consumo persistido sem saída recente não sugere nada** (o caso 34FR0001).
 - **Migração aditiva e idempotente**, com as colunas nascendo preenchidas pelo backfill.
 """
 
 import database
 import pytest
 
-from services import classificacao as C
 from services import db_functions as F
 from services import planejamento as P
 from ui.paginas.gerenciar_itens import _difere, _sugestoes_min_max
@@ -31,9 +30,9 @@ CC = "21106 - MANUTENÇÃO"
 def _mov(item_id, tipo, qtd, quando, saldo_apos=None, sc_item_id=None):
     """Movimentação crua no ledger — o teste controla data, saldo e se é recebimento.
 
-    Inserção direta (e não `registrar_movimentacao`) porque a vida útil do lote depende de
-    datas espalhadas por meses e de `sc_item_id`, que a função pública só grava vindo do
-    recebimento de SC. `saldo_apos=None` exercita de propósito o ramo do saldo acumulado."""
+    Inserção direta (e não `registrar_movimentacao`) porque as saídas precisam cair em
+    datas específicas dentro da janela de 30 d, e `saldo_apos=None` exercita de propósito
+    o ramo em que a coluna não foi gravada."""
     with database.transaction() as conn:
         conn.execute(
             "INSERT INTO movimentacoes (item_id,tipo,quantidade,saldo_apos,data_hora,"
@@ -41,232 +40,6 @@ def _mov(item_id, tipo, qtd, quando, saldo_apos=None, sc_item_id=None):
             "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (item_id, tipo, qtd, saldo_apos, quando, CC, "MANUTENÇÃO", "Joao", "Joao", "", sc_item_id),
         )
-
-
-def _item_sc_id(numero_sc):
-    with database.transaction() as conn:
-        row = conn.execute(
-            "SELECT isc.id FROM itens_sc isc JOIN solicitacoes_compra s ON s.id=isc.sc_id "
-            "WHERE s.numero_sc=?",
-            (numero_sc,),
-        ).fetchone()
-    return row["id"]
-
-
-def _recebimento(item_id, sc_item_id, qtd, quando, saldo_apos=None):
-    """Entrada COM `sc_item_id` — a única que abre lote (decisão do Luis).
-
-    `movimentacoes.sc_item_id` tem FK para `itens_sc`, então o teste precisa de uma linha
-    de SC de verdade: inventar o id 1 passa no cálculo e explode no banco."""
-    return _mov(item_id, "entrada", qtd, quando, saldo_apos, sc_item_id=sc_item_id)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 1. Épico B — núcleo puro da vida útil
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-def _dt(dia):
-    """Dia N a partir de 01/01/2026 (via timedelta — `datetime(2026, 1, 41)` não existe)."""
-    from datetime import datetime, timedelta
-
-    return datetime(2026, 1, 1, 8, 0, 0) + timedelta(days=dia - 1)
-
-
-def test_vida_util_lote_simples():
-    """Chegaram 60 em 01/01, bateu o mínimo em 31/01 → 60 ÷ 30 d × 30 = 60/mês."""
-    movimentos = [
-        (_dt(1), "entrada", 60, 60, True),
-        (_dt(31), "saida", 50, 10, False),
-    ]
-    r = C._vida_util_from_movimentos(movimentos, minimo=10)
-
-    assert r["consumo_mensal"] == 60.0
-    assert r["n_lotes"] == 1 and r["n_lotes_vivos"] == 0
-    assert r["dias_medio"] == 30.0
-
-
-def test_vida_util_ignora_entrada_sem_sc():
-    """Ajuste de inventário mexe no saldo mas NÃO abre lote (`abre_lote=False`).
-
-    É a decisão do Luis de 05/08/2026 em forma de teste: sem esta linha, a carga inicial do
-    inventário viraria "recebimento" e o número passaria a existir para 3× mais itens."""
-    movimentos = [
-        (_dt(1), "entrada", 60, 60, False),  # ajuste/contagem física
-        (_dt(31), "saida", 50, 10, False),
-    ]
-    r = C._vida_util_from_movimentos(movimentos, minimo=10)
-
-    assert r["consumo_mensal"] is None
-    assert r["n_lotes"] == 0 and r["n_lotes_vivos"] == 0
-
-
-def test_vida_util_lote_vivo_nao_conta():
-    """Estoque nunca chegou ao mínimo: o lote não tem fim, então não entra na média."""
-    movimentos = [
-        (_dt(1), "entrada", 60, 60, True),
-        (_dt(20), "saida", 10, 50, False),
-    ]
-    r = C._vida_util_from_movimentos(movimentos, minimo=10)
-
-    assert r["consumo_mensal"] is None
-    assert r["n_lotes"] == 0
-    assert r["n_lotes_vivos"] == 1  # continua visível para a UI explicar o "—"
-
-
-def test_vida_util_media_simples_entre_lotes():
-    """Dois lotes (60 em 30 d = 60/mês · 30 em 10 d = 90/mês) → média simples 75/mês.
-
-    Fixa a escolha do Luis: mediana daria 75 também com dois pontos, mas a ponderada por
-    quantidade daria 67,5 — por isso o terceiro lote no meio, que separa os três critérios."""
-    movimentos = [
-        (_dt(1), "entrada", 60, 60, True),
-        (_dt(31), "saida", 50, 10, False),  # fecha o 1º: 30 d
-        (_dt(1 + 40), "entrada", 30, 40, True),
-        (_dt(11 + 40), "saida", 30, 10, False),  # fecha o 2º: 10 d
-    ]
-    r = C._vida_util_from_movimentos(movimentos, minimo=10)
-
-    assert [x["consumo_mensal"] for x in r["lotes"]] == [60.0, 90.0]
-    assert r["consumo_mensal"] == 75.0
-    assert r["n_lotes"] == 2
-
-
-def test_vida_util_lotes_sobrepostos_fecham_juntos():
-    """Dois recebimentos antes de o saldo cair: cada lote conta da SUA chegada."""
-    movimentos = [
-        (_dt(1), "entrada", 50, 50, True),
-        (_dt(11), "entrada", 50, 100, True),
-        (_dt(21), "saida", 95, 5, False),
-    ]
-    r = C._vida_util_from_movimentos(movimentos, minimo=10)
-
-    assert [x["dias"] for x in r["lotes"]] == [20, 10]
-    assert r["consumo_mensal"] == round((50 / 20 * 30 + 50 / 10 * 30) / 2, 2)
-
-
-def test_vida_util_minimo_zero_usa_zerar_como_piso():
-    """Item sem mínimo cadastrado: o lote dura até ZERAR (fallback do backlog)."""
-    movimentos = [
-        (_dt(1), "entrada", 30, 30, True),
-        (_dt(16), "saida", 25, 5, False),  # 5 > 0: com mínimo 10 fecharia aqui
-        (_dt(31), "saida", 5, 0, False),
-    ]
-    com_piso_zero = C._vida_util_from_movimentos(movimentos, minimo=0)
-    com_piso_dez = C._vida_util_from_movimentos(movimentos, minimo=10)
-
-    assert com_piso_zero["lotes"][0]["dias"] == 30
-    assert com_piso_dez["lotes"][0]["dias"] == 15  # o mínimo antecipa o fim do lote
-
-
-def test_vida_util_descarta_lote_de_menos_de_um_dia():
-    """Chegou e bateu o mínimo no mesmo dia: sem duração medível (e sem divisão por zero)."""
-    from datetime import datetime
-
-    movimentos = [
-        (datetime(2026, 1, 1, 8, 0), "entrada", 30, 30, True),
-        (datetime(2026, 1, 1, 17, 0), "saida", 25, 5, False),
-    ]
-    r = C._vida_util_from_movimentos(movimentos, minimo=10)
-
-    assert r["consumo_mensal"] is None
-    assert r["n_lotes"] == 0 and r["n_lotes_vivos"] == 0  # fechou, só não é medível
-
-
-def test_vida_util_recebimento_abaixo_do_minimo_nao_abre_lote():
-    """Chegou pouco e o estoque continuou no piso: não há vida útil a medir.
-
-    Sem esta guarda, o item cronicamente em falta — justamente o que mais aparece na fila
-    de reposição — teria "lote de 1 dia" e um consumo mensal 30× a quantidade recebida."""
-    movimentos = [
-        (_dt(1), "entrada", 5, 5, True),  # mínimo é 10: chegou e já está no piso
-        (_dt(2), "saida", 1, 4, False),
-    ]
-    r = C._vida_util_from_movimentos(movimentos, minimo=10)
-
-    assert r["consumo_mensal"] is None
-    assert r["n_lotes"] == 0 and r["n_lotes_vivos"] == 0
-
-
-def test_vida_util_sem_saldo_apos_acumula():
-    """`saldo_apos` NULL (movimentação inserida direto no banco) cai no acumulado."""
-    movimentos = [
-        (_dt(1), "entrada", 60, None, True),
-        (_dt(31), "saida", 50, None, False),
-    ]
-    r = C._vida_util_from_movimentos(movimentos, minimo=10)
-
-    assert r["consumo_mensal"] == 60.0  # 0 + 60 − 50 = 10 → bateu o mínimo
-
-
-def test_vida_util_sem_movimento_nenhum():
-    r = C._vida_util_from_movimentos([], minimo=10)
-    assert r == {
-        "consumo_mensal": None,
-        "n_lotes": 0,
-        "n_lotes_vivos": 0,
-        "dias_medio": None,
-        "lotes": [],
-    }
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 2. Épico B — leitura do banco
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.fixture
-def lote_no_banco(db, make_item, make_sc):
-    """Item com um lote fechado no ledger: chegou 60 em 01/01, bateu o mínimo em 31/01."""
-
-    def _montar(minimo=10):
-        item_id = make_item(estoque=0, minimo=minimo)
-        make_sc(numero_sc="SC-VIDA", item_id=item_id, quantidade_solicitada=60)
-        _recebimento(item_id, _item_sc_id("SC-VIDA"), 60, "2026-01-01 08:00:00", saldo_apos=60)
-        _mov(item_id, "saida", 50, "2026-01-31 08:00:00", saldo_apos=minimo)
-        return item_id
-
-    return _montar
-
-
-def test_consumo_por_vida_util_le_o_ledger(lote_no_banco):
-    r = C.consumo_por_vida_util(lote_no_banco())
-
-    assert r["n_lotes"] == 1
-    assert r["consumo_mensal"] == 60.0
-
-
-def test_consumo_por_vida_util_entra_na_ficha(lote_no_banco):
-    """A Ficha 360 recebe `vida_util` pelo dict que já existia — sem query nova nela."""
-    cls = C.classificar_item(lote_no_banco())
-
-    assert cls["vida_util"]["consumo_mensal"] == 60.0
-    # e continua trazendo tudo o que a v2.10.0 já trazia
-    assert {"demanda", "xyz", "consumo_mensal", "sazonalidade"} <= set(cls)
-
-
-def test_classificar_todos_nao_carrega_vida_util(lote_no_banco):
-    """A vida útil fica FORA da varredura da base inteira, de propósito: `classificar_todos`
-    roda dentro de `listar_inventario` e ler o ledger completo por item seria o N+1 que
-    aquela função existe para evitar."""
-    lote_no_banco()
-
-    mapa = C.classificar_todos()
-
-    assert all("vida_util" not in v for v in mapa.values())
-
-
-def test_movimentos_item_marca_so_recebimento(db, make_item, make_sc):
-    """`abre_lote` só é True para entrada com `sc_item_id` — o predicado de ENTRADA_REAL."""
-    item_id = make_item(estoque=0, minimo=10)
-    make_sc(numero_sc="SC-VIDA", item_id=item_id, quantidade_solicitada=10)
-    _recebimento(item_id, _item_sc_id("SC-VIDA"), 10, "2026-02-01 08:00:00", saldo_apos=10)
-    _mov(item_id, "entrada", 5, "2026-02-02 08:00:00", saldo_apos=15)  # ajuste avulso
-
-    with database.transaction() as conn:
-        movimentos = C._movimentos_item(conn, item_id)
-
-    assert [m[4] for m in movimentos if m[1] == "entrada"] == [True, False]  # SC, ajuste
 
 
 # ══════════════════════════════════════════════════════════════════════════════

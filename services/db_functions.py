@@ -25,6 +25,7 @@ from services.constants import (
     CC_EDICAO,
     extrair_fator_embalagem,
 )
+from services import consumo_sc7 as CS7
 from collections import Counter
 import pandas as pd
 
@@ -4095,11 +4096,21 @@ def recalcular_min_max_calculado(item_id=None, conn=None):
             params,
         ).fetchall()
         amostras = _amostras_consumo_30d(c, item_id)
+        sc7 = CS7.consumo_sc7_por_item(c, item_id)
         for r in rows:
+            dados = dict(r)
+            # v6.5.0 — o consumo por PEDIDO ATENDIDO entra na fórmula quando existe, e
+            # `calcular_min_max_sugerido` o prefere ao `consumo_medio_diario`. `n_pedidos
+            # >= 1` (garantido por quem devolveu o número) é a guarda equivalente ao
+            # `amostras > 0` da janela de 30 d: houve compra real no período.
+            info = sc7.get(r["id"])
+            if info and info["consumo_mensal"] is not None:
+                dados["consumo_sc7_diario"] = round(info["consumo_mensal"] / 30, 4)
+                dados["consumo_sc7_rotulo"] = CS7.rotulo_consumo(info)
             # As amostras entram na fórmula, não só no rótulo: zero saídas na janela
             # significa `consumo_medio_diario` sem lastro recente (coluna persistida, só
             # recalculada quando o item se move) — e nesse caso não há sugestão a dar.
-            sug = P.calcular_min_max_sugerido(dict(r), amostras=amostras.get(r["id"], 0))
+            sug = P.calcular_min_max_sugerido(dados, amostras=amostras.get(r["id"], 0))
             c.execute(
                 """UPDATE inventario SET
                      minimo_calculado=?, maximo_calculado=?, min_max_amostras=?, min_max_origem=?
@@ -5194,12 +5205,22 @@ def importar_relatorio_scs(arquivo_excel, nome_arquivo="Relatorio de SCs.xlsx"):
         "FORNECEDORES": ingerir_fornecedores,
         "SCM USERS": ingerir_scm_users,
     }
+    df_sc7 = None
     for aba, func in ingestores.items():
         if aba in disponiveis:
             df = _sheet_df(xls, aba, RELATORIO_SCS_ABAS.get(aba, 0))
+            if aba == "SC7":
+                df_sc7 = df
             resultados[aba] = func(df, nome_arquivo)
         else:
             resultados[aba] = {"erro": "Aba ausente na planilha."}
+
+    # v6.5.0 — a MESMA aba SC7 alimenta duas coisas diferentes: `ingerir_sc7_precos` tira
+    # dela preço e lead time (só de PN cadastrado, só com preço), e `ingerir_sc7_consumo`
+    # guarda a linha inteira (Entregue/Saldo) para o consumo por pedido. Reler a aba seria
+    # desperdício; o `df` já está em memória.
+    if df_sc7 is not None:
+        resultados["SC7_CONSUMO"] = ingerir_sc7_consumo(df_sc7, nome_arquivo)
 
     try:
         resultados["_snapshot_criados"] = tirar_snapshot_estoque()
@@ -5693,6 +5714,165 @@ def ingerir_sc7_precos(df, nome_arquivo="Relatorio de SCs.xlsx"):
                 stats["precos_inseridos"],
                 stats["ignorados"],
                 {"lead_times_calculados": stats["lead_times_calculados"]},
+            )
+        return stats
+    except Exception as e:
+        return {"erro": str(e)}
+
+
+def _upsert_consumo_sc7(conn, linha):
+    """v6.5.0 — upsert idempotente em `consumo_sc7`, chave `(numero_pc, produto)`.
+
+    Formato `SELECT id → UPDATE/INSERT` (e não `INSERT … ON CONFLICT`) para manter o
+    idioma de `_upsert_item_sc_externo`. Reimportar a mesma planilha atualiza
+    Entregue/Saldo/Dt.Entrega e **não duplica linha**: um PO que era parcial e virou
+    atendido muda de saldo no lugar, que é o que faz o consumo do mês mudar sozinho.
+    Devolve `True` quando a linha é nova (para a estatística "inseridos")."""
+    ex = conn.execute(
+        "SELECT id FROM consumo_sc7 WHERE numero_pc=? AND produto=?",
+        (linha["numero_pc"], linha["produto"]),
+    ).fetchone()
+    valores = (
+        linha["dt_emissao"],
+        linha["descricao"] or None,
+        linha["unidade"] or None,
+        linha["quantidade"],
+        linha["qtd_entregue"],
+        linha["saldo"],
+        linha["dt_entrega"],
+        linha["origem"],
+    )
+    if ex:
+        conn.execute(
+            """UPDATE consumo_sc7 SET
+                 dt_emissao=COALESCE(?, dt_emissao), descricao=COALESCE(?, descricao),
+                 unidade=COALESCE(?, unidade), quantidade=?, qtd_entregue=?, saldo=?,
+                 dt_entrega=COALESCE(?, dt_entrega), origem=?,
+                 data_importacao=CURRENT_TIMESTAMP
+               WHERE id=?""",
+            (*valores, ex["id"]),
+        )
+        return False
+    conn.execute(
+        """INSERT INTO consumo_sc7
+             (numero_pc, produto, dt_emissao, descricao, unidade, quantidade,
+              qtd_entregue, saldo, dt_entrega, origem)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (linha["numero_pc"], linha["produto"], *valores),
+    )
+    return True
+
+
+def ingerir_sc7_consumo(df, nome_arquivo="Relatorio de Compras.xlsx"):
+    """Ingestor da aba SC7 para o CONSUMO por pedido de compra (v6.5.0).
+
+    Irmão de `ingerir_sc7_precos` e deliberadamente mais permissivo que ele em dois
+    pontos, porque as perguntas são diferentes:
+
+    - **Grava PN fora do inventário.** `ingerir_sc7_precos` descarta a linha quando
+      `pn not in pn_map` (preço só faz sentido para item cadastrado); aqui o descarte
+      apagaria justamente o histórico do item que ainda vai entrar no MRO — mesma lição
+      de `itens_sc_externos`. A tabela não tem FK para `inventario`; o casamento é por
+      texto, na leitura.
+    - **Grava linha sem preço.** O consumo vem de `Qtd.Entregue`/`Saldo`, não de
+      `Prc Unitario`.
+
+    Agrega por `(Numero PC, Produto)` antes de gravar — o mesmo par pode aparecer em mais
+    de uma linha do SC7 (itens diferentes do mesmo PO), e sem a agregação a segunda linha
+    sobrescreveria a primeira em vez de somar. Molde: `_agregar_sc7` do cruzamento.
+
+    ⚠️ **O corte das linhas vazias é feito em pandas, antes do laço.** Medido no arquivo
+    real de 10/08/2026: o "Relatório de Compras" cru vem com **1.048.569 linhas** (o limite
+    do Excel) e só **34 mil** têm conteúdo — o resto é preenchimento da planilha. Iterar o
+    milhão em Python deixaria a tela travada por minutos para gravar 34 mil linhas.
+    """
+    if df is None or df.empty:
+        return {"erro": "Aba SC7 vazia ou ausente."}
+    col = {
+        "pedido": _coluna(df, ["Numero PC", "Pedido", "Número PC"]),
+        "produto": _coluna(df, ["Produto"]),
+        "descricao": _coluna(df, ["Descricao", "Descrição"]),
+        "unidade": _coluna(df, ["Unidade", "UM", "U.M.", "Um"]),
+        "quantidade": _coluna(df, ["Quantidade", "Qty"]),
+        "qtd_entregue": _coluna(df, ["Qtd.Entregue", "Qtd Entregue"]),
+        "saldo": _coluna(df, ["Saldo"]),
+        "dt_emissao": _coluna(
+            df, ["DT Emissao", "DT Emissão", "Dt Emissao", "Dt Emissão", "Emissao", "Emissão"]
+        ),
+        "dt_entrega": _coluna(df, ["Dt. Entrega", "Dt Entrega", "Data Entrega", "Entrega"]),
+    }
+    faltantes = [n for n in ("pedido", "produto", "saldo") if not col[n]]
+    if faltantes:
+        return {"erro": f"Colunas obrigatórias ausentes na aba SC7: {', '.join(faltantes)}"}
+
+    total_planilha = int(len(df))
+    # Corte vetorizado das linhas de preenchimento (ver o ⚠️ da docstring). Elas NÃO contam
+    # como "ignoradas": nunca foram dado, e reportar "1.014.000 ignoradas" esconderia as
+    # poucas linhas que de fato têm conteúdo e foram descartadas por falta de PC/Produto.
+    df = df.dropna(subset=[col["pedido"], col["produto"]])
+    stats = {
+        "linhas_lidas": total_planilha,
+        "linhas_vazias": total_planilha - int(len(df)),
+        "pedidos_gravados": 0,
+        "inseridos": 0,
+        "atualizados": 0,
+        "ignorados": 0,
+    }
+    agregado = {}
+    for _, row in df.iterrows():
+        numero_pc = str(_valor(row, col["pedido"], "") or "").strip()
+        produto = str(_valor(row, col["produto"], "") or "").strip()
+        if not numero_pc or not produto:
+            stats["ignorados"] += 1
+            continue
+        chave = (numero_pc.upper(), produto.upper())
+        linha = agregado.get(chave)
+        if linha is None:
+            linha = {
+                "numero_pc": numero_pc,
+                "produto": produto,
+                "dt_emissao": None,
+                "descricao": "",
+                "unidade": "",
+                "quantidade": 0.0,
+                "qtd_entregue": 0.0,
+                "saldo": 0.0,
+                "dt_entrega": None,
+                "origem": "planilha",
+            }
+            agregado[chave] = linha
+        linha["quantidade"] += _to_float(_valor(row, col["quantidade"], 0))
+        linha["qtd_entregue"] += _to_float(_valor(row, col["qtd_entregue"], 0))
+        linha["saldo"] += _to_float(_valor(row, col["saldo"], 0))
+        emissao = _to_date_str(_valor(row, col["dt_emissao"], None))
+        # Emissão: a MAIS ANTIGA do par (é o mês em que a compra foi decidida);
+        # entrega: a MAIS RECENTE (é quando o PO terminou de chegar).
+        if emissao and (linha["dt_emissao"] is None or emissao < linha["dt_emissao"]):
+            linha["dt_emissao"] = emissao
+        entrega = _to_date_str(_valor(row, col["dt_entrega"], None))
+        if entrega and (linha["dt_entrega"] is None or entrega > linha["dt_entrega"]):
+            linha["dt_entrega"] = entrega
+        if not linha["descricao"]:
+            linha["descricao"] = str(_valor(row, col["descricao"], "") or "").strip()
+        if not linha["unidade"]:
+            linha["unidade"] = str(_valor(row, col["unidade"], "") or "").strip()
+
+    try:
+        with transaction() as conn:
+            for linha in agregado.values():
+                if _upsert_consumo_sc7(conn, linha):
+                    stats["inseridos"] += 1
+                else:
+                    stats["atualizados"] += 1
+            stats["pedidos_gravados"] = stats["inseridos"] + stats["atualizados"]
+            _log_importacao(
+                conn,
+                "sc7_consumo",
+                nome_arquivo,
+                stats["linhas_lidas"],
+                stats["pedidos_gravados"],
+                stats["ignorados"],
+                {"inseridos": stats["inseridos"], "atualizados": stats["atualizados"]},
             )
         return stats
     except Exception as e:

@@ -51,6 +51,13 @@ _SC7_COLS = {
     "dt_entrega": ["Dt. Entrega", "Dt Entrega", "Data Entrega", "Entrega"],
     "fornecedor": ["Nome Fantasia", "Razão Social", "Razao Social", "Fornecedor"],
     "comprador": ["Comprador"],
+    # v6.5.0 — o consumo por pedido (`ingerir_sc7_consumo`) precisa da linha inteira, não
+    # só do que o cruzamento usa. Ficam AQUI para que a detecção de aba/cabeçalho
+    # (`preparar_df`) continue com um mapa único do SC7; as obrigatórias não mudam, então
+    # o cruzamento segue aceitando exatamente os mesmos arquivos de antes.
+    "dt_emissao": ["DT Emissao", "DT Emissão", "Dt Emissao", "Dt Emissão", "Emissao", "Emissão"],
+    "quantidade": ["Quantidade", "Qty"],
+    "unidade": ["Unidade", "UM", "U.M.", "Um"],
 }
 
 # Colunas mínimas para o cruzamento fazer sentido.

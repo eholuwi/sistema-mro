@@ -213,8 +213,20 @@ def calcular_min_max_sugerido(item, amostras=None):
     recente, então não há sugestão. `amostras=None` pula a checagem (uso puro da fórmula).
 
     Os 112 itens que caem aqui não somem da tela: aparecem sem sugestão, como todo item
-    sem consumo — e continuam com a base cadastrada intacta, que é o comportamento seguro."""
-    consumo = _num(item.get("consumo_medio_diario"))
+    sem consumo — e continuam com a base cadastrada intacta, que é o comportamento seguro.
+
+    ⚠️ **v6.5.0 — `consumo_sc7_diario` vence `consumo_medio_diario` quando existe**, do
+    mesmo jeito que `lead_time_para_sugestao` prefere o lead time calculado ao cadastrado,
+    e pela mesma razão: a sugestão se propõe a dizer "o que os dados mostram", e o consumo
+    por PEDIDO ATENDIDO (SC7) é o dado mais forte que existe — período inteiro, derivado na
+    leitura a cada consulta, sem a coluna persistida que congela no dia em que o item
+    parou. Quem injeta a chave é `recalcular_min_max_calculado`, e só a partir de fonte de
+    pedido: a guarda `amostras <= 0` abaixo **não** se aplica ao caminho SC7 porque ela
+    existe para o defeito da coluna persistida (o caso 34FR0001), que este número não tem —
+    a guarda equivalente do SC7 é `n_pedidos >= 1`, aplicada na leitura."""
+    consumo_sc7 = _num(item.get("consumo_sc7_diario"))
+    usa_sc7 = consumo_sc7 > 0
+    consumo = consumo_sc7 if usa_sc7 else _num(item.get("consumo_medio_diario"))
     lt, lt_origem, _ = lead_time_para_sugestao(item)
     if consumo <= 0:
         return {
@@ -224,7 +236,7 @@ def calcular_min_max_sugerido(item, amostras=None):
             "lead_time": lt,
             "origem": "sem consumo registrado",
         }
-    if amostras is not None and amostras <= 0:
+    if not usa_sc7 and amostras is not None and amostras <= 0:
         return {
             "minimo": 0.0,
             "maximo": 0.0,
@@ -232,12 +244,13 @@ def calcular_min_max_sugerido(item, amostras=None):
             "lead_time": lt,
             "origem": f"sem saída nos últimos {JANELA_CONSUMO_DIAS}d (consumo desatualizado)",
         }
+    fonte = (item.get("consumo_sc7_rotulo") or "SC7") if usa_sc7 else f"{JANELA_CONSUMO_DIAS}d"
     return {
         "minimo": round(consumo * lt, 2),
         "maximo": round(consumo * HORIZONTE_REPOSICAO_DIAS, 2),
         "consumo_diario": consumo,
         "lead_time": lt,
-        "origem": f"consumo {JANELA_CONSUMO_DIAS}d × lead time {lt_origem}",
+        "origem": f"consumo {fonte} × lead time {lt_origem}",
     }
 
 

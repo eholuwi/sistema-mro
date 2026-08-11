@@ -36,6 +36,7 @@ from services.db_functions import (
     criar_sc,
     importar_relatorio_scs,
     importar_solicitacoes_protheus,
+    ingerir_sc7_consumo,
     itens_com_sc_aberta,
     listar_itens_sc,
     listar_recebimentos_sc,
@@ -58,6 +59,7 @@ from services.guarda_chuva import (
     remover_item_gc,
     remover_pedido_gc,
 )
+from services.monitor_cruzamento import preparar_df
 from services.scm_pedido import buscar_pedido
 from services.planejamento import (
     agrupar_por_tipo_material,
@@ -157,12 +159,22 @@ def render() -> None:
 
                         st.markdown("**:material/link: Demais fontes**")
                         sc7 = resultado.get("SC7", {}) or {}
+                        sc7c = resultado.get("SC7_CONSUMO", {}) or {}
                         forn = resultado.get("FORNECEDORES", {}) or {}
                         usr = resultado.get("SCM USERS", {}) or {}
-                        c1, c2, c3 = st.columns(3)
+                        c1, c4, c2, c3 = st.columns(4)
                         c1.metric(
                             ":material/attach_money: Preços SC7",
                             sc7.get("precos_inseridos", 0) if isinstance(sc7, dict) else 0,
+                        )
+                        # v6.5.0 — a mesma aba SC7 também alimenta o consumo por pedido.
+                        c4.metric(
+                            ":material/local_shipping: Pedidos (consumo)",
+                            sc7c.get("pedidos_gravados", 0) if isinstance(sc7c, dict) else 0,
+                            help=f"Novos: {sc7c.get('inseridos', 0)} · "
+                            f"Atualizados: {sc7c.get('atualizados', 0)}"
+                            if isinstance(sc7c, dict)
+                            else None,
                         )
                         c2.metric(
                             ":material/apartment: Fornecedores",
@@ -217,6 +229,8 @@ def render() -> None:
                         st.success(f"Importado: {res_o.get('linhas_importadas', 0)} linhas.")
                     else:
                         st.error(f"Falha: {res_o.get('erro', 'erro')}")
+
+        _render_import_relatorio_compras()
     # ══════════════════════════════════════════════════════════════════════════════
     #   🏢 FORNECEDORES & COTAÇÃO (v2.4.0) — busca material → fornecedores/preços,
     #   melhor fornecedor (menor último preço), lead time por fornecedor e rascunho
@@ -826,6 +840,57 @@ def render() -> None:
 def _gc_estado_busca():
     """Resultado da busca na API entre reruns (prévia → confirmação)."""
     return st.session_state.get("_gc_busca")
+
+
+def _render_import_relatorio_compras():
+    """v6.5.0 — segunda porta de entrada do SC7: o "Relatório de Compras.xlsx" sozinho.
+
+    Fica aqui, e não em Configurações, porque é o mesmo dado da aba de import que já existe
+    — só que num arquivo separado, que o comprador exporta do Protheus com a aba SC7 em
+    outra linha de cabeçalho (0 no arquivo cru, 3 dentro do "Relatório de SCs"). Quem
+    resolve isso é `preparar_df`, que varre abas e as 6 primeiras linhas; sem ele, esta
+    tela precisaria perguntar ao usuário onde está o cabeçalho."""
+    with st.container(border=True):
+        st.markdown("### :material/local_shipping: Importar Relatório de Compras (SC7)")
+        st.caption(
+            "Upload do **Relatório de Compras.xlsx** (aba SC7, dados crus do Protheus). Alimenta o "
+            "**Consumo/Mensal (SC7)** da Ficha 360 e o Mín/Máx sugerido: guarda cada linha de pedido "
+            "com Qtd.Entregue e Saldo. Só pedido **atendido** (saldo zero) entra na conta. "
+            "Reimportar o mesmo arquivo atualiza os saldos e **não duplica** nada. "
+            ":material/schedule: O export cru tem ~1 milhão de linhas (limite do Excel) — **a "
+            "leitura leva alguns minutos**; a gravação é rápida."
+        )
+        arq_sc7 = st.file_uploader(
+            "Arquivo Excel (.xlsx / .xls)", type=["xlsx", "xls"], key="upload_relatorio_compras"
+        )
+        if arq_sc7 and st.button(
+            ":material/sync: Processar Relatório de Compras", width="stretch", type="primary"
+        ):
+            with st.spinner("Lendo a aba SC7 (arquivo grande — pode levar alguns minutos)..."):
+                df_sc7, meta = preparar_df(arq_sc7, "SC7")
+            if df_sc7 is None:
+                st.error(f":material/cancel: {meta.get('erro', 'Falha ao ler o arquivo.')}")
+                return
+            with st.spinner("Gravando pedidos de compra..."):
+                res = ingerir_sc7_consumo(df_sc7, arq_sc7.name)
+            if res.get("erro"):
+                st.error(f":material/cancel: {res['erro']}")
+                return
+            invalidar_leituras()
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric(
+                ":material/description: Linhas lidas",
+                res.get("linhas_lidas", 0),
+                help=f"Linhas em branco descartadas: {res.get('linhas_vazias', 0)} "
+                "(o export cru do Protheus vem com o limite do Excel).",
+            )
+            m2.metric(":material/add: Pedidos novos", res.get("inseridos", 0))
+            m3.metric(":material/sync: Atualizados", res.get("atualizados", 0))
+            m4.metric(":material/block: Ignorados", res.get("ignorados", 0))
+            st.success(
+                f":material/check_circle: {res.get('pedidos_gravados', 0)} pedido(s) gravado(s) "
+                f"a partir da aba **{meta.get('aba')}** (cabeçalho na linha {meta.get('header')})."
+            )
 
 
 def _render_guarda_chuva_controle():

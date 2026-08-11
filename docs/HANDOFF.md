@@ -9,7 +9,46 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 05/08/2026 (v6.4.0 implementada)
+## STATUS ATUAL — atualizado em 10/08/2026 (v6.5.0 · Task 1 implementada)
+
+- **v6.5.0 EM ANDAMENTO — Task 2 commitada (`183fe6e`), Task 1 IMPLEMENTADA e ⏳ aguardando
+  validação no app real. Faltam Task 4 (numeração sequencial) e Task 3 (limpeza do banco).**
+  Plano aprovado em `docs/claude/Sessão 4/Plano Gerado Etapa 0.md`; changelog em
+  `changelog/6.5.0.md`.
+
+  - **Task 1 — Consumo Mensal por PEDIDO DE COMPRA (SC7) substituiu a vida útil do lote.**
+    Tabela nova `consumo_sc7` (aditiva, criada em `criar_banco()`, **sem `_backup_db`** — nova e
+    vazia ao migrar), cálculo em `services/consumo_sc7.py`, card "Consumo/Mensal (SC7)" na Ficha
+    360 e entrada nova no Mín/Máx sugerido. `_vida_util_from_movimentos`,
+    `consumo_por_vida_util` e `_movimentos_item` foram apagados de `services/classificacao.py`
+    junto com os 14 testes do Épico B.
+
+  - **⚠️ O FALLBACK POR SAÍDAS REAIS FOI REMOVIDO EM 11/08/2026, por decisão do Luis.** O plano
+    da Etapa 0 previa três fontes (`sc7` → `scm` → `saidas`); ficaram **duas**, ambas de pedido
+    de compra. Motivo, visto no app: com a `consumo_sc7` ainda vazia, TODO item caía no fallback
+    e o card dizia "Fonte: saídas reais · 12 pedido(s)" para o que eram 12 requisições — ou seja,
+    media consumo em vez de compra, apagando a diferença entre este card e o "Consumo/Mensal"
+    ponderado ao lado. **Sem pedido atendido o card mostra "—"** e o tooltip explica (inclusive
+    quantos pedidos estão a caminho). A mesma regra já valia no Mín/Máx sugerido.
+
+  - **⚠️ A tela de import renderiza a chave `SC7_CONSUMO` explicitamente.** O plano supunha que
+    `controle_sc.py` iterava as chaves do dict de resultados; ela na verdade renderiza chave a
+    chave, então a métrica "Pedidos (consumo)" foi acrescentada à mão.
+
+  - **⚠️ MEDIDO NO ARQUIVO REAL (`Relatório de Compras 10.08.2026.xlsx`), banco temporário:** a
+    planilha crua tem **1.048.569 linhas** (limite do Excel) e só 43.971 com conteúdo. **A
+    leitura pelo openpyxl leva ~135 s e é o gargalo** — a gravação de 39.966 pedidos leva 11 s.
+    A tela avisa no caption e no spinner. Só se resolveria trocando de engine (calamine), que é
+    dependência nova e ficou fora. Resultado da carga: 30.921 pedidos atendidos, 9.045 pendentes,
+    **zero** sem `DT Emissao`; reimportar deu 0 inseridos / 39.966 atualizados.
+
+  - **`services/constants.py::VERSAO` bumpado para `6.5.0`** (fonte única: rodapé da sidebar,
+    `page_title`, log do `criar_banco` e `scripts/release.py`). Havia ficado em 6.4.0 depois da
+    Task 2; `test_v600_refatoracao_ux.py` exige `changelog/6.5.0.md`, que existe.
+
+  - **Sem coluna nova em `inventario` e sem nada persistido do cálculo**: o consumo é derivado
+    na leitura, em **três consultas** (uma por fonte) para a base inteira — logo não envelhece
+    como `consumo_medio_diario` e não tem backfill a refazer quando a fórmula mudar.
 
 - **Branch de trabalho: `feat/v5.0.0`.**
   **Primeiro comando de qualquer sessão:** `git fetch --all --prune` e `git checkout feat/v5.0.0`.
@@ -50,7 +89,9 @@
       (`reenviado_em`) e uma função nova (`atualizar_item_requisicao`), porque até aqui o
       requisitante só sabia *remover* item, não corrigir quantidade.
 
-  - **⚠️ COBERTURA REAL DO ÉPICO B: 20 de 362 itens têm número.** Não é bug — é o histórico de
+  - **⚠️ COBERTURA REAL DO ÉPICO B: 20 de 362 itens têm número.** *(Foi exatamente este número
+    que motivou a troca pelo consumo por pedido na v6.5.0 — o parágrafo abaixo fica como
+    registro do diagnóstico; o cálculo que ele descreve não existe mais.)* Não é bug — é o histórico de
     3,5 meses. Dos **94** itens com recebimento de SC: **20** têm lote fechado (viram número),
     **45** têm só lote vivo (o estoque nunca caiu ao mínimo desde que chegou) e **29** não abriram
     lote (chegou já no/abaixo do mínimo, ou fechou em < 1 dia). O número cresce sozinho conforme os
@@ -132,7 +173,8 @@
     causa é a mesma** — e o próximo passo seria aquecer os imports uma vez no `conftest.py`.
 
   - **O que conferir no app** (roteiro completo na seção "Verificação" do plano da v6.4.0): Ficha
-    360 de item **com recebimento de SC** mostra o card de vida útil e os demais mostram "—";
+    360 de item **com pedido de compra atendido** mostra o card "Consumo/Mensal (SC7)" (o card de
+    vida útil saiu na v6.5.0) e os itens sem histórico mostram "—";
     "Usar mínimo/máximo" grava e a aba em lote **não** mexe em quem não foi marcado; o gestor abre
     "Ver requisição completa", devolve com motivo, o pedido some da fila e aparece em "Devolvidas",
     o requisitante ajusta, reenvia e ele **volta**; desmarcar "mostrar saldo" esconde só na tela do

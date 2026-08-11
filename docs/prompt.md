@@ -1,9 +1,14 @@
 # Backlog / prompt de continuidade — Sistema MRO
 
-> Atualizado em **05/08/2026**, ao planejar a **v6.4.0** (5 demandas do Luis — a planilha MRO,
-> consumo por vida útil, sugestão de Min/Max, gestor rejeita + vê a requisição completa,
-> requisitante sem saldo/imagem, portaria por nome). **Quem implementa é o Claude** em sessão
-> própria; este arquivo + `changelog/6.4.0.md` + `docs/HANDOFF.md` são o handoff.
+> Atualizado em **10/08/2026**, ao implementar a **v6.5.0 / Task 1** (consumo mensal por pedido
+> de compra). O planejamento anterior é de **05/08/2026**, da **v6.4.0** (5 demandas do Luis — a
+> planilha MRO, consumo por vida útil, sugestão de Min/Max, gestor rejeita + vê a requisição
+> completa, requisitante sem saldo/imagem, portaria por nome). **Quem implementa é o Claude** em
+> sessão própria; este arquivo + `changelog/6.5.0.md` + `docs/HANDOFF.md` são o handoff.
+>
+> ⚠️ **O Épico B da v6.4.0 (consumo por vida útil do lote) foi REMOVIDO na v6.5.0** e substituído
+> pelo **consumo por pedido de compra atendido** (SC7). O texto do épico continua abaixo como
+> registro do que foi decidido em 05/08/2026 — não como descrição do sistema atual.
 > A v6.1.0 (Usuários e Login) saiu desta lista — entregue, validada no app real e commitada
 > (`cded88c`); a v6.2.0 (Telas self-service) está commitada (`e33711a`) e aguarda a validação
 > no app real; a v6.3.0 (Fila de aprovação consolidada) está implementada, gate verde, e
@@ -13,7 +18,7 @@
 
 ---
 
-## 🟡 EM VALIDAÇÃO — v6.4.0 · Consumo por vida útil · Min/Max · Gestor · Requisitante · Portaria (Luis, 05/08/2026)
+## 🟡 EM VALIDAÇÃO — v6.4.0 · ~~Consumo por vida útil~~ · Min/Max · Gestor · Requisitante · Portaria (Luis, 05/08/2026)
 
 > **Aberta e IMPLEMENTADA em 05/08/2026**, gate verde (886 testes). Ver `changelog/6.4.0.md` e o
 > STATUS ATUAL do `docs/HANDOFF.md`. Os 5 épicos entraram na ordem B → C → D → E → F, com duas
@@ -36,7 +41,12 @@
 > **A demanda antiga de v6.4.0 (vínculo gestor ↔ requisitante) segue movida para v6.5.0** (seção
 > abaixo).
 
-### Épico B — Consumo mensal por vida útil do lote
+### Épico B — Consumo mensal por vida útil do lote ~~(entregue na v6.4.0)~~ · **REMOVIDO na v6.5.0**
+
+> Substituído pelo **Consumo Mensal por Pedido de Compra (SC7)** — `services/consumo_sc7.py`,
+> tabela `consumo_sc7`, card "Consumo/Mensal (SC7)" na Ficha 360. Motivo: a vida útil media o
+> giro pelo saldo do almoxarifado e só produziu número para **20 de 362 itens**; o pedido
+> atendido mede pela compra que chegou, que é a pergunta do comprador. Ver `changelog/6.5.0.md`.
 
 **Regra (ajustada pelo Luis):** para cada **entrada** (recebimento) de um item, medir quantos
 dias o material durou **desde a data que chegou até a data que bateu o mínimo**

@@ -54,6 +54,16 @@ Inventário Improdutivo*.csv
 # Fonte do `scripts/importar_imagens_planilha.py`; vive ao lado do repo, não dentro.
 Material MRO*.xlsx
 
+# v6.5.0 — exports crus do Protheus/SCM usados nos imports (Relatório de Compras =
+# aba SC7, Solicitações = aba SCM). Trazem pedido, fornecedor, preço unitário,
+# comprador e centro de custo de TODA a empresa, não só do MRO.
+Relatório de Compras*.xlsx
+Relatorio de Compras*.xlsx
+Relatório de SCs*.xlsx
+Relatorio de SCs*.xlsx
+Solicitações*.xlsx
+Solicitacoes*.xlsx
+
 # Vault Obsidian (segundo cérebro). Foi escrito sob a premissa de que era
 # ignorado pelo git; a premissa mudou para sincronizar entre máquinas, sem
 # reauditar o conteúdo. Contém colegas nomeados com cargo, valores em R$ reais da

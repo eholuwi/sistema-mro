@@ -463,8 +463,9 @@ def test_smoke_cadastro_itens_com_aba_minmax(db, make_item):
     assert len(at.tabs) >= 3  # Editar · Novo · Sugestões de Mín/Máx
 
 
-def test_smoke_ficha_360_com_vida_util(db, make_item):
-    """A Ficha ganhou uma 6ª métrica na linha; o smoke pega quebra de layout/atributo."""
+def test_smoke_ficha_360_com_consumo_sc7(db, make_item):
+    """A Ficha ganhou uma 6ª métrica na linha (v6.5.0: "Consumo/Mensal (SC7)", que
+    substituiu a do lote); o smoke pega quebra de layout/atributo."""
     make_item(estoque=100, minimo=10)
     _render("Ficha 360")
 

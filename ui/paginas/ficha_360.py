@@ -21,6 +21,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+from services import consumo_sc7 as C7
 from services.constants import PREVISAO_RUPTURA_SEM_RISCO
 from services.ficha import (
     montar_ficha_360,
@@ -127,6 +128,54 @@ def _render_evolucao_preco(ep):
         config={"displayModeBar": False},
     )
     st.caption("Passe o mouse em cada ponto para ver fornecedor, PO e SC daquela compra.")
+
+
+def _ajuda_consumo_sc7(info, unidade):
+    """Tooltip do card "Consumo/Mensal (SC7)" — uma linha de regra e uma linha por ano.
+
+    Formato pedido pelo Luis em 11/08/2026: ele quer ver a CONTA de cada ano ("10000 ÷ 12 =
+    833/mês"), não um resumo com totais e contagens. A conta explica o número sozinha; o
+    resto era ruído entre ele e a resposta.
+
+    Fora de `_render_ficha_visao_geral` de propósito: é texto puro sobre um dict, a única
+    parte do card que dá para ler e corrigir sem abrir a tela inteira."""
+
+    def _n(valor):
+        return f"{round(valor or 0, 1):g}"
+
+    pendentes = info.get("pendentes") or {} if info else {}
+    aviso = (
+        f"\n\n⚠️ {pendentes['n']} pedido(s) com saldo a receber "
+        f"({_n(pendentes.get('qtd'))} {unidade}) — não entram na conta."
+        if pendentes.get("n")
+        else ""
+    )
+
+    if not info or info.get("consumo_mensal") is None:
+        return (
+            "Sem pedido de compra ATENDIDO (saldo zero) no ano corrente nem no anterior. "
+            "Importe o **Relatório de Compras** (aba SC7) em Controle de SC → Importar. "
+            "Este card mede COMPRA — saída de almoxarifado não entra nele; para isso é o "
+            "Consumo/Mensal ao lado." + aviso
+        )
+
+    linhas = [
+        "Soma da Qtd.Entregue dos pedidos ATENDIDOS (saldo zero) ÷ meses do período. "
+        f"Fonte: {C7.ROTULO_FONTE.get(info.get('origem'), 'SC7')}."
+    ]
+    anterior, atual = info.get("ano_anterior") or {}, info.get("ano_atual") or {}
+    if anterior.get("consumo_mensal") is not None:
+        linhas.append(
+            f"Ano passado ({anterior['ano']}): {_n(anterior['total_entregue'])} ÷ 12 = "
+            f"média de {_n(anterior['consumo_mensal'])} {unidade} por mês"
+        )
+    if atual.get("consumo_mensal") is not None:
+        meses = atual["meses"]
+        periodo = "janeiro" if meses == 1 else f"janeiro a {C7.MESES_EXTENSO[meses - 1]}"
+        linhas.append(
+            f"Ano corrente ({atual['ano']}): {periodo}, média de {_n(atual['consumo_mensal'])} {unidade}/mês"
+        )
+    return "\n\n".join(linhas) + aviso
 
 
 def _render_ficha_visao_geral(ficha):
@@ -288,26 +337,16 @@ def _render_ficha_visao_geral(ficha):
         "já embutidos); meses sem saída contam 0 e a média decai se o item parar. A "
         "seta é a mesma tendência do Consumo/dia.",
     )
-    # v6.4.0 — o consumo pela VIDA ÚTIL do lote, ao lado do ponderado: os dois medem
-    # consumo mensal por caminhos diferentes (mês-calendário × duração do recebimento),
-    # e ver os dois juntos é o ponto — quando divergem muito, o item tem compra
-    # descolada do giro.
-    _vida = (ficha.get("classificacao") or {}).get("vida_util") or {}
-    _cons_lote = _vida.get("consumo_mensal")
-    _min_piso = float(it.get("estoque_minimo") or 0)
+    # v6.5.0 — o consumo pelo PEDIDO DE COMPRA atendido (SC7), ao lado do ponderado: os
+    # dois medem consumo mensal por caminhos diferentes (o que SAIU do almoxarifado × o
+    # que ENTROU comprado), e ver os dois juntos é o ponto — quando divergem muito, o
+    # item tem compra descolada do giro. Substituiu o "Consumo/Mensal (lote)" da v6.4.0.
+    _sc7 = (ficha.get("classificacao") or {}).get("consumo_sc7") or {}
+    _cons_sc7 = _sc7.get("consumo_mensal")
     g6.metric(
-        "Consumo/Mensal (lote)",
-        f"{_g1(_cons_lote)} {un}/mês" if _cons_lote is not None else "—",
-        help=(
-            f"Média de {_vida.get('n_lotes', 0)} lote(s) recebido(s), que duraram "
-            f"{_g1(_vida.get('dias_medio'))} d em média: quantidade recebida ÷ dias até o "
-            f"estoque bater o mínimo ({_g(_min_piso) if _min_piso > 0 else 'zerar — item sem mínimo cadastrado'}) × 30. "
-            f"{_vida.get('n_lotes_vivos', 0)} lote(s) ainda em uso não entram na conta."
-            if _cons_lote is not None
-            else "Sem lote fechado para medir: só recebimento por SC abre lote, e ele precisa "
-            "ter durado ao menos 1 dia acima do mínimo. Ajuste de inventário e entrada "
-            "avulsa não contam."
-        ),
+        "Consumo/Mensal (SC7)",
+        f"{_g1(_cons_sc7)} {un}/mês" if _cons_sc7 is not None else "—",
+        help=_ajuda_consumo_sc7(_sc7, un),
     )
     g4.metric(
         "Giro anual",
