@@ -5,16 +5,19 @@ no Streamlit (`key_as_main_identity`), o que tira `options`/`index`/`value` do c
 id do widget. Resultado: `index=`/`value=` só valiam na 1ª renderização e, ao trocar de
 item, o formulário continuava exibindo — e GRAVANDO — os dados do item anterior.
 
-Não é teste cosmético: o último caso prova que os valores do item A não vazam para o
+Não é teste cosmético: o segundo caso prova que os valores do item A não vazam para o
 item B no banco. As keys continuam existindo (as duas abas da tela têm widgets de mesmo
-rótulo/opções e sem key colidiriam em `StreamlitDuplicateElementId`); quem devolve a
-identidade ao item é `resetar_campos_ao_trocar`.
+rótulo/opções e sem key colidiriam em `StreamlitDuplicateElementId`) — o que mudou na
+**v6.5.1** é que elas passaram a carregar o id do item (`k_ed`), em vez de serem limpas
+no `session_state` a cada troca. Ver o último teste: a limpeza tinha uma corrida que só
+aparecia no navegador.
 """
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
 import database
+from ui.paginas.gerenciar_itens import k_ed
 
 SCRIPT = "from ui.router import render_pagina\nrender_pagina('Cadastro de Itens')\n"
 
@@ -25,7 +28,7 @@ ROTULO_B = "PN-B — Item B"
 @pytest.fixture
 def dois_itens(db, make_item):
     """Dois itens com TODOS os campos editáveis diferentes entre si."""
-    make_item(
+    id_a = make_item(
         part_number="PN-A",
         nome="Item A",
         unidade="UN",
@@ -34,7 +37,7 @@ def dois_itens(db, make_item):
         lead=7,
         minimo=10,
     )
-    make_item(
+    id_b = make_item(
         part_number="PN-B",
         nome="Item B",
         unidade="CX",
@@ -43,7 +46,7 @@ def dois_itens(db, make_item):
         lead=45,
         minimo=99,
     )
-    return db
+    return id_a, id_b
 
 
 def _selecionar(at, rotulo):
@@ -52,24 +55,53 @@ def _selecionar(at, rotulo):
 
 
 def test_trocar_de_item_atualiza_todos_os_campos(dois_itens):
+    id_a, id_b = dois_itens
     at = AppTest.from_string(SCRIPT)
     at.run()
 
     _selecionar(at, ROTULO_A)
-    assert at.selectbox(key="ed_un").value == "UN"
-    assert at.selectbox(key="ed_tipo").value == "Spare Parts"
-    assert at.selectbox(key="ed_imp").value == "Importante"
-    assert at.number_input(key="ed_lead").value == 7
-    assert at.number_input(key="ed_min").value == 10.0
+    assert at.selectbox(key=k_ed("un", id_a)).value == "UN"
+    assert at.selectbox(key=k_ed("tipo", id_a)).value == "Spare Parts"
+    assert at.selectbox(key=k_ed("imp", id_a)).value == "Importante"
+    assert at.number_input(key=k_ed("lead", id_a)).value == 7
+    assert at.number_input(key=k_ed("min", id_a)).value == 10.0
 
     # A troca é o ponto do bug: antes da correção, tudo abaixo continuava mostrando A.
     _selecionar(at, ROTULO_B)
     assert not at.exception, [e.value for e in at.exception]
-    assert at.selectbox(key="ed_un").value == "CX"
-    assert at.selectbox(key="ed_tipo").value == "Consumivel"
-    assert at.selectbox(key="ed_imp").value == "Admin"
-    assert at.number_input(key="ed_lead").value == 45
-    assert at.number_input(key="ed_min").value == 99.0
+    assert at.selectbox(key=k_ed("un", id_b)).value == "CX"
+    assert at.selectbox(key=k_ed("tipo", id_b)).value == "Consumivel"
+    assert at.selectbox(key=k_ed("imp", id_b)).value == "Admin"
+    assert at.number_input(key=k_ed("lead", id_b)).value == 45
+    assert at.number_input(key=k_ed("min", id_b)).value == 99.0
+
+
+def test_valor_do_item_anterior_nao_alcanca_o_widget_do_item_novo(dois_itens):
+    """v6.5.1 — a corrida que fazia o formulário travar no item anterior no navegador.
+
+    A limpeza por `session_state` acontecia ANTES dos widgets serem desenhados; se a
+    execução fosse cancelada no meio (o Streamlit cancela a que está em curso quando
+    chega uma nova interação, e esta tela redesenha as 3 abas a cada rerun), a trava
+    "item atual" já dizia "não mudou" e os valores do item anterior voltavam do
+    navegador — só um F5 resolvia.
+
+    O teste simula o estado sujo que sobrava: valores do item A presentes no
+    `session_state` no momento em que o item B é renderizado. Com a key carregando o id,
+    eles pertencem a OUTRO widget e não têm como contaminar o formulário de B.
+    """
+    id_a, id_b = dois_itens
+    at = AppTest.from_string(SCRIPT)
+    at.run()
+    _selecionar(at, ROTULO_A)
+
+    at.session_state[k_ed("un", id_a)] = "UN"
+    at.session_state[k_ed("tipo", id_a)] = "Spare Parts"
+    at.session_state[k_ed("min", id_a)] = 10.0
+    _selecionar(at, ROTULO_B)
+
+    assert at.selectbox(key=k_ed("un", id_b)).value == "CX"
+    assert at.selectbox(key=k_ed("tipo", id_b)).value == "Consumivel"
+    assert at.number_input(key=k_ed("min", id_b)).value == 99.0
 
 
 def test_salvar_apos_trocar_nao_vaza_valores_do_item_anterior(dois_itens):

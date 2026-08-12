@@ -9,11 +9,38 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 11/08/2026 (v6.5.0 · Task 3 aplicada, aguardando commit)
+## STATUS ATUAL — atualizado em 12/08/2026 (v6.5.1 implementada, aguardando validação no app)
 
-- **v6.5.0 — Tasks 2, 1 e 4 commitadas e VALIDADAS NO APP REAL pelo Luis (11/08/2026). Task 3
-  (limpeza do banco) IMPLEMENTADA E APLICADA no `mro.db` real em 11/08/2026, gate verde (954
-  testes) — falta só a validação no app real e o OK explícito do Luis para commitar.**
+- **v6.5.1 — Tipos de Material e Unidades administráveis (Etapa 5 / Task 5). IMPLEMENTADA, gate
+  verde — falta a validação no app real e o OK explícito do Luis para commitar.** Changelog em
+  `changelog/6.5.1.md`; espec em `docs/claude/Sessão 4/`.
+
+  - **Os dois campos saíram de `constants.py` e viraram listas mestras** na tabela `listas`
+    (que já existia) — Configurações → Listas ganhou as abas "Tipos de Material" e "Unidades".
+    **Sem schema novo, sem `_migrar()`, sem `_backup_db`**: é mudança de dados e de leitura.
+  - **Seed LAZY e de uma vez só** (`_semear_lista_inventario`): na primeira leitura a lista nasce
+    com o `DISTINCT` do `inventario` **preservando o caso** ("Spare Parts"), ou com as constantes
+    se o banco não tiver inventário. Roda só quando não há NENHUMA linha do tipo (contando
+    `ativo=0`) — assim não ressuscita o que o admin removeu.
+  - **⚠️ A armadilha soft-delete + `UNIQUE(tipo,valor)` é real e está desviada.** Remover e
+    re-adicionar o mesmo valor por `INSERT` estoura `IntegrityError`; por isso
+    `adicionar_valor_lista_txt` **reativa** (`ativo=1`) em vez de inserir. `adicionar_valor_lista`
+    (com `.upper()`) segue intacto para as outras cinco listas.
+  - **Cadastro de Itens é guiado, não engessado:** opção "➕ Digitar novo…" nas duas abas, e o
+    valor digitado só entra na lista **depois** que o item foi salvo. `inventario` continua texto
+    livre; `opcoes_com_atual` preserva item legado fora da lista.
+  - **`VERSAO` bumpada para `6.5.1`** — `test_v600_refatoracao_ux.py` exige o
+    `changelog/6.5.1.md` correspondente.
+
+  - **⚠️ BUG CORRIGIDO NA MESMA RELEASE, achado pelo Luis no app real:** na aba Editar Item
+    Existente, trocar de item mantinha os campos do primeiro item até um F5. Era a corrida do
+    `resetar_campos_ao_trocar` (detalhe na seção de armadilhas de Streamlit, abaixo). As keys
+    dos widgets de edição passaram a carregar o id do item (`gerenciar_itens.k_ed`), `CAMPOS_EDICAO`
+    deixou de existir e o `st.stop()` da validação virou `if/else`. **A suíte estava verde com o
+    bug vivo** — `AppTest` não cancela execução de script, então esse defeito não é detectável
+    pelo gate.
+
+- **v6.5.0 — as 4 Tasks estão COMMITADAS e validadas no app real pelo Luis (11/08/2026).**
   Plano aprovado em `docs/claude/Sessão 4/Plano Gerado Etapa 0.md`; changelog em
   `changelog/6.5.0.md`.
 
@@ -462,8 +489,18 @@ de banco estão no `CLAUDE.md`; estas são as de domínio e de Streamlit.
   ela vira a **identidade principal** do widget e `options`/`index`/`value` saem do cálculo do id
   (`key_as_main_identity`, `streamlit/elements/lib/utils.py:232-243`). `index=`/`value=` só valem na
   1ª renderização. Em tela do tipo "escolhe item → mostra campos do item" isso faz o formulário
-  exibir **e gravar** os dados do item anterior. Remédio: `resetar_campos_ao_trocar`
-  (`ui/componentes/selecao.py`). **Sintoma clássico: "troquei o item e a tela não mudou".**
+  exibir **e gravar** os dados do item anterior. **Sintoma clássico: "troquei o item e a tela não
+  mudou; só um F5 resolve".**
+- **⚠️ Limpar as keys no `session_state` ao trocar de item NÃO basta — tem corrida (v6.5.1).**
+  Era o remédio da v5.9.0 (`resetar_campos_ao_trocar`) e passava nos testes, mas a limpeza e a
+  trava "item atual" acontecem **antes** dos widgets serem desenhados, e o Streamlit **cancela a
+  execução em curso** quando chega uma nova interação. Se a execução morre nessa janela — larga
+  no Cadastro de Itens, que redesenha as 3 abas a cada rerun — a trava já diz "não mudou", o
+  navegador devolve os valores antigos e o formulário fica preso no item anterior. **Isso não
+  reproduz em `AppTest`** (não há cancelamento de script lá): a suíte fica verde e o bug só
+  aparece no navegador. Remédio definitivo: **pendurar o id do item na key**
+  (`gerenciar_itens.k_ed` → `ed_<campo>_<id>`) — item diferente é widget diferente, e nenhuma
+  execução interrompida consegue ligar o valor de um item ao formulário de outro.
 - **Tirar o `key=` não é a saída óbvia:** sem key a identidade passa a incluir todos os kwargs, e
   dois widgets de mesmo rótulo/opções na mesma página (típico de abas espelhadas "Cadastrar" ×
   "Editar") colidem em **`StreamlitDuplicateElementId`** — a página inteira cai. `st.tabs` **não**

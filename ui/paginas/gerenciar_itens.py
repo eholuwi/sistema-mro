@@ -20,14 +20,14 @@ import pandas as pd
 import streamlit as st
 
 from services.constants import (
-    UNIDADES,
-    TIPOS,
     IMPORTANCIAS,
     FATOR_CONVERSAO_PADRAO,
     UNIDADES_COMPRA_SUGERIDAS,
 )
 from services.db_functions import (
     listar_valores,
+    listar_valores_material,
+    adicionar_valor_lista_txt,
     listar_inventario,
     salvar_item,
     atualizar_item_inventario,
@@ -41,34 +41,81 @@ from ui.formatos import fmt
 from ui.componentes.selecao import (
     sel_material,
     opcoes_com_atual,
-    resetar_campos_ao_trocar,
     rotulo_item,
 )
 
-# Widgets do formulário de edição (aba "Editar Item Existente"). A key é fixa — as duas
-# abas têm widgets de mesmo rótulo/opções e sem key colidiriam em id — então a troca de
-# item precisa limpar estes campos explicitamente. Ver `resetar_campos_ao_trocar`.
-CAMPOS_EDICAO = (
-    "ed_desc",
-    "ed_un",
-    "ed_tipo",
-    "ed_imp",
-    "ed_loc",
-    "ed_loc2",
-    "ed_caixa",
-    "ed_lead",
-    "ed_min",
-    "ed_max",
-    "ed_tem_conv",  # v6.0.0 — o checkbox precisa reler o item novo ao trocar de item
-    "ed_uc",
-    "ed_fator",
-    "ed_saldo_req",  # v6.4.0 — idem: sem isto, a flag do item anterior seria gravada no novo
-)
+
+def k_ed(nome, item_id):
+    """Key dos widgets da aba "Editar Item Existente", AMARRADA ao item (v6.5.1).
+
+    Os widgets precisam de `key` (as duas abas da tela têm campos de mesmo rótulo e
+    opções; sem key colidiriam em `StreamlitDuplicateElementId`), e uma key FIXA faz
+    o Streamlit tratá-la como identidade principal do widget — `index=`/`value=` só
+    valem na 1ª renderização, e trocar de item continuava exibindo (e gravando) os
+    dados do item anterior.
+
+    Até a v6.5.1 o remédio era limpar as keys no `session_state` ao trocar de item
+    (`resetar_campos_ao_trocar`). Funciona, mas tem uma corrida que só aparece no
+    navegador: a limpeza e a trava "item atual" acontecem ANTES dos widgets serem
+    desenhados, e o Streamlit **cancela a execução em curso** quando chega uma nova
+    interação — nesta tela, que redesenha as 3 abas a cada rerun, a janela é larga. Se
+    a execução morre depois da trava e antes dos widgets, o rerun seguinte devolve os
+    valores que o navegador ainda tem, a trava já diz "não mudou", e o formulário fica
+    preso no item anterior até um F5.
+
+    Pendurar o id do item na key resolve pela raiz: item diferente é WIDGET diferente,
+    nasce com o `value=`/`index=` do item certo, e nenhuma execução interrompida pode
+    ligar o valor de um item ao formulário de outro."""
+    return f"ed_{nome}_{item_id}"
+
 
 # v6.0.0 — a conversão de unidades passou a ficar atrás de um checkbox nas DUAS abas
 # (Novo e Editar). Rótulo único para as duas (DRY) e o predicado que decide se o
 # checkbox nasce marcado na edição.
 LABEL_CONVERSAO = "Este material é comprado em uma unidade diferente da unidade de estoque"
+
+# v6.5.1 — Unidade e Tipo saíram das constantes e viraram listas mestras editáveis em
+# Configurações → Listas. O cadastro passa a ser guiado por elas, mas sem perder a
+# liberdade de sempre: quem precisa de um valor que ainda não existe digita na hora, e
+# ele vira opção para os próximos cadastros. `inventario` continua sendo texto livre.
+OPCAO_NOVO = "➕ Digitar novo…"
+LABEL_NOVO = {"tipo_material": "Novo tipo / categoria", "unidade": "Nova unidade"}
+
+
+def _select_lista_material(rotulo, tipo_lista, atual=None, key=None):
+    """Selectbox da lista mestra + opção de digitar um valor novo.
+
+    Devolve o valor escolhido (ou o digitado, já sem espaços nas pontas), ou "" se o
+    usuário escolheu digitar e não digitou nada — quem chama valida antes de salvar.
+    O valor novo NÃO é gravado na lista aqui: só no salvamento do item, para o que foi
+    digitado e abandonado não virar opção. `opcoes_com_atual` mantém visível o valor do
+    item que está fora da lista (item legado, importação antiga)."""
+    opcoes = opcoes_com_atual(listar_valores_material(tipo_lista), atual)
+    escolha = st.selectbox(
+        rotulo,
+        opcoes + [OPCAO_NOVO],
+        index=opcoes.index(atual) if atual in opcoes else 0,
+        key=key,
+    )
+    if escolha == OPCAO_NOVO:
+        digitado = st.text_input(
+            LABEL_NOVO[tipo_lista],
+            key=f"{key}_novo",
+            placeholder="Digite e salve o item — vira opção para os próximos.",
+        )
+        return (digitado or "").strip()
+    return escolha
+
+
+def _persistir_valor_novo(tipo_lista, valor):
+    """Grava na lista mestra o valor digitado no cadastro, se ainda não estiver lá.
+    Chamado só DEPOIS que o item foi salvo com sucesso."""
+    valor = (valor or "").strip()
+    if not valor:
+        return
+    atuais = [v.upper() for v in listar_valores_material(tipo_lista)]
+    if valor.upper() not in atuais:
+        adicionar_valor_lista_txt(tipo_lista, valor)
 
 
 def tem_conversao(item):
@@ -236,8 +283,8 @@ def render() -> None:
                 desc_novo = st.text_area(
                     "Observação", placeholder="Informações adicionais sobre o item", height=80
                 )
-                un_novo = st.selectbox("Unidade", UNIDADES, index=0)
-                tipo_novo = st.selectbox("Tipo / Categoria", TIPOS, index=0)
+                un_novo = _select_lista_material("Unidade", "unidade", key="novo_un")
+                tipo_novo = _select_lista_material("Tipo / Categoria", "tipo_material", key="novo_tipo")
 
             with c2:
                 imp_novo = st.selectbox("Importância", IMPORTANCIAS, index=0)
@@ -287,6 +334,9 @@ def render() -> None:
             if st.button(":material/save: Salvar Novo Item", type="primary", width="stretch"):
                 if not pn_novo or not nome_novo:
                     st.error("Preencha Part Number e Nome.")
+                elif not un_novo or not tipo_novo:
+                    # "Digitar novo…" escolhido e campo em branco.
+                    st.error("Informe a unidade e o tipo / categoria do item.")
                 else:
                     # Verificar duplicidade
                     itens_existentes = listar_inventario()
@@ -312,6 +362,8 @@ def render() -> None:
                             ),
                         )
                         if ok:
+                            _persistir_valor_novo("unidade", un_novo)
+                            _persistir_valor_novo("tipo_material", tipo_novo)
                             invalidar_leituras()
                             st.success(msg)
                             time.sleep(1)
@@ -325,10 +377,10 @@ def render() -> None:
             st.subheader("Selecionar Item para Edição")
             _, item_sel, _ = sel_material("Busque pelo PN ou Nome", "sel_edit_item")
 
-            # Trocou de item → os campos abaixo precisam voltar a ler o item novo.
-            resetar_campos_ao_trocar("ed_item_atual", item_sel["id"] if item_sel else None, CAMPOS_EDICAO)
-
             if item_sel:
+                # Todo widget desta aba tem a key amarrada ao item (ver `k_ed`): é o que
+                # faz o formulário acompanhar a troca de item sem depender de limpeza.
+                iid = item_sel["id"]
                 st.info(f"**Editando:** `{item_sel['part_number']} — {item_sel['nome_item']}`")
                 if item_sel.get("unidade_divergente"):
                     st.warning(
@@ -337,28 +389,22 @@ def render() -> None:
                         "o recebimento converta corretamente."
                     )
                 ed_desc = st.text_area(
-                    "Observação", value=item_sel.get("descricao", ""), height=70, key="ed_desc"
+                    "Observação", value=item_sel.get("descricao", ""), height=70, key=k_ed("desc", iid)
                 )
 
                 st.markdown("---")
 
                 c1, c2, c3 = st.columns(3)
-                tipos_opts = opcoes_com_atual(TIPOS, item_sel.get("tipo_material"))
                 locais_opts = listar_valores("local") or ["Geral"]
                 with c1:
-                    ed_un = st.selectbox(
-                        "Unidade",
-                        UNIDADES,
-                        index=UNIDADES.index(item_sel["unidade"]) if item_sel["unidade"] in UNIDADES else 0,
-                        key="ed_un",
+                    ed_un = _select_lista_material(
+                        "Unidade", "unidade", atual=item_sel.get("unidade"), key=k_ed("un", iid)
                     )
-                    ed_tipo = st.selectbox(
+                    ed_tipo = _select_lista_material(
                         "Tipo / Categoria",
-                        tipos_opts,
-                        index=tipos_opts.index(item_sel["tipo_material"])
-                        if item_sel.get("tipo_material") in tipos_opts
-                        else 0,
-                        key="ed_tipo",
+                        "tipo_material",
+                        atual=item_sel.get("tipo_material"),
+                        key=k_ed("tipo", iid),
                     )
                     ed_imp = st.selectbox(
                         "Importância",
@@ -366,7 +412,7 @@ def render() -> None:
                         index=IMPORTANCIAS.index(item_sel["importancia"])
                         if item_sel["importancia"] in IMPORTANCIAS
                         else 0,
-                        key="ed_imp",
+                        key=k_ed("imp", iid),
                     )
 
                 with c2:
@@ -376,7 +422,7 @@ def render() -> None:
                         index=locais_opts.index(item_sel.get("local_armazenagem", "Geral"))
                         if item_sel.get("local_armazenagem") in locais_opts
                         else 0,
-                        key="ed_loc",
+                        key=k_ed("loc", iid),
                     )
                     # v4.5.6 — 2ª locação (opcional) editável aqui, além da Contagem Física.
                     _op_loc2 = [""] + locais_opts
@@ -387,7 +433,7 @@ def render() -> None:
                         "Localidade (2ª)",
                         _op_loc2,
                         index=_op_loc2.index(_l2_atual) if _l2_atual in _op_loc2 else 0,
-                        key="ed_loc2",
+                        key=k_ed("loc2", iid),
                         help="2º ponto de armazenagem do mesmo item (opcional). Deixe em branco se não houver.",
                     )
                     ed_caixa = st.selectbox(
@@ -396,13 +442,13 @@ def render() -> None:
                         index=locais_opts.index(item_sel.get("caixa_identificacao", "Geral"))
                         if item_sel.get("caixa_identificacao") in locais_opts
                         else 0,
-                        key="ed_caixa",
+                        key=k_ed("caixa", iid),
                     )
                     ed_lead = st.number_input(
                         "Lead Time (Dias)",
                         min_value=0,
                         value=int(item_sel.get("lead_time_dias") or 0),
-                        key="ed_lead",
+                        key=k_ed("lead", iid),
                     )
 
                 with c3:
@@ -410,13 +456,13 @@ def render() -> None:
                         "Estoque Mínimo (30 dias)",
                         min_value=0.0,
                         value=float(item_sel.get("estoque_minimo") or 0),
-                        key="ed_min",
+                        key=k_ed("min", iid),
                     )
                     ed_max = st.number_input(
                         "Estoque Máximo (60 dias)",
                         min_value=0.0,
                         value=float(item_sel.get("estoque_maximo") or 0),
-                        key="ed_max",
+                        key=k_ed("max", iid),
                         help="0 = usa o cálculo automático (Mínimo × 2).",
                     )
                     # v3.7.0: Estoque de Segurança desativado — o buffer virou o próprio
@@ -434,7 +480,7 @@ def render() -> None:
                             if item_sel.get("mostrar_saldo_requisitante") is not None
                             else 1
                         ),
-                        key="ed_saldo_req",
+                        key=k_ed("saldo_req", iid),
                         help="Desmarque para que o requisitante peça sem ver o estoque atual "
                         "deste material. Ele continua conseguindo pedir; a conferência do "
                         "saldo passa a ser do almoxarifado, na separação.",
@@ -462,7 +508,7 @@ def render() -> None:
                 ed_tem_conv = st.checkbox(
                     LABEL_CONVERSAO,
                     value=tem_conversao(item_sel),
-                    key="ed_tem_conv",
+                    key=k_ed("tem_conv", iid),
                     help="Desmarque para voltar ao padrão (compra e estoque na mesma "
                     "unidade, fator 1). Marque para definir a unidade de compra e o fator.",
                 )
@@ -472,7 +518,7 @@ def render() -> None:
                     ed_uc = cvc1.text_input(
                         "Unidade de Compra",
                         value=_def_uc,
-                        key="ed_uc",
+                        key=k_ed("uc", iid),
                         help="Unidade em que o fornecedor vende (L, KG, BB, par…). "
                         f"Sugestões: {', '.join(UNIDADES_COMPRA_SUGERIDAS[:10])}…",
                     )
@@ -481,7 +527,7 @@ def render() -> None:
                         min_value=0.0,
                         value=float(_def_fator),
                         step=1.0,
-                        key="ed_fator",
+                        key=k_ed("fator", iid),
                         help="Quantas unidades de COMPRA cabem em 1 unidade de ESTOQUE. "
                         "Ex.: 1 GL = 5 L → fator 5. Fator 1 = mesma unidade (sem conversão).",
                     )
@@ -501,31 +547,39 @@ def render() -> None:
                     )
 
                 if st.button(":material/check_circle: Atualizar Item", type="primary", width="stretch"):
-                    dados_edicao = {
-                        "descricao": ed_desc,
-                        "unidade": ed_un,
-                        "tipo_material": ed_tipo,
-                        "importancia": ed_imp,
-                        "local_armazenagem": ed_loc,
-                        "local_armazenagem_2": (ed_loc2 or "").strip(),
-                        "caixa_identificacao": ed_caixa,
-                        "lead_time_dias": ed_lead,
-                        "estoque_minimo": ed_min,
-                        "estoque_maximo": ed_max,
-                        "unidade_compra": (ed_uc or "").strip() or None,
-                        "fator_conversao": (
-                            ed_fator if (ed_tem_conv and ed_fator > 0) else FATOR_CONVERSAO_PADRAO
-                        ),
-                        "mostrar_saldo_requisitante": int(ed_saldo_req),
-                    }
-                    ok, msg = atualizar_item_inventario(item_sel["id"], dados_edicao)
-                    if ok:
-                        invalidar_leituras()
-                        st.success(msg)
-                        time.sleep(1)
-                        st.rerun()
+                    # "Digitar novo…" escolhido e campo em branco. Erro simples: `st.stop()`
+                    # aqui abortaria o resto da página (troca de PN, histórico, aba Mín/Máx)
+                    # e deixaria a tela pela metade até um F5.
+                    if not ed_un or not ed_tipo:
+                        st.error("Informe a unidade e o tipo / categoria do item.")
                     else:
-                        st.error(msg)
+                        dados_edicao = {
+                            "descricao": ed_desc,
+                            "unidade": ed_un,
+                            "tipo_material": ed_tipo,
+                            "importancia": ed_imp,
+                            "local_armazenagem": ed_loc,
+                            "local_armazenagem_2": (ed_loc2 or "").strip(),
+                            "caixa_identificacao": ed_caixa,
+                            "lead_time_dias": ed_lead,
+                            "estoque_minimo": ed_min,
+                            "estoque_maximo": ed_max,
+                            "unidade_compra": (ed_uc or "").strip() or None,
+                            "fator_conversao": (
+                                ed_fator if (ed_tem_conv and ed_fator > 0) else FATOR_CONVERSAO_PADRAO
+                            ),
+                            "mostrar_saldo_requisitante": int(ed_saldo_req),
+                        }
+                        ok, msg = atualizar_item_inventario(item_sel["id"], dados_edicao)
+                        if ok:
+                            _persistir_valor_novo("unidade", ed_un)
+                            _persistir_valor_novo("tipo_material", ed_tipo)
+                            invalidar_leituras()
+                            st.success(msg)
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error(msg)
 
                 # ── Lead Time: cadastrado vs calculado (sugestão) — v2.2.1 ──────
                 _lt_calc = item_sel.get("lead_time_calculado")
@@ -603,12 +657,12 @@ def render() -> None:
                 )
                 cpn1, cpn2 = st.columns([1, 1])
                 novo_pn = cpn1.text_input(
-                    "Novo Part Number", key="pn_novo", placeholder=item_sel["part_number"]
+                    "Novo Part Number", key=k_ed("pn_novo", iid), placeholder=item_sel["part_number"]
                 )
                 motivo_pn = cpn2.text_input(
-                    "Motivo da alteração", key="pn_motivo", placeholder="Ex: padronização Protheus"
+                    "Motivo da alteração", key=k_ed("pn_motivo", iid), placeholder="Ex: padronização Protheus"
                 )
-                confirma_pn = st.checkbox("Confirmo a alteração do Part Number", key="pn_confirma")
+                confirma_pn = st.checkbox("Confirmo a alteração do Part Number", key=k_ed("pn_confirma", iid))
                 if st.button(":material/sync: Alterar Part Number", key="btn_alterar_pn", width="stretch"):
                     if not confirma_pn:
                         st.warning("Marque a confirmação para prosseguir.")

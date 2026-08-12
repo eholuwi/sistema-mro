@@ -21,7 +21,10 @@ import streamlit as st
 from services.db_functions import (
     importar_inventario_neidson,
     listar_valores,
+    listar_valores_material,
     adicionar_valor_lista,
+    adicionar_valor_lista_txt,
+    contar_itens_com_valor,
     remover_valor_lista,
     sincronizar_fornecedores_lista,
     listar_solicitantes_mro,
@@ -470,12 +473,26 @@ LISTAS_CONFIG = {
     "fornecedor": ":material/factory: Fornecedores",
     "autorizador": ":material/key: Tipos de Autorizador",
     "setor": ":material/apartment: Setores Solicitantes",  # Adicionado setor se necessário
+    # v6.5.1 — tipos e unidades do material mudam com frequência; viraram listas
+    # administráveis em vez de constantes hardcoded em `constants.py`.
+    "tipo_material": ":material/category: Tipos de Material",
+    "unidade": ":material/straighten: Unidades",
+}
+
+# Listas cujo valor é texto de cadastro, não código: preservam o caso digitado
+# ("Spare Parts") e são semeadas com o que já está em uso no `inventario`. As demais
+# seguem em maiúsculas (`adicionar_valor_lista`). O valor é o nome no singular, para
+# as mensagens da tela saírem em português correto.
+LISTAS_TEXTO_LIVRE = {
+    "tipo_material": "tipo de material",
+    "unidade": "unidade",
 }
 
 
 def _secao_listas_mestras() -> None:
-    """As 5 listas mestras. v6.0.0: agrupadas numa aba só, com sub-navegação por lista —
-    cinco abas de 1º nível para o mesmo tipo de coisa era o oposto de simplificar."""
+    """As listas mestras. v6.0.0: agrupadas numa aba só, com sub-navegação por lista —
+    uma aba de 1º nível por lista, para o mesmo tipo de coisa, era o oposto de simplificar.
+    v6.5.1: entraram Tipos de Material e Unidades (antes constantes de `constants.py`)."""
     sub = st.tabs(list(LISTAS_CONFIG.values()))
     for aba, (tipo_lista, titulo) in zip(sub, LISTAS_CONFIG.items()):
         with aba:
@@ -484,11 +501,16 @@ def _secao_listas_mestras() -> None:
 
 def _lista_mestra(tipo_lista, titulo) -> None:
     """Grade + remoção + adição de UMA lista mestra (corpo original do laço)."""
+    texto_livre = tipo_lista in LISTAS_TEXTO_LIVRE
     with st.container(border=True):
         st.subheader(titulo)
 
         # 1. Visualização da Lista Atual (Grid)
-        valores = listar_valores(tipo_lista)
+        # `fallback=False`: aqui o admin precisa ver a lista como ela está (inclusive
+        # vazia); quem mostra as constantes como rede de segurança é o Cadastro de Itens.
+        valores = (
+            listar_valores_material(tipo_lista, fallback=False) if texto_livre else listar_valores(tipo_lista)
+        )
 
         if valores:
             # Cria colunas dinâmicas (4 por linha)
@@ -500,9 +522,24 @@ def _lista_mestra(tipo_lista, titulo) -> None:
                         c_txt, c_btn = st.columns([3, 1])
                         c_txt.markdown(f"**{val}**")
                         if c_btn.button(":material/close:", key=f"rm_{tipo_lista}_{i}", help="Remover"):
+                            # Remoção é soft-delete: o item que já usa o valor continua
+                            # com o texto gravado. A contagem só avisa o tamanho do efeito.
+                            em_uso = contar_itens_com_valor(tipo_lista, val) if texto_livre else 0
                             remover_valor_lista(tipo_lista, val)
                             invalidar_leituras()
+                            if em_uso:
+                                st.warning(
+                                    f"'{val}' removido da lista. {em_uso} item(ns) do inventário ainda "
+                                    "usam este valor — eles continuam como estão, o valor é que deixa "
+                                    "de aparecer para novos cadastros."
+                                )
+                                time.sleep(2.0)
                             st.rerun()
+        elif texto_livre:
+            st.info(
+                f"Nenhuma opção de {LISTAS_TEXTO_LIVRE[tipo_lista]} na lista — o Cadastro de Itens "
+                "volta a sugerir a lista padrão do sistema até você cadastrar alguma aqui."
+            )
         else:
             st.info(f"Nenhum {titulo.split(' ')[-1].lower()} cadastrado.")
 
@@ -527,14 +564,20 @@ def _lista_mestra(tipo_lista, titulo) -> None:
             c_input, c_btn = st.columns([3, 1])
             novo_valor = c_input.text_input(
                 f"Adicionar novo {titulo.split(' ', 1)[1].lower()}",
-                placeholder="Digite e pressione Adicionar...",
+                placeholder=(
+                    f"Digite {'o novo' if tipo_lista == 'tipo_material' else 'a nova'} "
+                    f"{LISTAS_TEXTO_LIVRE[tipo_lista]} e pressione Adicionar..."
+                    if texto_livre
+                    else "Digite e pressione Adicionar..."
+                ),
                 label_visibility="collapsed",
             )
             submitted = c_btn.form_submit_button(":material/add: Adicionar", width="stretch")
 
             if submitted:
                 if novo_valor.strip():
-                    ok, msg = adicionar_valor_lista(tipo_lista, novo_valor.strip())
+                    adicionar = adicionar_valor_lista_txt if texto_livre else adicionar_valor_lista
+                    ok, msg = adicionar(tipo_lista, novo_valor.strip())
                     if ok:
                         invalidar_leituras()
                         st.success(msg)

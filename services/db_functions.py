@@ -24,6 +24,8 @@ from services.constants import (
     CC_INVENTARIO,
     CC_EDICAO,
     extrair_fator_embalagem,
+    TIPOS,
+    UNIDADES,
 )
 from services import consumo_sc7 as CS7
 from collections import Counter
@@ -232,6 +234,110 @@ def remover_valor_lista(tipo, valor):
         return True, f"'{valor}' removido."
     except Exception as e:
         return False, str(e)
+
+
+# ── v6.5.1 — Tipos de Material e Unidades administráveis ──────────────────────
+# Os dois campos são TEXT livre no `inventario` (sem CHECK) e as opções vinham de
+# constantes hardcoded. Passam a ser listas mestras editáveis em Configurações,
+# reusando a tabela `listas` — sem schema novo. Diferença para as outras 5 listas:
+# aqui o CASO importa ("Spare Parts" não pode virar "SPARE PARTS"), por isso a
+# adição usa `adicionar_valor_lista_txt` e não `adicionar_valor_lista`.
+# tipo da lista -> (coluna do inventario, fallback de constants.py)
+_LISTAS_INVENTARIO = {
+    "tipo_material": ("tipo_material", TIPOS),
+    "unidade": ("unidade", UNIDADES),
+}
+
+
+def _semear_lista_inventario(conn, tipo):
+    """Semeia UMA vez a lista com o que já está em uso no `inventario`.
+
+    Só roda quando não existe NENHUMA linha do tipo (contando as `ativo=0`): assim é
+    idempotente e nunca ressuscita um valor que o admin removeu de propósito. Insere
+    preservando o caso — passar por `adicionar_valor_lista` (que faz `.upper()`)
+    destruiria "Spare Parts". Banco sem inventário (instalação nova) cai nas
+    constantes, para a lista não nascer vazia.
+    """
+    coluna, fallback = _LISTAS_INVENTARIO[tipo]
+    ja_tem = conn.execute("SELECT COUNT(*) AS n FROM listas WHERE tipo=?", (tipo,)).fetchone()["n"]
+    if ja_tem:
+        return
+    rows = conn.execute(
+        f"SELECT DISTINCT TRIM({coluna}) AS v FROM inventario "  # noqa: S608 - coluna vem do mapa acima
+        f"WHERE {coluna} IS NOT NULL AND TRIM({coluna}) <> ''"
+    ).fetchall()
+    valores = [r["v"] for r in rows] or list(fallback)
+    conn.executemany(
+        "INSERT OR IGNORE INTO listas (tipo,valor) VALUES (?,?)",
+        [(tipo, v) for v in valores],
+    )
+
+
+def listar_valores_material(tipo, fallback=True):
+    """Lista administrável de `tipo_material` / `unidade` (semeia na 1ª leitura).
+
+    `fallback=True` (cadastro de itens) devolve as constantes quando a lista ativa
+    está vazia — o selectbox nunca pode nascer sem opção. `fallback=False`
+    (Configurações) mostra a verdade da lista, inclusive vazia.
+    """
+    if tipo not in _LISTAS_INVENTARIO:
+        raise ValueError(f"Lista '{tipo}' não é lista de material.")
+    with transaction() as conn:
+        _semear_lista_inventario(conn, tipo)
+        rows = conn.execute(
+            "SELECT valor FROM listas WHERE tipo=? AND ativo=1 ORDER BY valor", (tipo,)
+        ).fetchall()
+    valores = [r["valor"] for r in rows]
+    if not valores and fallback:
+        return list(_LISTAS_INVENTARIO[tipo][1])
+    return valores
+
+
+def adicionar_valor_lista_txt(tipo, valor):
+    """Adiciona à lista PRESERVANDO o caso digitado (ver `_LISTAS_INVENTARIO`).
+
+    Reativa em vez de inserir quando o valor já existe: `remover_valor_lista` é
+    soft-delete (`ativo=0`) contra um `UNIQUE(tipo,valor)`, então re-adicionar o
+    mesmo valor por `INSERT` bateria em `IntegrityError` (armadilha documentada em
+    `database.criar_banco`). A busca é case-insensitive para não conviverem "UN" e
+    "Un" como opções distintas.
+    """
+    v = (valor or "").strip()
+    if not v:
+        return False, "O valor não pode estar vazio."
+    try:
+        with transaction() as conn:
+            row = conn.execute(
+                "SELECT id, valor, ativo FROM listas WHERE tipo=? AND UPPER(valor)=UPPER(?)",
+                (tipo, v),
+            ).fetchone()
+            if row is None:
+                conn.execute("INSERT INTO listas (tipo,valor) VALUES (?,?)", (tipo, v))
+                return True, f"'{v}' adicionado."
+            if row["ativo"]:
+                return False, f"'{row['valor']}' já existe."
+            conn.execute("UPDATE listas SET ativo=1 WHERE id=?", (row["id"],))
+            return True, f"'{row['valor']}' reativado."
+    except Exception as e:
+        return False, str(e)
+
+
+def contar_itens_com_valor(tipo, valor):
+    """Quantos itens do inventário ainda usam este tipo/unidade (guarda de remoção).
+
+    Remover é soft-delete e não quebra item nenhum — o texto continua gravado no
+    `inventario`; a contagem existe só para o admin saber o que está tirando do menu.
+    """
+    if tipo not in _LISTAS_INVENTARIO:
+        raise ValueError(f"Lista '{tipo}' não é lista de material.")
+    coluna = _LISTAS_INVENTARIO[tipo][0]
+    with transaction() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM inventario "  # noqa: S608 - coluna vem do mapa acima
+            f"WHERE UPPER(TRIM({coluna})) = UPPER(TRIM(?))",
+            ((valor or "").strip(),),
+        ).fetchone()
+    return int(row["n"] or 0)
 
 
 def _setores_do_historico(conn):

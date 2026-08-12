@@ -16,6 +16,7 @@ contexto.
 | UI — componentes reusáveis | `ui/componentes/` (`filtros`, `tabela`, `selecao`, `status`, `graficos`, `exportar`) |
 | UI — sessão / login / gate (v6.1.0) | `ui/auth.py`; mapa rota→papel em `ui/router.py` (`ROTAS_POR_PAPEL`) |
 | Usuários, papéis e PIN (v6.1.0) | `services/usuarios.py`, tabela `usuarios`, flag `configuracoes['exigir_login']` |
+| Listas mestras (tipos/unidades admin, v6.5.1) | tabela `listas`; `db_functions.listar_valores*`/`adicionar_valor_lista*`; UI em `ui/paginas/configuracoes.py` (`LISTAS_CONFIG`) |
 | Lógica + acesso a dados | `services/db_functions.py` |
 | Banco / schema / migração | `database.py` — `criar_banco()` cria e `_migrar()` migra, em runtime |
 | Planejamento (min/máx, cobertura, lead time) | `services/planejamento.py` |

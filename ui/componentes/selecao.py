@@ -67,7 +67,14 @@ def resetar_campos_ao_trocar(chave_controle: str, identidade, campos: Iterable[s
 
     Chamar isto ANTES de desenhar os widgets devolve a identidade ao item selecionado,
     sem remover as keys (que continuam necessárias: as duas abas da tela usam widgets
-    de mesmo rótulo/opções e, sem key, colidiriam em `StreamlitDuplicateElementId`)."""
+    de mesmo rótulo/opções e, sem key, colidiriam em `StreamlitDuplicateElementId`).
+
+    ⚠️ **Prefira pendurar o id do item na própria key** (ver `gerenciar_itens.k_ed`,
+    v6.5.1). Este helper tem uma corrida que a suíte não pega: a limpeza acontece antes
+    dos widgets serem desenhados e o Streamlit cancela a execução em curso quando chega
+    uma nova interação — se ela morre nessa janela, a trava já diz "não mudou", o
+    navegador devolve os valores antigos e o formulário trava no item anterior até um
+    F5. Com o id na key, item diferente é widget diferente e não há janela nenhuma."""
     if st.session_state.get(chave_controle) != identidade:
         st.session_state[chave_controle] = identidade
         for campo in campos:
