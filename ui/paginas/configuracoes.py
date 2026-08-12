@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import date
 
 import pandas as pd
 import streamlit as st
@@ -30,6 +31,12 @@ from services.db_functions import (
     listar_solicitantes_mro,
     marcar_solicitante_mro,
     definir_codigo_solicitante_mro,
+    UNIDADES_RESET_INVENTARIO,
+    ler_config_reset_inventario,
+    marcar_reset_inventario,
+    proxima_data_reset_inventario,
+    resetar_inventario,
+    salvar_config_reset_inventario,
 )
 from services import scm_sync
 from services import backup
@@ -40,17 +47,21 @@ from ui.tema import paleta_atual
 
 
 def render() -> None:
-    """Configurações em 7 abas (v6.1.0 — entrou **Usuários**). Antes da v6.0.0 eram 8
-    blocos empilhados num scroll só; cada seção virou uma aba, as 5 Listas Mestras foram
-    agrupadas em uma, e a Central de Ajuda entrou como aba (deixou de ser item do menu)."""
+    """Configurações em 8 abas (v6.1.0 — entrou **Usuários**; v6.5.2 — **Inventário**).
+    Antes da v6.0.0 eram 8 blocos empilhados num scroll só; cada seção virou uma aba, as 5
+    Listas Mestras foram agrupadas em uma, e a Central de Ajuda entrou como aba (deixou de
+    ser item do menu)."""
     st.title(":material/settings: Configurações do Sistema")
-    st.caption("Parâmetros globais, usuários, listas mestras, backup e a Central de Ajuda.")
+    st.caption(
+        "Parâmetros globais, usuários, listas mestras, backup, ciclo de inventário e a Central de Ajuda."
+    )
 
-    aba_apar, aba_usr, aba_bkp, aba_imp, aba_sol, aba_listas, aba_ajuda = st.tabs(
+    aba_apar, aba_usr, aba_bkp, aba_inv, aba_imp, aba_sol, aba_listas, aba_ajuda = st.tabs(
         [
             ":material/palette: Aparência",
             ":material/group: Usuários",
             ":material/backup: Backup",
+            ":material/inventory_2: Inventário",
             ":material/download: Importar Base",
             ":material/badge: Solicitantes MRO",
             ":material/list: Listas Mestras",
@@ -63,6 +74,8 @@ def render() -> None:
         _secao_usuarios()
     with aba_bkp:
         _secao_backup()
+    with aba_inv:
+        _secao_inventario()
     with aba_imp:
         _secao_importar_base()
     with aba_sol:
@@ -325,6 +338,96 @@ def _secao_backup() -> None:
                         "arquivo e **apague** os `mro.db-wal` / `mro.db-shm` — restaurar "
                         "deixando um WAL de outra geração mistura dois estados do banco."
                     )
+        st.markdown("<br>", unsafe_allow_html=True)
+
+
+def _para_data(texto):
+    """'YYYY-MM-DD' → `date`; ausente ou inválido → None."""
+    try:
+        return date.fromisoformat(str(texto).strip()[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _secao_inventario() -> None:
+    """Reset do inventário (v6.5.2) — manual e agendado.
+
+    "Inventariado" marca o item contado no ciclo corrente; começar um ciclo novo é apagar
+    essa marca de todo mundo. O reset toca SÓ `data_inventario` — saldo, locais e a Obs.
+    de Inventário de cada item ficam como estão."""
+    cfg = ler_config_reset_inventario()
+
+    with st.container(border=True):
+        st.subheader(":material/restart_alt: Reset das Marcações de Inventário")
+        st.caption(
+            "Apaga a marcação **inventariado** (a data da última contagem) de **todos** os "
+            "itens, para começar um ciclo de contagem novo. **Não** altera saldo, locais "
+            "nem a Observação de Inventário — só a marcação. Em Saldo em Estoque, o filtro "
+            "**Não Inventariado** volta a listar a base inteira."
+        )
+
+        _ultimo = _para_data(cfg["ultimo"])
+        st.markdown(
+            f"**Último reset:** `{_ultimo.strftime('%d/%m/%Y')}`"
+            if _ultimo
+            else "**Último reset:** `nunca` — nenhum ciclo foi fechado até agora."
+        )
+
+        with st.popover(":material/restart_alt: Resetar marcações agora"):
+            st.warning(
+                ":material/warning: Isso desmarca **todos** os itens inventariados e não tem "
+                "desfazer. Só confirme se o ciclo de contagem realmente terminou."
+            )
+            if st.button(":material/check: Confirmar reset", type="primary", key="inv_reset_confirmar"):
+                ok_r, res_r = resetar_inventario()
+                if ok_r:
+                    # O relógio do agendamento recomeça de hoje: sem isso, um agendamento
+                    # já vencido dispararia de novo no render seguinte ao clique.
+                    marcar_reset_inventario()
+                    invalidar_leituras()
+                    st.session_state["inv_reset_msg"] = f"{res_r} item(ns) desmarcado(s)."
+                    st.rerun()
+                else:
+                    st.error(f":material/cancel: Não foi possível resetar: {res_r}")
+
+        _msg_reset = st.session_state.pop("inv_reset_msg", None)
+        if _msg_reset:
+            st.success(f":material/check_circle: Marcações de inventário resetadas — {_msg_reset}")
+
+        st.divider()
+
+        st.markdown("**Reset automático por intervalo**")
+        st.caption(
+            "Com o agendamento ligado, o reset acontece sozinho na **primeira abertura do "
+            "sistema depois do vencimento** — não existe serviço rodando em segundo plano."
+        )
+
+        c_per, c_uni, c_ativo = st.columns([1, 1, 1])
+        periodo = c_per.number_input(
+            "A cada", min_value=1, max_value=99, step=1, value=int(cfg["periodo"]), key="inv_reset_periodo"
+        )
+        unidade = c_uni.selectbox(
+            "Unidade",
+            options=list(UNIDADES_RESET_INVENTARIO),
+            index=list(UNIDADES_RESET_INVENTARIO).index(cfg["unidade"]),
+            key="inv_reset_unidade",
+        )
+        with c_ativo:
+            st.markdown("<br>", unsafe_allow_html=True)
+            ativo = st.toggle("Agendamento ligado", value=cfg["ativo"], key="inv_reset_ativo")
+
+        if cfg["ativo"] and _ultimo:
+            _prox = proxima_data_reset_inventario(_ultimo, cfg["periodo"], cfg["unidade"])
+            st.info(f":material/event: Próximo reset automático em **{_prox.strftime('%d/%m/%Y')}**.")
+
+        if st.button(":material/save: Salvar agendamento", key="inv_reset_salvar"):
+            ok_s, msg_s = salvar_config_reset_inventario(ativo, periodo, unidade)
+            if ok_s:
+                st.success(msg_s)
+                time.sleep(0.8)
+                st.rerun()
+            else:
+                st.error(msg_s)
         st.markdown("<br>", unsafe_allow_html=True)
 
 

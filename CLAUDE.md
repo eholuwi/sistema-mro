@@ -17,6 +17,8 @@ contexto.
 | UI — sessão / login / gate (v6.1.0) | `ui/auth.py`; mapa rota→papel em `ui/router.py` (`ROTAS_POR_PAPEL`) |
 | Usuários, papéis e PIN (v6.1.0) | `services/usuarios.py`, tabela `usuarios`, flag `configuracoes['exigir_login']` |
 | Listas mestras (tipos/unidades admin, v6.5.1) | tabela `listas`; `db_functions.listar_valores*`/`adicionar_valor_lista*`; UI em `ui/paginas/configuracoes.py` (`LISTAS_CONFIG`) |
+| Contagem física por diferença + motivo (v6.5.2) | `ui/paginas/saldo_estoque.py` (`calcular_novo_saldo`, `validar_contagem`, `motivo_efetivo`, `MOTIVOS_AJUSTE`) |
+| Reset do inventário — manual e agendado (v6.5.2) | `db_functions.resetar_inventario`/`aplicar_reset_inventario_agendado`; chaves `reset_inventario_*` em `configuracoes`; UI na aba **Inventário** de `configuracoes.py` |
 | Lógica + acesso a dados | `services/db_functions.py` |
 | Banco / schema / migração | `database.py` — `criar_banco()` cria e `_migrar()` migra, em runtime |
 | Planejamento (min/máx, cobertura, lead time) | `services/planejamento.py` |

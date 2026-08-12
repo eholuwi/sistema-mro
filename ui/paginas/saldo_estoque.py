@@ -7,6 +7,10 @@ Regra de negócio (ajuste físico / conferência / movimentação) preservada 1:
 
 v6.0.0 — os filtros rápidos passaram de 3 para os 5 pedidos pela operação: A Comprar,
 Atenção, OK, Parada de Linha e Não Inventariado (ver `_FILTROS_RAPIDOS`).
+
+v6.5.2 — a contagem física passou a ser por DIFERENÇA (Adicionar/Subtrair + preview do
+novo saldo) com MOTIVO obrigatório quando o saldo muda; o motivo vira a Categoria da
+movimentação no Relatório. A Conferência (qtd 0, só local/observação) segue intacta.
 """
 
 from __future__ import annotations
@@ -49,6 +53,85 @@ def acaba_em(dias, hoje=None):
         return "—"
     base = hoje or date.today()
     return (base + timedelta(days=d)).strftime("%d/%m/%Y")
+
+
+# ── Contagem física por DIFERENÇA (v6.5.2) ────────────────────────────────────
+# Até a v6.5.1 a tela pedia a "Quantidade Real" (absoluta) pré-preenchida com o saldo do
+# sistema, e derivava o delta. Quem conta na prateleira raramente sabe o total: sabe que
+# sobraram 3 ou que faltaram 2. Agora digita-se a DIFERENÇA + a operação, e o motivo passa
+# a ser obrigatório quando o saldo muda — é ele que vira a Categoria do relatório
+# (`categoria_movimentacao` devolve o `motivo` quando ele existe), e sem isso a pergunta
+# "o que saiu sem requisição neste mês?" continuaria sem resposta.
+
+OP_ADICIONAR = "Adicionar"
+OP_SUBTRAIR = "Subtrair"
+OPERACOES_AJUSTE = (OP_ADICIONAR, OP_SUBTRAIR)
+
+MOTIVO_OUTRO = "Outro (texto livre)"
+MOTIVOS_AJUSTE = (
+    "Material saiu sem requisição",
+    "Sobra encontrada / não registrada",
+    "Avaria / material danificado",
+    "Erro de contagem anterior",
+    MOTIVO_OUTRO,
+)
+
+
+def calcular_novo_saldo(estoque_atual, operacao, quantidade):
+    """Saldo que a contagem produziria. Puro — não valida, só calcula.
+
+    Quantidade 0 (ou negativa, que a UI não deixa digitar) devolve o saldo intacto: é o
+    caminho da Conferência de Inventário, que registra a passagem pelo item sem mexer no
+    estoque."""
+    atual = float(estoque_atual or 0)
+    qtd = float(quantidade or 0)
+    if qtd <= 0:
+        return atual
+    return atual - qtd if operacao == OP_SUBTRAIR else atual + qtd
+
+
+def motivo_efetivo(escolha, texto_outro=""):
+    """Motivo que vai para o ledger: o item do dropdown, ou o texto livre quando 'Outro'.
+
+    "Outro (texto livre)" não pode virar Categoria do relatório — é o rótulo do campo, não
+    uma explicação. Sem texto devolve None, e `validar_contagem` bloqueia a confirmação."""
+    escolha = (escolha or "").strip()
+    if not escolha:
+        return None
+    if escolha == MOTIVO_OUTRO:
+        return (texto_outro or "").strip() or None
+    return escolha
+
+
+def validar_contagem(estoque_atual, operacao, quantidade, escolha_motivo, texto_outro=""):
+    """Mensagem que impede a confirmação, ou None quando está tudo certo.
+
+    Guarda de UX — `registrar_movimentacao` continua rejeitando saída maior que o saldo
+    por conta própria (segunda rede). Ela existe para o almoxarife ver o problema ANTES de
+    clicar, com o número do estoque na frente."""
+    atual = float(estoque_atual or 0)
+    qtd = float(quantidade or 0)
+    if qtd <= 0:
+        return None  # sem mexer no saldo: é conferência, não precisa de motivo
+    if operacao == OP_SUBTRAIR and qtd > atual:
+        return f"Não dá para subtrair {qtd:g} — o estoque atual é {atual:g}. Máximo a subtrair: {atual:g}."
+    if not motivo_efetivo(escolha_motivo, texto_outro):
+        if (escolha_motivo or "").strip() == MOTIVO_OUTRO:
+            return "Descreva o motivo do ajuste no campo ao lado."
+        return "Selecione o motivo do ajuste — ele é a categoria da movimentação no relatório."
+    return None
+
+
+def montar_observacao(partes, detalhe, estoque_atual, novo_saldo):
+    """Observação da movimentação de ajuste: mudanças de local/obs + detalhe livre + o
+    rastro `Qtd: X → Y`. O prefixo 'Ajuste Físico' é mantido porque as movimentações
+    antigas (sem `motivo`) dependem dele em `categoria_movimentacao`, e o relatório o
+    extrai como resíduo da Observação."""
+    itens = ["Ajuste Físico"] + [p for p in (partes or []) if p]
+    detalhe = (detalhe or "").strip()
+    if detalhe:
+        itens.append(detalhe)
+    return f"{' | '.join(itens)} | Qtd: {estoque_atual:g} → {novo_saldo:g}"
 
 
 # ── Predicados dos filtros rápidos (pills) ────────────────────────────────────
@@ -202,12 +285,68 @@ def render() -> None:
             if item_inv.get("local_armazenagem") and item_inv.get("local_armazenagem") not in locais_disp:
                 locais_disp.insert(0, item_inv["local_armazenagem"])
 
-            c_q, c_l, c_l2 = st.columns(3)
+            estoque_atual = float(item_inv["estoque_atual"] or 0)
+            unidade_item = item_inv.get("unidade", "UN")
 
-            # Inicializa com o estoque atual. Se for 0, começa em 0.
-            nova_qtd = c_q.number_input(
-                "Quantidade Real", min_value=0.0, step=1.0, value=float(item_inv["estoque_atual"])
+            # v6.5.2 — ajuste por DIFERENÇA. O Streamlit já re-renderiza a cada widget
+            # tocado, então o preview abaixo é o "tempo real" pedido: basta desenhá-lo
+            # depois dos inputs, sem st.empty() nem callback.
+            c_op, c_qtd = st.columns([1, 2])
+            operacao = c_op.radio(
+                "Operação",
+                options=OPERACOES_AJUSTE,
+                horizontal=True,
+                key="inv_operacao",
+                help="Adicionar = sobrou material na prateleira. Subtrair = faltou.",
             )
+            qtd_ajuste = c_qtd.number_input(
+                "Quantidade a ajustar",
+                min_value=0.0,
+                step=1.0,
+                value=0.0,
+                key="inv_qtd_ajuste",
+                help="A DIFERENÇA encontrada na contagem — não o total do item. Zero = só conferência.",
+            )
+
+            saldo_novo = calcular_novo_saldo(estoque_atual, operacao, qtd_ajuste)
+            sinal = "+" if operacao == OP_ADICIONAR else "−"
+            if qtd_ajuste > 0:
+                st.markdown(
+                    f"**Estoque:** `{estoque_atual:g} {unidade_item}`  {sinal}  `{qtd_ajuste:g}`  "
+                    f"→  **Novo saldo:** `{saldo_novo:g} {unidade_item}`"
+                )
+            else:
+                st.caption(
+                    f"Estoque atual: **{estoque_atual:g} {unidade_item}** — deixe a quantidade em "
+                    "zero para registrar apenas a conferência (local/observação)."
+                )
+
+            # Motivo: obrigatório quando o saldo muda — vira a Categoria no relatório.
+            c_mot, c_det = st.columns(2)
+            escolha_motivo = c_mot.selectbox(
+                "Motivo do ajuste",
+                options=MOTIVOS_AJUSTE,
+                index=None,
+                placeholder="Selecione o motivo...",
+                key="inv_motivo",
+                help="Obrigatório quando a quantidade muda. É o que aparece na coluna "
+                "Categoria/Motivo do Relatório de Movimentações.",
+            )
+            detalhe_motivo = c_det.text_input(
+                "Detalhe (opcional)",
+                key="inv_motivo_detalhe",
+                placeholder="Ex: estava escondido atrás do armário",
+                help="Vai para a Observação da movimentação, junto do rastro Qtd: X → Y.",
+            )
+            motivo_outro = ""
+            if escolha_motivo == MOTIVO_OUTRO:
+                motivo_outro = st.text_input(
+                    "Qual o motivo?",
+                    key="inv_motivo_outro",
+                    placeholder="Descreva o motivo — este texto vira a Categoria no relatório.",
+                )
+
+            c_l, c_l2 = st.columns(2)
 
             # Selectbox de Local (Obrigatório)
             local_atual = item_inv.get("local_armazenagem")
@@ -236,10 +375,23 @@ def render() -> None:
                 placeholder="Ex: material danificado, sem etiqueta, divergência física, caixa avariada...",
             )
 
+            # Bloqueio de UX: saldo negativo e motivo faltando. `registrar_movimentacao`
+            # continua rejeitando saída > estoque por conta própria (segunda rede).
+            erro_validacao = validar_contagem(
+                estoque_atual, operacao, qtd_ajuste, escolha_motivo, motivo_outro
+            )
+            if erro_validacao:
+                st.error(f":material/block: {erro_validacao}")
+
             col_btn1, col_btn2, _ = st.columns([1, 1, 2])
 
-            if col_btn1.button(":material/check_circle: Confirmar Contagem", type="primary", width="stretch"):
-                delta = nova_qtd - item_inv["estoque_atual"]
+            if col_btn1.button(
+                ":material/check_circle: Confirmar Contagem",
+                type="primary",
+                width="stretch",
+                disabled=bool(erro_validacao),
+            ):
+                delta = saldo_novo - estoque_atual
 
                 # Verifica mudanças operacionais
                 mudou_local = novo_local != item_inv.get("local_armazenagem")
@@ -283,7 +435,9 @@ def render() -> None:
                             tipo_aj = "entrada" if delta > 0 else "saida"
                             qtd_reg = abs(delta)
 
-                            obs_final = f"Ajuste Físico {' | '.join(obs_partes)} | Qtd: {item_inv['estoque_atual']} → {nova_qtd}"
+                            obs_final = montar_observacao(
+                                obs_partes, detalhe_motivo, estoque_atual, saldo_novo
+                            )
 
                             registrar_movimentacao(
                                 item_id=item_inv["id"],
@@ -293,6 +447,7 @@ def render() -> None:
                                 solicitante="Inventário",
                                 emitente="Inventário",
                                 observacao=obs_final,
+                                motivo=motivo_efetivo(escolha_motivo, motivo_outro),
                             )
 
                         # ✅ CORREÇÃO: Se NÃO mudou quantidade, mas mudou Local/Obs, registramos uma "Conferência"
@@ -314,7 +469,10 @@ def render() -> None:
                             )
 
                         invalidar_leituras()
-                        st.success(f":material/check_circle: Contagem registrada! Novo saldo: `{nova_qtd}`")
+                        st.success(
+                            f":material/check_circle: Contagem registrada! Novo saldo: "
+                            f"`{saldo_novo:g} {unidade_item}`"
+                        )
                         time.sleep(1.2)
                         st.rerun()
                     else:

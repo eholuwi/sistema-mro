@@ -1,4 +1,5 @@
 import sqlite3, json, re, unicodedata
+import calendar
 import logging
 from datetime import datetime, date, timedelta
 from database import transaction
@@ -698,6 +699,164 @@ def desmarcar_inventariado(item_id):
         return True, "Inventário removido."
     except Exception as e:
         return False, str(e)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RESET DO INVENTÁRIO (v6.5.2)
+# ══════════════════════════════════════════════════════════════════════════════
+# `data_inventario` é a marca de "este item já foi contado no ciclo corrente" — é o que
+# alimenta o filtro rápido "Não Inventariado" do Saldo em Estoque. Começar um ciclo novo
+# é zerar essa marca em todo mundo, manualmente (botão em Configurações) ou por intervalo
+# (a cada N semanas/meses). O reset toca SÓ `data_inventario`: estoque, locais e a Obs. de
+# Inventário do item continuam onde estavam — quem apaga saldo é movimentação, não isto.
+
+RESET_INV_ATIVO = "reset_inventario_ativo"
+RESET_INV_PERIODO = "reset_inventario_periodo"
+RESET_INV_UNIDADE = "reset_inventario_unidade"
+RESET_INV_ULTIMO = "reset_inventario_ultimo"
+
+UNIDADES_RESET_INVENTARIO = ("semanas", "meses")
+RESET_INV_PERIODO_PADRAO = 3
+RESET_INV_UNIDADE_PADRAO = "meses"
+
+
+def resetar_inventario():
+    """Limpa a marcação de inventariado (`data_inventario`) de TODOS os itens.
+
+    Devolve `(True, n_itens_desmarcados)`. O `WHERE data_inventario IS NOT NULL` é o que
+    torna a função idempotente de verdade: a 2ª chamada seguida não reescreve
+    `data_atualizacao` de item nenhum e devolve 0, em vez de "tocar" a base inteira de
+    novo. Não altera estoque, locais nem `caixa_identificacao`."""
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with transaction() as conn:
+            cur = conn.execute(
+                "UPDATE inventario SET data_inventario=NULL, data_atualizacao=? "
+                "WHERE data_inventario IS NOT NULL",
+                (agora,),
+            )
+            afetados = cur.rowcount
+        return True, afetados
+    except Exception as e:
+        return False, str(e)
+
+
+def _ler_config(chave, padrao=None):
+    """Lê uma chave de `configuracoes` (tabela chave/valor). Vazio conta como ausente."""
+    with transaction() as conn:
+        row = conn.execute("SELECT valor FROM configuracoes WHERE chave=?", (chave,)).fetchone()
+    valor = (row["valor"] or "").strip() if row else ""
+    return valor or padrao
+
+
+def _gravar_config(chave, valor):
+    """Grava/atualiza uma chave de `configuracoes` (mesmo UPSERT de `services/backup.py`)."""
+    with transaction() as conn:
+        conn.execute(
+            "INSERT INTO configuracoes (chave, valor) VALUES (?,?) "
+            "ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor",
+            (chave, str(valor)),
+        )
+
+
+def _somar_meses(d, n):
+    """`d` + `n` meses, grudando no último dia quando o mês destino é mais curto
+    (31/01 + 1 mês = 28/02). Escrito à mão para não depender de `dateutil`, que hoje só
+    está instalado como dependência transitiva do pandas."""
+    m = d.month - 1 + int(n)
+    ano = d.year + m // 12
+    mes = m % 12 + 1
+    return date(ano, mes, min(d.day, calendar.monthrange(ano, mes)[1]))
+
+
+def _data_iso(texto):
+    """'YYYY-MM-DD' → `date`; qualquer coisa inválida/ausente → None."""
+    try:
+        return date.fromisoformat(str(texto).strip()[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def ler_config_reset_inventario():
+    """Parâmetros do reset agendado, já normalizados e com padrão para tudo.
+
+    Nunca levanta por valor sujo na tabela: período não-numérico cai no padrão, unidade
+    desconhecida cai em 'meses'. A tela chama isto a cada render."""
+    try:
+        periodo = int(_ler_config(RESET_INV_PERIODO, RESET_INV_PERIODO_PADRAO))
+    except (TypeError, ValueError):
+        periodo = RESET_INV_PERIODO_PADRAO
+    unidade = _ler_config(RESET_INV_UNIDADE, RESET_INV_UNIDADE_PADRAO)
+    return {
+        "ativo": _ler_config(RESET_INV_ATIVO, "0") == "1",
+        "periodo": max(1, periodo),
+        "unidade": unidade if unidade in UNIDADES_RESET_INVENTARIO else RESET_INV_UNIDADE_PADRAO,
+        "ultimo": _ler_config(RESET_INV_ULTIMO),
+    }
+
+
+def salvar_config_reset_inventario(ativo, periodo, unidade, hoje=None):
+    """Grava os parâmetros do agendamento e devolve `(True, mensagem)`.
+
+    Ao LIGAR o agendamento sem histórico, ancora o ciclo em hoje. Sem essa âncora o
+    primeiro render depois de ligar dispararia um reset imediato (`ultimo` ausente =
+    vencido desde sempre), apagando a contagem que o almoxarife acabou de fazer."""
+    periodo = max(1, int(periodo or 1))
+    unidade = unidade if unidade in UNIDADES_RESET_INVENTARIO else RESET_INV_UNIDADE_PADRAO
+    hoje = hoje or date.today()
+    try:
+        _gravar_config(RESET_INV_PERIODO, periodo)
+        _gravar_config(RESET_INV_UNIDADE, unidade)
+        _gravar_config(RESET_INV_ATIVO, "1" if ativo else "0")
+        if ativo and not _ler_config(RESET_INV_ULTIMO):
+            _gravar_config(RESET_INV_ULTIMO, hoje.isoformat())
+        return True, f"Agendamento salvo: a cada {periodo} {unidade}."
+    except Exception as e:
+        return False, str(e)
+
+
+def marcar_reset_inventario(hoje=None):
+    """Registra que um ciclo fechou HOJE (usado pelo reset manual da tela).
+
+    Sem isto, um agendamento já vencido dispararia de novo no render seguinte ao clique —
+    o botão manual e o relógio do agendamento precisam compartilhar a mesma âncora."""
+    _gravar_config(RESET_INV_ULTIMO, (hoje or date.today()).isoformat())
+
+
+def proxima_data_reset_inventario(ultimo, periodo, unidade):
+    """Data do próximo reset = `ultimo` + período. `ultimo` é `date`."""
+    periodo = max(1, int(periodo or 1))
+    if unidade == "semanas":
+        return ultimo + timedelta(weeks=periodo)
+    return _somar_meses(ultimo, periodo)
+
+
+def aplicar_reset_inventario_agendado(hoje=None):
+    """Dispara o reset se o ciclo venceu. Devolve `(disparou, mensagem)`.
+
+    Chamada num ponto único, no startup do `app.py`. É barata: 4 SELECTs na tabela de
+    configuração e, só no dia do vencimento, o UPDATE. Como o Streamlit só executa
+    `app.py` quando uma sessão de navegador conecta, o reset acontece na 1ª abertura
+    depois do vencimento — que é o comportamento desejado (ninguém precisa de scheduler)."""
+    cfg = ler_config_reset_inventario()
+    if not cfg["ativo"]:
+        return False, "Agendamento desligado."
+
+    hoje = hoje or date.today()
+    ultimo = _data_iso(cfg["ultimo"])
+    if ultimo is None:
+        _gravar_config(RESET_INV_ULTIMO, hoje.isoformat())
+        return False, "Ciclo ancorado hoje."
+
+    vencimento = proxima_data_reset_inventario(ultimo, cfg["periodo"], cfg["unidade"])
+    if hoje < vencimento:
+        return False, f"Próximo reset em {vencimento.strftime('%d/%m/%Y')}."
+
+    ok, resultado = resetar_inventario()
+    if not ok:
+        return False, str(resultado)
+    _gravar_config(RESET_INV_ULTIMO, hoje.isoformat())
+    return True, f"Reset automático: {resultado} item(ns) desmarcado(s)."
 
 
 def _recalcular_ruptura_by_pn(conn, part_number):

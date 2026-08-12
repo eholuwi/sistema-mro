@@ -6,7 +6,11 @@ from services.logging_config import setup_logging
 
 sys.path.insert(0, os.path.dirname(__file__))
 from database import criar_banco
-from services.db_functions import tirar_snapshot_estoque, sincronizar_monitor_sc
+from services.db_functions import (
+    tirar_snapshot_estoque,
+    sincronizar_monitor_sc,
+    aplicar_reset_inventario_agendado,
+)
 from services.usuarios import semear_usuarios
 from ui.auth import gate
 from ui.tema import paleta_atual
@@ -33,6 +37,15 @@ except Exception:
 # colunas técnicas das SCs abertas e reseta o "Revisado". Gated por dia (no-op nas demais).
 try:
     sincronizar_monitor_sc()
+except Exception:
+    pass
+
+# v6.5.2 — reset agendado das marcações de inventário (a cada N semanas/meses, quando
+# ligado em Configurações → Inventário). Mesmo hook das linhas acima: o Streamlit só roda
+# `app.py` quando uma sessão de navegador conecta, então o reset acontece na 1ª abertura
+# depois do vencimento. Com o agendamento desligado (padrão) é 1 SELECT e nada mais.
+try:
+    aplicar_reset_inventario_agendado()
 except Exception:
     pass
 

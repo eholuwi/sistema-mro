@@ -9,11 +9,48 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 12/08/2026 (v6.5.1 implementada, aguardando validação no app)
+## STATUS ATUAL — atualizado em 12/08/2026 (v6.5.2 commitada e validada no app real pelo Luis)
 
-- **v6.5.1 — Tipos de Material e Unidades administráveis (Etapa 5 / Task 5). IMPLEMENTADA, gate
-  verde — falta a validação no app real e o OK explícito do Luis para commitar.** Changelog em
-  `changelog/6.5.1.md`; espec em `docs/claude/Sessão 4/`.
+- **v6.5.2 — Contagem Física por diferença + Reset do Inventário (Etapa 6 / Task 6). COMMITADA
+  (12/08/2026) e validada no app real pelo Luis.** Changelog em `changelog/6.5.2.md`. Feature nova,
+  fora do plano da Sessão 4; requisitos coletados em entrevista com o Luis (12 perguntas + 4
+  follow-ups).
+
+  - **Contagem por DIFERENÇA** (`ui/paginas/saldo_estoque.py`): acabou a "Quantidade Real"
+    absoluta. Agora é `Adicionar`/`Subtrair` + a quantidade a ajustar, com preview do novo saldo
+    (`Estoque: 17 UN + 3 → Novo saldo: 20 UN`). O preview é só um `st.markdown` desenhado
+    **depois** dos inputs — o Streamlit já re-renderiza a cada widget tocado, não precisa de
+    `st.empty()` nem callback.
+  - **Motivo obrigatório quando o saldo muda**, via dropdown que nasce **sem seleção**
+    (`index=None` + placeholder). Com valor padrão, toda contagem sairia carimbada com o
+    primeiro motivo da lista e o rastreio nasceria mentindo. `Outro (texto livre)` abre um campo
+    e o **texto** vira o motivo — o rótulo do campo nunca vira Categoria.
+  - **Nada mudou em `categoria_movimentacao`.** Ela já devolve o `motivo` quando ele existe
+    (v4.3.0); preencher a coluna foi tudo o que a contagem precisou fazer para o motivo aparecer
+    na Categoria do relatório e na coluna Motivo do Excel. **Zero tela nova** para o rastreio.
+  - **Duas redes contra saldo negativo:** a guarda de UX (`validar_contagem` → botão desabilitado
+    + mensagem com o máximo) e a de service (`registrar_movimentacao`, que já rejeitava saída >
+    estoque). A de UI não substitui a de service.
+  - **Conferência de Inventário preservada:** qtd 0 + só local/obs continua gravando sem `motivo`,
+    e a Categoria segue `Conferência` — se virasse "Ajuste de Inventário" inflaria a divergência
+    (contrato de `test_v570_relatorio_movimentacoes.py`).
+  - **Reset do inventário** (Configurações → aba **Inventário**, 8ª): botão manual com confirmação
+    em `st.popover` + agendamento `a cada N semanas/meses` (padrão desligado, 3 meses). Toca **só**
+    `data_inventario`. **Sem schema novo** — chaves na tabela `configuracoes` (v5.8.0).
+  - **⚠️ Duas armadilhas de "apagar trabalho recém-feito" já desviadas:** (1) ligar o agendamento
+    **ancora** o ciclo em hoje — sem isso `ultimo` ausente significa "vencido desde sempre" e o
+    primeiro render apagaria a contagem que acabou de ser feita; (2) o reset manual **re-ancora**
+    o relógio, senão um agendamento vencido dispararia de novo no render seguinte ao clique.
+  - **Sem scheduler:** `aplicar_reset_inventario_agendado()` roda no startup do `app.py`, junto do
+    snapshot e do sync do Monitor. Como o Streamlit só executa `app.py` quando uma sessão de
+    navegador conecta, o reset acontece na 1ª abertura depois do vencimento.
+  - **⚠️ O hook de format/lint remove import ainda não usado.** Adicionar o import antes da chamada
+    fez o `ruff --fix` do PostToolUse apagá-lo como F401, e o gate quebrou com `F821` no `app.py`.
+    Ao ligar função nova no `app.py`, escreva a chamada **antes** (ou junto) do import.
+
+- **v6.5.1 — Tipos de Material e Unidades administráveis (Etapa 5 / Task 5). COMMITADA
+  (12/08/2026) e validada no app real pelo Luis.** Changelog em `changelog/6.5.1.md`; espec em
+  `docs/claude/Sessão 4/`.
 
   - **Os dois campos saíram de `constants.py` e viraram listas mestras** na tabela `listas`
     (que já existia) — Configurações → Listas ganhou as abas "Tipos de Material" e "Unidades".
