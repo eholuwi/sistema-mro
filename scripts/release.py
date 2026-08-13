@@ -17,12 +17,13 @@ a ser necessario em runtime, precisa ser adicionado aqui conscientemente — e o
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 import zipfile
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[1]
+if str(RAIZ) not in sys.path:
+    sys.path.insert(0, str(RAIZ))
 
 # Arquivos soltos que o app precisa em runtime.
 ARQUIVOS = ["app.py", "database.py", "inventus_logo.png"]
@@ -34,6 +35,13 @@ ARQUIVOS = ["app.py", "database.py", "inventus_logo.png"]
 # morto para o servidor.
 PASTAS = ["services", "ui"]
 
+# v6.6.0 — o MOTOR da atualizacao pelo app viaja dentro do proprio pacote, para que a
+# instalacao ganhe o mecanismo junto com o codigo que o dispara (sem ele, cada versao
+# nova exigiria copiar um .bat a mao no PC-servidor — exatamente o trabalho manual que
+# a v6.6.0 elimina). Em runtime ele e copiado de `app\deploy\` para
+# `dados\atualizacoes\` antes de rodar: ver services/atualizacao.py:preparar_motor.
+MOTOR_ATUALIZACAO = "deploy/aplicar_atualizacao.bat"
+
 # Nunca empacotar, mesmo dentro das pastas acima.
 IGNORAR = {"__pycache__", ".pytest_cache", ".ruff_cache"}
 IGNORAR_SUFIXOS = {".pyc", ".pyo", ".db", ".db-wal", ".db-shm", ".db-journal"}
@@ -44,12 +52,18 @@ def versao_do_codigo() -> str:
 
     v6.0.0: era lida de `ui/sidebar.py`, que agora so re-exporta a constante. Le por
     REGEX, sem importar o modulo: o release roda com o Python do sistema, sem as
-    dependencias do app instaladas."""
+    dependencias do app instaladas.
+
+    v6.6.0: a regex saiu daqui e passou a viver em `services/atualizacao.py`, que precisa
+    da MESMA leitura para descobrir a versao DE DENTRO de um zip. Duas copias derivariam.
+    O import so e seguro porque aquele modulo e stdlib-only por contrato (testado)."""
+    from services.atualizacao import ler_versao
+
     texto = (RAIZ / "services" / "constants.py").read_text(encoding="utf-8")
-    m = re.search(r'^VERSAO\s*=\s*["\']v?([\d.]+)["\']', texto, re.M)
-    if not m:
+    versao = ler_versao(texto)
+    if not versao:
         raise SystemExit("Nao consegui ler VERSAO de services/constants.py")
-    return m.group(1)
+    return versao
 
 
 def _incluir(caminho: Path) -> bool:
@@ -82,6 +96,13 @@ def itens_do_pacote() -> list[tuple[Path, str]]:
     if not prod.exists():
         raise SystemExit("deploy/config-servidor.toml ausente")
     itens.append((prod, ".streamlit/config.toml"))
+
+    # O motor da atualizacao pelo app (v6.6.0). Mesmo nome dentro do zip, para aterrissar
+    # em `C:\MRO\app\deploy\aplicar_atualizacao.bat`.
+    motor = RAIZ / MOTOR_ATUALIZACAO
+    if not motor.exists():
+        raise SystemExit(f"{MOTOR_ATUALIZACAO} ausente")
+    itens.append((motor, MOTOR_ATUALIZACAO))
 
     return itens
 

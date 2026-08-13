@@ -139,20 +139,56 @@ Na primeira subida a migração roda sozinha e grava um `.bak` em `dados\backups
 
 ---
 
-## 4. Auto-start (Agendador de Tarefas)
+## 4. Auto-start
 
-> **Atalho:** `instalar_servidor.ps1` (botão direito › *Executar com o PowerShell*) faz esta
-> seção e a próxima sozinho, e é idempotente. O passo a passo abaixo é a referência do que
-> ele cria — e o caminho manual se a política da máquina bloquear o script.
+> 🚫 **NÃO use a tarefa agendada do `instalar_servidor.ps1`.** Numa instalação real, o
+> antivírus corporativo (SentinelOne) tratou a tarefa como ameaça e **bloqueou a rede da
+> máquina**. Faz sentido do ponto de vista dele: uma tarefa `AtStartup` rodando como
+> **SYSTEM**, com privilégios elevados, apontando para um `.bat` numa pasta solta do disco
+> é a assinatura clássica de persistência de malware. O script continua no repositório para
+> quem tiver um ambiente sem EDR, mas **não é mais o caminho recomendado**.
 
-Criar tarefa:
+### 4.1 Recomendado: atalho na pasta Inicializar
 
-- **Nome:** `Sistema MRO` — o `atualizar_mro.bat` procura por esse nome exato.
+Roda como o **usuário**, sem elevação, sem SYSTEM, sem agendador — muito menos alarmante
+para o EDR e suficiente para o uso real (a máquina fica ligada no turno comercial).
+
+1. `Win + R` → `shell:startup` (abre a pasta Inicializar do usuário).
+2. Crie ali um atalho para `C:\MRO\MRO.exe`.
+
+O sistema volta sozinho quando a pessoa faz login. A janela preta do `MRO.exe` fica aberta —
+**fechá-la para o sistema**, o que é o comportamento desejado.
+
+### 4.2 Sem auto-start
+
+Duplo clique no `MRO.exe` quando precisar. É o modo mais simples, e o
+`atualizar_mro.bat` religa por ele.
+
+### 4.3 Se você ainda assim quiser a tarefa agendada
+
+- **Nome:** `Sistema MRO` — os dois atualizadores procuram por esse nome exato.
 - **Executar:** mesmo com o usuário desconectado · **Executar com privilégios mais altos**
 - **Disparador:** Ao iniciar o computador
 - **Ação:** iniciar programa → `C:\MRO\iniciar_mro.bat`
 - **Configurações:** "Reiniciar a cada 1 minuto" · "Tentar reiniciar até 3 vezes" ·
   desmarcar "Parar a tarefa se for executada por mais de..." (o app roda continuamente)
+
+Peça ao TI para liberar `C:\MRO\` no antivírus **antes**, ou o incidente se repete.
+
+---
+
+## 4-bis. Antivírus / EDR
+
+A atualização — pelo app ou pelo `.bat` — faz, em sequência: **encerra um processo**,
+**move uma pasta de código**, **extrai um zip por cima** e **inicia um executável**. Isso é
+descrição de rotina de atualizador e também de malware; um EDR agressivo pode bloquear no
+meio.
+
+Se acontecer, o sintoma é claro: `dados\atualizacoes\ultima_atualizacao.log` para na
+metade, e `app_anterior\` fica na pasta. O conserto é renomear `app_anterior\` de volta
+para `app\`.
+
+**Antes de depender da atualização automática, peça ao TI uma exceção para `C:\MRO\`.**
 
 ---
 
@@ -185,20 +221,52 @@ Deixe `Public` de fora — é uma aplicação de rede interna, sem autenticaçã
 
 ## 7. Atualizar
 
+### 7.1 Pelo app (padrão, a partir da v6.6.0)
+
+Quem opera a máquina **não precisa mais mexer em arquivo nenhum**:
+
+1. Salve em qualquer pasta o `mro-<versão>.zip` que recebeu (Teams, pendrive, e-mail).
+2. No sistema: **Configurações › Atualização**.
+3. Escolha o arquivo. A tela mostra `v6.6.0 → v6.7.0` e recusa o que não for um pacote do
+   MRO.
+4. Marque a confirmação e clique em **Instalar agora**.
+5. **Recarregue a página em ~30 segundos.**
+
+O que acontece por baixo (`deploy/aplicar_atualizacao.bat`, em processo destacado): pausa
+de 3 s → para a tarefa agendada **e** mata o processo do app → espera a porta 8501 liberar
+→ backup do banco → `move app\ → app_anterior\` → extrai → religa. Funciona nos dois modos
+de subida (tarefa agendada e `MRO.exe`), e **qualquer falha restaura `app_anterior\` e
+religa mesmo assim**.
+
+Log de cada tentativa: `C:\MRO\dados\atualizacoes\ultima_atualizacao.log`.
+
+> A tela nasce **desabilitada** em instalação de desenvolvimento (sem `app\` e `runtime\`
+> ao lado) — trocar aquela pasta apagaria o repositório.
+
+### 7.2 Pela linha de comando (break-glass)
+
+Continua valendo, e é o caminho quando o app **não sobe**:
+
 ```bat
-C:\MRO\atualizar_mro.bat C:\temp\mro-5.8.0.zip
+C:\MRO\atualizar_mro.bat C:\temp\mro-6.6.0.zip
 ```
 
 Sequência: para a tarefa → backup do banco → move `app\` para `app_anterior\` →
 extrai a nova → religa. Se a extração falhar, ele restaura sozinho a versão anterior.
 
-O zip aqui é o de **release** (`scripts/release.py`), não o portátil: só `app\` é
-substituída. O `runtime\` e o `MRO.exe` ficam como estão — o exe não precisa ser refeito a
-cada versão, porque ele só congela o launcher.
+Ele mora na **raiz**, fora de `app\`, de propósito: um atualizador que vive dentro da pasta
+que ele substitui não serve de recuperação.
 
 > ⚠️ **Feche o `MRO.exe` antes.** Se o sistema tiver subido por dois cliques, não há tarefa
 > agendada para o `schtasks /End` parar e a pasta `app\` continua em uso. Desde a v5.8.0 o
-> script **aborta** nesse caso em vez de misturar duas versões na mesma pasta.
+> script **aborta** nesse caso em vez de misturar duas versões na mesma pasta. (O caminho
+> do §7.1 não sofre disso: ele mata o processo pelo PID.)
+
+### 7.3 Comum aos dois
+
+O zip é o de **release** (`scripts/release.py`), não o portátil: só `app\` é substituída.
+O `runtime\` e o `MRO.exe` ficam como estão — o exe não precisa ser refeito a cada versão,
+porque ele só congela o launcher.
 
 **Rollback manual:** pare a tarefa, apague `app\`, renomeie `app_anterior\` para `app\`,
 religue. O banco não é tocado pela atualização — mas se a nova versão tiver rodado uma

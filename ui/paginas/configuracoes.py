@@ -15,10 +15,18 @@ from __future__ import annotations
 import os
 import time
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
+from services import atualizacao
+from services.constants import VERSAO
+from services.importar_imagens import (
+    caminho_padrao_planilha,
+    coletar_fotos_por_pn,
+    importar_imagens_planilha,
+)
 from services.db_functions import (
     importar_inventario_neidson,
     listar_valores,
@@ -47,20 +55,31 @@ from ui.tema import paleta_atual
 
 
 def render() -> None:
-    """Configurações em 8 abas (v6.1.0 — entrou **Usuários**; v6.5.2 — **Inventário**).
-    Antes da v6.0.0 eram 8 blocos empilhados num scroll só; cada seção virou uma aba, as 5
-    Listas Mestras foram agrupadas em uma, e a Central de Ajuda entrou como aba (deixou de
-    ser item do menu)."""
+    """Configurações em 9 abas (v6.1.0 — **Usuários**; v6.5.2 — **Inventário**; v6.6.0 —
+    **Atualização**). Antes da v6.0.0 eram 8 blocos empilhados num scroll só; cada seção
+    virou uma aba, as 5 Listas Mestras foram agrupadas em uma, e a Central de Ajuda entrou
+    como aba (deixou de ser item do menu)."""
     st.title(":material/settings: Configurações do Sistema")
     st.caption(
         "Parâmetros globais, usuários, listas mestras, backup, ciclo de inventário e a Central de Ajuda."
     )
 
-    aba_apar, aba_usr, aba_bkp, aba_inv, aba_imp, aba_sol, aba_listas, aba_ajuda = st.tabs(
+    (
+        aba_apar,
+        aba_usr,
+        aba_bkp,
+        aba_atu,
+        aba_inv,
+        aba_imp,
+        aba_sol,
+        aba_listas,
+        aba_ajuda,
+    ) = st.tabs(
         [
             ":material/palette: Aparência",
             ":material/group: Usuários",
             ":material/backup: Backup",
+            ":material/system_update: Atualização",
             ":material/inventory_2: Inventário",
             ":material/download: Importar Base",
             ":material/badge: Solicitantes MRO",
@@ -74,10 +93,13 @@ def render() -> None:
         _secao_usuarios()
     with aba_bkp:
         _secao_backup()
+    with aba_atu:
+        _secao_atualizacao()
     with aba_inv:
         _secao_inventario()
     with aba_imp:
         _secao_importar_base()
+        _secao_importar_fotos()
     with aba_sol:
         _secao_solicitantes_mro()
     with aba_listas:
@@ -488,6 +510,219 @@ def _secao_importar_base() -> None:
                             st.rerun()
                         else:
                             st.error(res_a.get("erro", "Falha na importação."))
+        st.markdown("<br>", unsafe_allow_html=True)
+
+
+def _secao_importar_fotos() -> None:
+    """Fotos dos itens a partir de "Material MRO 2026.xlsx" (v6.6.0).
+
+    Por CAMINHO em disco, não `file_uploader`: a planilha tem ~118 MB e o upload pelo
+    navegador levaria isso duas vezes para a memória do PC-servidor (uma na simulação,
+    outra ao aplicar). A leitura é `read_only=True` no openpyxl, direto do arquivo.
+    """
+    with st.container(border=True):
+        st.subheader(":material/imagesmode: Fotos dos itens (planilha do MRO)")
+        st.caption(
+            "Lê as fotos **embutidas nas células** da planilha e as vincula aos itens pelo "
+            "**Part Number**. Nenhum item é criado e nenhum outro campo é alterado. "
+            "Um backup do banco é criado automaticamente antes de gravar."
+        )
+
+        padrao = str(caminho_padrao_planilha())
+        caminho = st.text_input(
+            "Caminho da planilha (.xlsx)",
+            value=st.session_state.get("cam_fotos", padrao),
+            key="cam_fotos",
+            help="Cole aqui o caminho completo do arquivo, como aparece no Explorador de Arquivos.",
+        )
+        substituir = st.checkbox(
+            "Substituir fotos que já existem",
+            key="chk_subst_fotos",
+            help=(
+                "Desmarcado, itens que já têm foto NO DISCO são pulados. Itens com foto "
+                "cadastrada mas com o arquivo sumido são sempre regravados."
+            ),
+        )
+
+        if not caminho.strip():
+            st.markdown("<br>", unsafe_allow_html=True)
+            return
+        if not Path(caminho).is_file():
+            st.warning(f":material/warning: Arquivo não encontrado: `{caminho}`")
+            st.markdown("<br>", unsafe_allow_html=True)
+            return
+
+        if st.button(":material/search: Pré-visualizar (simulação)", key="btn_prev_fotos"):
+            with st.spinner("Lendo as fotos embutidas... (a planilha é grande, pode levar ~1 min)"):
+                try:
+                    fotos = coletar_fotos_por_pn(caminho)
+                except Exception as e:  # noqa: BLE001 - a mensagem vai para a tela
+                    st.session_state["prev_fotos"] = (False, {"erro": str(e)}, None)
+                else:
+                    ok_p, res_p = importar_imagens_planilha(
+                        caminho, substituir=substituir, dry_run=True, fotos=fotos
+                    )
+                    # A coleta é o passo caro; guardá-la evita reabrir os 118 MB no Aplicar.
+                    st.session_state["prev_fotos"] = (ok_p, res_p, fotos)
+
+        prev = st.session_state.get("prev_fotos")
+        if not prev:
+            st.markdown("<br>", unsafe_allow_html=True)
+            return
+
+        ok_p, res_p, fotos = prev
+        if not ok_p:
+            st.error(res_p.get("erro", "Não foi possível ler a planilha."))
+            st.markdown("<br>", unsafe_allow_html=True)
+            return
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Fotos na planilha", res_p["fotos_na_planilha"])
+        m2.metric("Casaram com o sistema", res_p["casados"])
+        m3.metric("Sem item no sistema", res_p["sem_item_no_sistema"])
+        m4, m5, m6 = st.columns(3)
+        m4.metric("Já têm foto (pulados)", res_p["ja_tinham_foto"])
+        m5.metric("Foto sumida (reparadas)", res_p["fotos_perdidas"])
+        m6.metric("A gravar", res_p["a_gravar"])
+
+        if res_p["pns_nao_encontrados"]:
+            with st.expander(f"Ver {len(res_p['pns_nao_encontrados'])} PNs sem item no sistema"):
+                df_nf = pd.DataFrame({"PN sem cadastro": res_p["pns_nao_encontrados"]})
+                st.dataframe(df_nf, width="stretch", hide_index=True)
+                st.download_button(
+                    "⬇️ Baixar lista (CSV)",
+                    df_nf.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="pns_sem_cadastro.csv",
+                    mime="text/csv",
+                    key="dl_fotos_nf",
+                )
+
+        if not res_p["a_gravar"]:
+            st.info("Nada a gravar com estas opções.")
+            st.markdown("<br>", unsafe_allow_html=True)
+            return
+
+        st.warning("Confira os números acima e clique em **Aplicar** para gravar as fotos.")
+        if st.button(
+            ":material/check_circle: Aplicar import de fotos", type="primary", key="btn_apply_fotos"
+        ):
+            barra = st.progress(0.0, text="Gravando fotos...")
+
+            def _passo(feitos, total):
+                barra.progress(feitos / total, text=f"Gravando fotos... {feitos}/{total}")
+
+            ok_a, res_a = importar_imagens_planilha(
+                caminho, substituir=substituir, dry_run=False, fotos=fotos, progresso=_passo
+            )
+            barra.empty()
+            if not ok_a:
+                st.error(res_a.get("erro", "Falha ao gravar as fotos."))
+                return
+            st.success(
+                f"Import concluído — {res_a['gravadas']} foto(s) gravada(s)"
+                + (f" · {len(res_a['falhas'])} falha(s)" if res_a["falhas"] else "")
+                + "."
+            )
+            if res_a["falhas"]:
+                with st.expander(f"Ver {len(res_a['falhas'])} falha(s)"):
+                    for f in res_a["falhas"][:50]:
+                        st.text(f)
+            st.session_state.pop("prev_fotos", None)
+            invalidar_leituras()
+            time.sleep(1.5)
+            st.rerun()
+        st.markdown("<br>", unsafe_allow_html=True)
+
+
+def _secao_atualizacao() -> None:
+    """Instalar uma nova versão do sistema sem sair do app (v6.6.0).
+
+    Até a v6.5.2 publicar uma versão significava acessar o PC-servidor, extrair o zip e
+    copiar arquivos à mão. Aqui quem opera a máquina só escolhe o arquivo que recebeu; a
+    troca de `app\\` acontece num processo destacado (`deploy/aplicar_atualizacao.bat`),
+    porque o app não consegue substituir a pasta de onde ele próprio está lendo código.
+    """
+    with st.container(border=True):
+        st.subheader(":material/system_update: Atualização do Sistema")
+
+        raiz = atualizacao.raiz_instalacao()
+        producao = atualizacao.modo_producao(raiz)
+
+        c1, c2 = st.columns(2)
+        c1.metric("Versão instalada", f"v{VERSAO}")
+        c2.metric("Modo", "Produção" if producao else "Desenvolvimento")
+        st.caption(f"Instalação em `{raiz}`")
+
+        if not producao:
+            st.info(
+                ":material/info: Esta é uma instalação de **desenvolvimento** (o código roda "
+                "direto do repositório, sem a pasta `app\\`). A instalação automática fica "
+                "desativada aqui de propósito — trocar esta pasta apagaria o repositório."
+            )
+            st.markdown("<br>", unsafe_allow_html=True)
+            return
+
+        st.caption(
+            "Escolha o arquivo **mro-<versão>.zip** que você recebeu. O sistema faz backup do "
+            "banco, troca os arquivos e volta sozinho em ~30 segundos. "
+            "**O banco de dados não é tocado** — ele vive fora da pasta que é substituída."
+        )
+
+        pacote = st.file_uploader("Pacote de atualização (.zip)", type=["zip"], key="upl_atualizacao")
+        if pacote is None:
+            st.markdown("<br>", unsafe_allow_html=True)
+            return
+
+        ok, info = atualizacao.inspecionar_pacote(pacote.getvalue())
+        if not ok:
+            st.error(f":material/error: {info['erro']}")
+            st.markdown("<br>", unsafe_allow_html=True)
+            return
+
+        nova = info["versao"]
+        situacao = atualizacao.comparar_versoes(VERSAO, nova)
+        st.markdown(f"### v{VERSAO} → **v{nova}**")
+
+        if situacao == "nova":
+            st.success(f":material/upgrade: Versão mais nova que a instalada ({info['arquivos']} arquivos).")
+        elif situacao == "mesma":
+            st.warning(
+                f":material/info: Este pacote é da **mesma versão** já instalada (v{nova}). "
+                "Reinstalar só faz sentido para reparar arquivos."
+            )
+        else:
+            st.error(
+                f":material/warning: Este pacote é **mais antigo** (v{nova}) que o instalado "
+                f"(v{VERSAO}). Instalar isso é voltar atrás."
+            )
+
+        confirmou = st.checkbox(
+            "Entendi: o sistema vai fechar e reiniciar agora",
+            key="chk_confirma_atualizacao",
+        )
+        if st.button(
+            ":material/download_done: Instalar agora",
+            type="primary",
+            disabled=not confirmou,
+            key="btn_instalar_atualizacao",
+        ):
+            try:
+                destino = atualizacao.guardar_pacote(pacote.getvalue(), nova, raiz)
+            except OSError as e:
+                st.error(f"Não consegui gravar o pacote: {e}")
+                return
+            ok_d, msg = atualizacao.disparar(destino, raiz)
+            if not ok_d:
+                st.error(f":material/error: {msg}")
+                return
+            st.success(
+                f":material/check_circle: Atualização para a **v{nova}** iniciada. "
+                "O sistema vai fechar e voltar sozinho — **recarregue esta página em ~30 segundos**."
+            )
+            st.caption(
+                f"Se algo der errado, o log fica em `{atualizacao.pasta_atualizacoes(raiz)}"
+                "\\ultima_atualizacao.log` e a versão anterior em `app_anterior\\`."
+            )
         st.markdown("<br>", unsafe_allow_html=True)
 
 

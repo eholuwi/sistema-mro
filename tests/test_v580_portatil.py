@@ -268,13 +268,21 @@ def test_instalar_servidor_resolve_a_raiz_pelo_proprio_local():
 
 def test_atualizar_aborta_se_nao_conseguir_mover_o_app():
     """Sem esta guarda o Expand-Archive -Force escrevia por cima do app\\ antigo e
-    deixava duas versoes misturadas na mesma pasta, sem aviso."""
+    deixava duas versoes misturadas na mesma pasta, sem aviso.
+
+    v6.6.0: a guarda continua igual, mas o desvio virou `goto fim` em vez de `exit /b 1`
+    direto — o bat passou a PAUSAR antes de fechar (janela fechando sozinha era o motivo
+    de "rodei e nao deu nada"). O que este teste garante e o COMPORTAMENTO: desviar antes
+    do Expand-Archive e sair com codigo 1.
+    """
     bat = ATUALIZAR.read_text(encoding="utf-8", errors="ignore")
 
     guarda = bat.split("[3/5]", 1)[1].split("[4/5]", 1)[0]
     assert 'if exist "%MRO_RAIZ%app"' in guarda
-    assert "exit /b 1" in guarda
     assert "ABORTADA" in guarda
+    assert "exit /b 1" in guarda or ('set "ERRO=1"' in guarda and "goto fim" in guarda)
+    # E o desvio precisa mesmo terminar em codigo 1, nao so parecer que termina.
+    assert "exit /b %ERRO%" in bat
 
 
 def test_pyinstaller_esta_fixado_so_no_dev():
