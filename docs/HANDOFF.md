@@ -9,7 +9,111 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 12/08/2026 (v6.5.2 commitada e validada no app real pelo Luis)
+## STATUS ATUAL — atualizado em 13/08/2026 (v6.6.0/6.7.0/6.8.0 commitadas e pushadas)
+
+> **Preparado para continuar em OUTRO PC.** As três versões estão em `origin/feat/v5.0.0`,
+> gate exit 0 (**1107 testes**). O que NÃO viaja pelo git está listado em
+> "O que copiar à mão" (fim desta seção) — `mro.db`, `backups/`, `dist/` e o vault.
+
+- **⚠️ Trabalho de OUTRO AGENTE em curso, NÃO commitado (13/08/2026):** troca do `MRO.exe`
+  (PyInstaller) por **`MRO.lnk` + `deploy/criar_atalho.ps1`** no pacote portátil — o binário sem
+  assinatura era o que a quarentena do EDR pegava na máquina real. Toca `scripts/portatil.py`,
+  `tests/test_v580_portatil.py`, `deploy/iniciar_mro.bat`, `deploy/instalar_servidor.ps1` e o
+  `criar_atalho.ps1` novo. **Fica no working tree, fora dos commits desta preparação** — e, como
+  não está no git, **não viaja para o outro PC**: ou termina aqui, ou copie esses 5 arquivos junto.
+  ⚠️ **Colisão de número:** esse trabalho se autodenomina **v6.9.0**, mas `docs/prompt.md` reserva
+  a v6.9.0 para a **previsão na Requisição**. Decidir o número antes de fechar.
+
+- **v6.8.0 — Desativar item (soft delete). COMMITADA (`dd2cec7`) e VALIDADA no app real.**
+  Changelog em `changelog/6.8.0.md`.
+
+  - **Excluir de verdade está descartado por FK, não por estilo:** `movimentacoes` e mais 5
+    tabelas têm `ON DELETE CASCADE` (o DELETE apagaria o ledger inteiro do item, em silêncio) e
+    `itens_sc`/`itens_requisicao`/`guarda_chuva*` têm FK `NO ACTION` (o DELETE falharia). Ou
+    seja: falharia nos itens com histórico e destruiria o histórico dos demais.
+  - **`listar_inventario()` é o funil de quase tudo** — um `WHERE COALESCE(i.ativo, 1) = 1` ali
+    apaga o item das quatro superfícies de uma vez (Requisição, reposição, dashboards, saldo).
+    Só `_top_valor_imobilizado` e `_top_dead_stock` fazem SQL direto e ganharam filtro à mão.
+  - **Limite deliberado:** consultas que partem de `movimentacoes` e só dão JOIN em `inventario`
+    (histórico de consumo, drill-down) **não** são filtradas — filtrar ali reescreveria números
+    de meses passados.
+  - **Três exceções com teste:** Cadastro › Editar (com "Mostrar itens desativados" — a única
+    tela que alcança o item), a checagem de PN duplicado (o `UNIQUE` vale para a tabela inteira;
+    sem a exceção o usuário levaria `IntegrityError` cru) e a Ficha 360.
+  - **O parâmetro entra na chave do `@st.cache_data`** (`inventario_cached`) — sem isso a
+    primeira chamada da sessão decidiria o conteúdo das duas visões pelos 120 s seguintes.
+
+- **v6.7.0 — Nota fiscal por recebimento no Guarda-Chuva. COMMITADA (`e0dc156`) e VALIDADA no
+  app real.** Changelog em `changelog/6.7.0.md`. Foi a **primeira entrega pelo mecanismo de
+  atualização da v6.6.0** — pacote pequeno de propósito, para ensaiar o mecanismo.
+
+  - **A NF vive na CÉLULA (item × mês), não no pedido.** Em MRO a entrega parcial é a regra: o
+    item A chega na semana 1 com a NF 1234 e o item B na semana 3 com a 1250, os dois contados
+    no "1º mês". Uma NF por pedido perderia isso — e perder para sempre é pior que digitar duas
+    vezes. Se a repetição incomodar, o caminho é "aplicar esta NF a todos os itens do mês N": a
+    modelagem já suporta, é só tela.
+  - **NF em branco vira `NULL`, não string vazia** (senão um espaço digitado viraria NF fantasma
+    no cartão do kanban), e a gravação percorre a **união** de quantidades e notas — a nota pode
+    chegar antes da conferência física, e iterar só por `recebimentos` a descartaria em silêncio.
+  - **Continua CONTROLE, não ledger:** não toca `inventario.estoque_atual` nem `movimentacoes`
+    (invariante da v5.9.0, travada de novo aqui).
+
+- **v6.6.0 — Atualização pelo app + Fotos da planilha. COMMITADA (`9df1768`), validada e EM
+  PRODUÇÃO.** Changelog em `changelog/6.6.0.md`. Nasceu de 5 pedidos numa sessão só.
+
+  - **Atualização pelo app** (`services/atualizacao.py` + `deploy/aplicar_atualizacao.bat`):
+    acabou a sessão remota no PC da sala MRO. O zip continua chegando pelo Teams, mas quem
+    opera a máquina só o escolhe em **Configurações › Atualização**. A restrição que definiu
+    tudo: o app roda **de dentro de `app\`**, a pasta que a atualização substitui — então ele
+    só valida, guarda e dispara; quem troca é um processo **destacado**
+    (`DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`) que sobrevive ao `taskkill` do Streamlit.
+  - ⚠️ **`timeout` do cmd aborta com stdin redirecionado** — e é assim que o app lança o motor
+    (`stdin=DEVNULL`). O sintoma seria mudo: a espera da porta daria as 40 voltas em
+    milissegundos e a troca começaria com o Streamlit ainda segurando o banco. Use `ping` no
+    loopback (`:dormir`). Travado por `test_motor_nao_usa_timeout`. **Medido, não suposto.**
+  - ⚠️ **A v6.6.0 tem de ser instalada pelo caminho manual uma última vez** — é ela que
+    introduz o mecanismo. `deploy/atualizar_mro.bat` fica como break-glass (não pode depender
+    de nada dentro de `app\`).
+  - **Import das fotos** (`services/importar_imagens.py`, extraído do CLI da v2.6.0): 327 de
+    351 fotos casam com o cadastro. Isso também **fechou o pedido "requisitante ver a
+    imagem"** — a foto já aparecia desde a v6.4.0; faltava foto, não tela (havia **1** arquivo
+    em `docs/itens/`).
+  - ⚠️ **Dois defeitos achados pelos dados reais, não pelo código:** (1) "já tem foto" olhava a
+    coluna `imagem_path`, mas 24 itens tinham caminho gravado e **zero** arquivos no disco —
+    seriam pulados para sempre; agora o critério é a existência do ARQUIVO (306 → 327).
+    (2) a leitura do `.rels` dependia da **ordem dos atributos XML** — Excel escreve
+    `Id` antes de `Target`, openpyxl ao contrário e com barra inicial; o sintoma era
+    "0 fotos encontradas".
+
+### Pendências abertas (13/08/2026)
+
+- **v6.9.0 — previsão na Requisição** (fila × 5 min + "Pronta para retirada"). Reservada; o Luis
+  vai trabalhar. ⚠️ Ver a colisão de número com o trabalho do portátil, acima.
+- **v6.10.0 — Análise de Consumo em PDF** (Assistente de Reposição). **Planejada e aprovada**,
+  aguardando implementação: requisitos, épicos (C schema → A motor → B UI), anti-duplicação e
+  testes em `docs/prompt.md`, seção "PRÓXIMA VERSÃO". Esqueleto em `changelog/6.10.0.md`.
+  Dependência nova: **`reportlab`** em `requirements.txt` (entra no portátil via `pip --target`).
+- **Portátil sem PyInstaller** — trabalho do outro agente, no working tree, não commitado.
+
+### O que copiar à mão para o outro PC (fora do git)
+
+O repositório é **público** e nada disso é versionado — tem de viajar por pendrive/OneDrive:
+
+| Caminho (relativo à raiz do repo) | O que é | Tamanho |
+|---|---|---|
+| `mro.db` | **o banco de produção** — sem ele o app sobe vazio | 11,6 MB |
+| `backups/` | 83 MB de `.bak` (inclui o `pre-import-imagens` de 13/08) | 83,2 MB |
+| `docs/itens/` | **as 327 fotos importadas na v6.6.0** — o import não se refaz sem a planilha | 105,7 MB |
+| `dist/mro-6.6.0.zip` · `6.7.0` · `6.8.0` | pacotes de release (o que sobe pelo app) | 0,5 MB cada |
+| `dist/mro-portatil-6.8.0.zip` | pacote portátil completo (runtime embutido) | 139,7 MB |
+| `docs/Material MRO 2026.xlsx` | planilha antiga — **fonte das fotos** do import | ~118 MB |
+| `docs/Relatório de Compras 10.08.2026.xlsx` | export cru do Protheus — aba **SC7** | — |
+| `docs/Solicitações (20).xlsx` | export cru do SCM | — |
+| `docs/claude/` | specs e planos das sessões (17 arquivos) | — |
+
+**Não copiar:** `venv/`, `build/`, `graphify-out/` — todos se refazem no destino
+(`pip install -r`, `scripts/portatil.py`, `graphify update .`). O vault Obsidian do Luis não
+mora neste repo: sincroniza sozinho pelo OneDrive.
 
 - **v6.5.2 — Contagem Física por diferença + Reset do Inventário (Etapa 6 / Task 6). COMMITADA
   (12/08/2026) e validada no app real pelo Luis.** Changelog em `changelog/6.5.2.md`. Feature nova,

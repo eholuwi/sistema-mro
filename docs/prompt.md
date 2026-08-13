@@ -1,7 +1,9 @@
 # Backlog / prompt de continuidade — Sistema MRO
 
-> Atualizado em **10/08/2026**, ao implementar a **v6.5.0 / Task 1** (consumo mensal por pedido
-> de compra). O planejamento anterior é de **05/08/2026**, da **v6.4.0** (5 demandas do Luis — a
+> Atualizado em **13/08/2026** — **v6.10.0 (Análise de Consumo em PDF)** planejada e aguardando
+> implementação pelo Claude (seção "PRÓXIMA VERSÃO" abaixo). Registro anterior de **10/08/2026**,
+> ao implementar a **v6.5.0 / Task 1** (consumo mensal por pedido de compra). O planejamento
+> anterior é de **05/08/2026**, da **v6.4.0** (5 demandas do Luis — a
 > planilha MRO, consumo por vida útil, sugestão de Min/Max, gestor rejeita + vê a requisição
 > completa, requisitante sem saldo/imagem, portaria por nome). **Quem implementa é o Claude** em
 > sessão própria; este arquivo + `changelog/6.5.0.md` + `docs/HANDOFF.md` são o handoff.
@@ -15,6 +17,70 @@
 > aguarda validação + OK para commit.
 > O estudo das requisições digitais segue em `docs/REQUISICOES_DIGITAIS_ESTUDO.md`, a decisão
 > de arquitetura do login em `docs/DECISAO_ENTREGA_FINAL_LOGIN.md`.
+
+---
+
+## 📋 PRÓXIMA VERSÃO — v6.10.0 · Análise de Consumo em PDF (Assistente de Reposição)
+
+> **Planejado em 13/08/2026.** Número **DESLOCADO de v6.9.0**: a v6.9.0 está reservada para a
+> **previsão na Requisição** (fila × 5 min + Pronta para retirada), que o Luis vai trabalhar.
+> Domínios independentes (v6.9.0 = Requisição; v6.10.0 = SC7/Assistente) — único arquivo em
+> comum é `controle_sc.py`, em abas diferentes. **Implementação fica com o Claude** (sessão
+> própria, skill `atualizar-sistema-mro`) — aqui está só a base aprovada.
+> Changelog esqueleto em `changelog/6.10.0.md`.
+
+**Requisitos (decisões do Luis, 13/08/2026):**
+
+1. Botão **"Gerar Análise de Consumo"** na aba **Assistente de Reposição** (`controle_sc.py`,
+   `aba_assist`), agindo sobre os **itens marcados** na tabela de seleção.
+2. Saída em **PDF** (formato escolhido na revisão A): 1 PDF por item
+   `Consumo <PN>-<Descrição>.pdf` + 1 resumo `Analise Geral.pdf` (convenção de nome já em
+   `PROMPT_DOCUMENTO_ALMOXARIFE.md`, raiz do projeto; `/` no nome → `-`).
+3. **Revisão A forçada:** revisão por item (campos editáveis: observações, proposta) +
+   confirmação "Revisado e de acordo" antes de liberar o download. Nada sai direto.
+4. **Fallback claro:** sem pedido de compra ATENDIDO no SC7 → usa consumo por **requisição**
+   (saídas reais), com **aviso destacado em linguagem simples**: o documento explica que o SC7
+   não encontrou pedido atendido, que por isso o consumo veio das retiradas do almoxarifado e
+   **como o cálculo foi feito** (ex.: "somamos as retiradas de jan–jul e dividimos por 7").
+   Sempre estampar fonte + período (ex.: "SC7 2026 (jan–jul)").
+5. **Aviso de SC7 desatualizado:** `MAX(data_importacao)` da tabela `consumo_sc7`; se > ~1 mês →
+   alerta + botão para a aba de importação (padrão já usado em `ficha_360.py:157`).
+6. **Auditoria:** tabela nova `analises_geradas` (quem, quando, PNs, versão do SC7 usada,
+   modo SC7/requisição).
+
+**Épicos (ordem de implementação):**
+
+- **C — Auditoria (schema).** `database.py`: tabela `analises_geradas` — **aditiva, idempotente,
+  sem `_backup_db`** (padrão `consumo_sc7` da v6.5.0). Não toca tabela existente → FKs
+  preservadas. Migração roda em runtime no `criar_banco()`.
+- **A — Motor.** Novo `services/analise_consumo.py` (puro, sem `ui/`):
+  - `montar_dados_analise(item)` — inventário (estoque/mín/máx/un/importância) + **SC7 via
+    `consumo_sc7_por_item`** (reuso) + justificativa via `montar_justificativa`
+    (`services/planejamento.py`).
+  - Fallback por requisição reusando a base `SAIDA_REAL_WHERE`
+    (`services/constants.py`) / `classificacao.py` (jan–jul ÷ 7, mesmo janelão do SC7).
+  - `gerar_pdf_analise(...)` e `gerar_pdf_analise_geral(...)` via **reportlab** → `BytesIO`;
+    `sc7_frescor()` para o aviso de desatualização.
+  - **Dependência nova: `reportlab`** pinada em `requirements.txt` (runtime) → entra no pacote
+    portátil via `pip --target` (`scripts/portatil.py`). Puro-Python, ok no embeddable; validar
+    no app real. Fonte padrão cobre latin-1 (acentos PT).
+- **B — UI.** `controle_sc.py`, aba Assistente: aviso SC7 desatualizado, botão Gerar Análise
+  sobre a seleção, revisão A (campos editáveis + checkbox por item), `st.download_button`
+  (padrão `ui/componentes/exportar.py`).
+
+**Anti-duplicação (regra de ouro):** NÃO criar cálculo de consumo novo — reutilizar
+`consumo_sc7_por_item` (SC7) e a leitura de consumo real de `classificacao.py`. **Não alterar** o
+card SC7 da Ficha 360 nem a regra de `services/consumo_sc7.py` (o fallback só vale **no
+documento**, explicitamente rotulado).
+
+**Testes (gate):** novo `tests/test_v690_analise_consumo.py` — PDF válido (item + geral), fallback
+rotulado (item sem SC7 × com SC7), sanitização de nome de arquivo, auditoria gravada,
+`sc7_frescor` (bordas: sem import, antigo, recente).
+
+**Gate e entrega:** `.\verify.ps1` verde + validação no app real → OK do Luis → commit →
+`graphify update .`. `VERSAO = "6.10.0"` em `services/constants.py` (fonte única do
+`scripts/release.py`; a comparação por tupla de inteiros já suporta 6.10.0 —
+`services/atualizacao.py:192`).
 
 ---
 
