@@ -395,7 +395,19 @@ def sincronizar_setores_config():
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def listar_inventario():
+def listar_inventario(incluir_inativos: bool = False):
+    """Inventário completo com os derivados de leitura (status, ABC, demanda, trânsito).
+
+    v6.8.0 — por padrão devolve só os itens **ATIVOS**. Esta função é o funil de quase
+    tudo (dashboards, planejamento, drill-down, ficha, sidebar, cache e o seletor de
+    material), então o filtro aqui é o que faz o item desativado sumir da Requisição, da
+    Movimentação, da reposição, dos KPIs e do saldo de uma vez só.
+
+    `incluir_inativos=True` é para as TRÊS telas que precisam enxergar o desativado:
+    o cadastro (para achar e reativar), a checagem de PN duplicado (senão dá para
+    cadastrar um PN que colide com o UNIQUE de um item inativo) e a Ficha 360.
+    """
+    filtro_ativo = "" if incluir_inativos else "WHERE COALESCE(i.ativo, 1) = 1"
     with transaction() as conn:
         rows = conn.execute(
             """
@@ -419,9 +431,10 @@ def listar_inventario():
         (SELECT MAX(m.data_hora) FROM movimentacoes m
             WHERE m.item_id = i.id AND """
             + SAIDA_REAL_WHERE
-            + """) AS ultima_requisicao_data
+            + f""") AS ultima_requisicao_data
         FROM inventario i
         LEFT JOIN solicitacoes_compra sc ON sc.id = i.ultima_sc_id
+        {filtro_ativo}
         ORDER BY
         CASE i.importancia
             WHEN 'Parada de Linha' THEN 1
@@ -4474,6 +4487,9 @@ def atualizar_item_inventario(item_id, dados_atualizados):
                 # `minimo_calculado`/`maximo_calculado`/`min_max_*` NÃO entram nesta lista:
                 # são derivadas de `recalcular_min_max_calculado`, não campos de formulário.
                 "mostrar_saldo_requisitante",
+                # v6.8.0 — item ativo/desativado (soft delete). Campo de formulário como
+                # os demais: sem entrar aqui, o toggle da tela seria ignorado em silêncio.
+                "ativo",
             ]
             for key in allowed_fields:
                 if key in dados_atualizados:

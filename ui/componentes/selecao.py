@@ -33,21 +33,28 @@ def rotulo_item(item, incluir_descricao=False):
     return rotulo
 
 
-def itens_select(incluir_descricao=False):
-    """Dicionário `"<PN> — <nome>" -> item` de todo o inventário (fonte do selectbox).
+def itens_select(incluir_descricao=False, incluir_inativos=False):
+    """Dicionário `"<PN> — <nome>" -> item` do inventário ATIVO (fonte do selectbox).
 
     Com `incluir_descricao=True` o rótulo ganha ` · <descrição>` quando a descrição
     acrescenta informação ao nome — assim o type-ahead nativo do selectbox também
-    encontra o item pela descrição, sem precisar de um campo de busca separado."""
-    return {rotulo_item(i, incluir_descricao=incluir_descricao): i for i in listar_inventario()}
+    encontra o item pela descrição, sem precisar de um campo de busca separado.
+
+    v6.8.0 — item desativado some daqui, e é isso que o tira da Requisição e da
+    Movimentação de uma vez. `incluir_inativos=True` só no Cadastro, que precisa
+    alcançar o item para reativá-lo."""
+    return {
+        rotulo_item(i, incluir_descricao=incluir_descricao): i
+        for i in listar_inventario(incluir_inativos=incluir_inativos)
+    }
 
 
-def sel_material(label, key, placeholder=" ", incluir_descricao=False):
+def sel_material(label, key, placeholder=" ", incluir_descricao=False, incluir_inativos=False):
     """Selectbox com opção vazia no topo para forçar seleção consciente.
 
     `incluir_descricao` repassa para `itens_select` (busca também pela descrição).
     Devolve `(rotulo_selecionado, item_dict_ou_None, opcoes_dict)`."""
-    opcoes = itens_select(incluir_descricao=incluir_descricao)
+    opcoes = itens_select(incluir_descricao=incluir_descricao, incluir_inativos=incluir_inativos)
     lista = [placeholder] + list(opcoes.keys())
     sel = st.selectbox(label, lista, index=0, key=key)
     item = opcoes.get(sel) if sel != placeholder else None

@@ -867,6 +867,7 @@ def _top_valor_imobilizado(limit=10, conn=None):
                    estoque_atual * COALESCE(preco_referencia,0) AS valor
             FROM inventario
             WHERE COALESCE(preco_referencia,0) > 0 AND COALESCE(estoque_atual,0) > 0
+              AND COALESCE(ativo,1) = 1
             ORDER BY valor DESC LIMIT ?
         """,
             (limit,),
@@ -891,6 +892,7 @@ def _top_dead_stock(ano, limit=10, conn=None):
                    i.estoque_atual * COALESCE(i.preco_referencia,0) AS valor
             FROM inventario i
             WHERE COALESCE(i.preco_referencia,0) > 0 AND COALESCE(i.estoque_atual,0) > 0
+              AND COALESCE(i.ativo,1) = 1
               AND NOT EXISTS (
                   SELECT 1 FROM movimentacoes m
                   WHERE m.item_id = i.id AND {SAIDA_REAL_WHERE}

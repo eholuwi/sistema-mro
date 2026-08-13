@@ -338,10 +338,25 @@ def render() -> None:
                     # "Digitar novo…" escolhido e campo em branco.
                     st.error("Informe a unidade e o tipo / categoria do item.")
                 else:
-                    # Verificar duplicidade
-                    itens_existentes = listar_inventario()
-                    if any(i["part_number"].lower() == pn_novo.lower() for i in itens_existentes):
-                        st.error(f"PN '{pn_novo}' já cadastrado!")
+                    # Verificar duplicidade. `incluir_inativos=True` NÃO é detalhe: o
+                    # UNIQUE de `part_number` vale para a tabela inteira, então sem isto
+                    # o cadastro deixaria digitar um PN que existe num item desativado e
+                    # o erro só apareceria como IntegrityError cru no INSERT (v6.8.0).
+                    itens_existentes = listar_inventario(incluir_inativos=True)
+                    _dup = next(
+                        (i for i in itens_existentes if i["part_number"].lower() == pn_novo.lower()), None
+                    )
+                    if _dup:
+                        _inativo = not (_dup.get("ativo") if _dup.get("ativo") is not None else 1)
+                        st.error(
+                            f"PN '{pn_novo}' já cadastrado!"
+                            + (
+                                " Ele está **desativado** — reative-o na aba *Editar* "
+                                "(marque *Mostrar itens desativados*) em vez de criar outro."
+                                if _inativo
+                                else ""
+                            )
+                        )
                     else:
                         ok, msg = salvar_item(
                             part_number=pn_novo,
@@ -375,9 +390,23 @@ def render() -> None:
     with tab_editar:
         with st.container(border=True):
             st.subheader("Selecionar Item para Edição")
-            _, item_sel, _ = sel_material("Busque pelo PN ou Nome", "sel_edit_item")
+            # v6.8.0 — o desativado só é alcançável aqui; é esta tela que o religa.
+            ver_inativos = st.checkbox(
+                "Mostrar itens desativados",
+                key="ed_ver_inativos",
+                help="Itens desativados não aparecem em nenhuma outra tela. Marque para "
+                "encontrá-los e reativá-los.",
+            )
+            _, item_sel, _ = sel_material(
+                "Busque pelo PN ou Nome", "sel_edit_item", incluir_inativos=ver_inativos
+            )
 
             if item_sel:
+                if not (item_sel.get("ativo") if item_sel.get("ativo") is not None else 1):
+                    st.warning(
+                        ":material/visibility_off: **Item desativado.** Ele não aparece em "
+                        "nenhuma outra tela. Ligue **Item ativo** abaixo e salve para voltar."
+                    )
                 # Todo widget desta aba tem a key amarrada ao item (ver `k_ed`): é o que
                 # faz o formulário acompanhar a troca de item sem depender de limpeza.
                 iid = item_sel["id"]
@@ -485,6 +514,27 @@ def render() -> None:
                         "deste material. Ele continua conseguindo pedir; a conferência do "
                         "saldo passa a ser do almoxarifado, na separação.",
                     )
+                    # v6.8.0 — soft delete. Legado sem a coluna (`None`) conta como ativo.
+                    ed_ativo = st.toggle(
+                        "Item ativo",
+                        value=bool(item_sel.get("ativo") if item_sel.get("ativo") is not None else 1),
+                        key=k_ed("ativo", iid),
+                        help="Desligue para tirar de circulação um material descontinuado. "
+                        "Ele some da Requisição, da Movimentação, da reposição, dos "
+                        "dashboards e do saldo — mas o cadastro e TODO o histórico de "
+                        "movimentações continuam intactos, e dá para religar aqui.",
+                    )
+                    if not ed_ativo:
+                        _saldo_atual = float(item_sel.get("estoque_atual") or 0)
+                        if _saldo_atual > 0:
+                            # Avisa e deixa passar: o motivo real de desativar é item
+                            # descontinuado, e travar obrigaria a zerar o estoque antes —
+                            # ninguem faria, e o item continuaria circulando.
+                            st.warning(
+                                f":material/warning: Este item ainda tem **{_saldo_atual:g} "
+                                f"{item_sel.get('unidade') or 'UN'}** em estoque. Desativar não "
+                                "baixa nada: o saldo continua no banco, apenas deixa de aparecer."
+                            )
 
                 # ── Conversão de unidades (curadoria v2.9.0) ─────────────────────
                 # v6.0.0: escondida atrás de um checkbox. Ele NASCE MARCADO quando o item
@@ -569,6 +619,7 @@ def render() -> None:
                                 ed_fator if (ed_tem_conv and ed_fator > 0) else FATOR_CONVERSAO_PADRAO
                             ),
                             "mostrar_saldo_requisitante": int(ed_saldo_req),
+                            "ativo": int(ed_ativo),
                         }
                         ok, msg = atualizar_item_inventario(item_sel["id"], dados_edicao)
                         if ok:

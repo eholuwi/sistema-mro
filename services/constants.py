@@ -12,7 +12,7 @@ import re
 # enquanto o log de `database.py` dizia 5.7.0 -- e a versao entregue era a 5.9.0.
 # Quem exibe versao LE daqui; `scripts/release.py` tambem, para nomear o zip.
 # Bump em UM lugar so; `tests/test_v600_refatoracao_ux.py` prova que ninguem divergiu.
-VERSAO = "6.7.0"
+VERSAO = "6.8.0"
 VERSAO_ROTULO = f"v{VERSAO}"  # com o "v" -- rodape da barra lateral
 
 # --- Status de estoque ---

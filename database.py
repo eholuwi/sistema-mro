@@ -893,6 +893,14 @@ def criar_banco():
         # 1 no SQLite, então não há backfill a fazer: a base inteira abre marcada.
         # Vale só para a tela do Requisitante — almoxarife e comprador seguem vendo tudo.
         "mostrar_saldo_requisitante": "INTEGER DEFAULT 1",
+        # v6.8.0 — item ATIVO no cadastro. Item descontinuado precisava sair de
+        # circulação e não havia como: excluir de verdade é inviável (`movimentacoes` e
+        # mais 5 tabelas têm ON DELETE CASCADE — apagaria o ledger inteiro do item — e
+        # `itens_sc`/`itens_requisicao`/`guarda_chuva*` têm FK NO ACTION, que bloqueia).
+        # Soft delete, como `listas`, `usuarios` e `fornecedores`. Mesmo detalhe do
+        # `mostrar_saldo_requisitante`: `ADD COLUMN … DEFAULT 1` já preenche as linhas
+        # existentes no SQLite, então a base inteira nasce ativa sem backfill.
+        "ativo": "INTEGER DEFAULT 1",
     }.items():
         if col not in cols_inv0:
             conn.execute(f"ALTER TABLE inventario ADD COLUMN {col} {tipo}")

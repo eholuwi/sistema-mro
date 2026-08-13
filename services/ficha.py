@@ -236,7 +236,10 @@ def montar_ficha_360(item_id, conn=None):
     """Reúne toda a Ficha 360 de um item reusando as funções já existentes.
     Retorna None se o item não existe. Casos edge (sem histórico/preço/imagem/
     consumo) devolvem estruturas vazias — a UI mostra placeholders."""
-    item = next((i for i in listar_inventario() if i["id"] == item_id), None)
+    # v6.8.0 — `incluir_inativos=True`: a Ficha 360 é a consulta ao histórico do item, e
+    # item desativado é justamente o que se vai consultar depois de tirar de circulação.
+    # Sem isto, desativar um item quebraria a própria tela que explica por que ele saiu.
+    item = next((i for i in listar_inventario(incluir_inativos=True) if i["id"] == item_id), None)
     if not item:
         return None
 

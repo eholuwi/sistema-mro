@@ -34,9 +34,14 @@ from services.dashboards import (
 
 
 @st.cache_data(ttl=120, show_spinner=False)
-def inventario_cached():
-    """`listar_inventario()` com cache curto — leitura mais quente (sidebar + telas)."""
-    return listar_inventario()
+def inventario_cached(incluir_inativos: bool = False):
+    """`listar_inventario()` com cache curto — leitura mais quente (sidebar + telas).
+
+    v6.8.0 — o parâmetro entra na CHAVE do `@st.cache_data`, então a visão com inativos
+    e a sem inativos não se contaminam. Sem ele no argumento, a primeira chamada da
+    sessão decidiria o conteúdo das duas pelos 120s seguintes.
+    """
+    return listar_inventario(incluir_inativos=incluir_inativos)
 
 
 @st.cache_data(ttl=120, show_spinner=False)
