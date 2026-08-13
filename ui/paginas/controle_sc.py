@@ -1083,6 +1083,13 @@ def _render_gc_kanban(pedidos):
                         f"Receb. {float(p['qtd_recebida'] or 0):g} · "
                         f"Saldo {float(p['saldo_residual'] or 0):g}"
                     )
+                    # v6.7.0 — NFs já lançadas, para bater a entrega sem abrir o pedido.
+                    # Truncado em 3: o cartão é um resumo e um acordo de 12 meses com uma
+                    # nota por item encheria a coluna do kanban.
+                    nfs = p.get("notas_fiscais") or []
+                    if nfs:
+                        resumo = ", ".join(nfs[:3]) + (f" +{len(nfs) - 3}" if len(nfs) > 3 else "")
+                        st.caption(f":material/receipt: NF {resumo}")
                     if st.button(":material/edit: Abrir", key=f"gc_open_{p['id']}", width="stretch"):
                         st.session_state["_gc_pedido_edit"] = int(p["id"])
                         st.rerun()
@@ -1152,12 +1159,25 @@ def _dialog_guarda_chuva():
     st.markdown("##### :material/table_rows: Itens do acordo")
     st.caption(
         "**PN** e **Produto** vêm do cadastro e não são editáveis. As colunas de mês são "
-        "o quanto já foi recebido — controle do acordo, sem efeito no estoque."
+        "o quanto já foi recebido, e a **NF** ao lado de cada uma é a nota daquela entrega "
+        "— controle do acordo, sem efeito no estoque."
     )
     if not p["itens"]:
         st.info("Nenhum material neste pedido ainda. Use **Adicionar material** abaixo.")
     else:
+        # v6.7.0 — cada mês vira um PAR de colunas (quantidade, NF), intercaladas, para a
+        # conferência ser lateral: "chegou 200, na nota 1234". Duas NFs distintas no mesmo
+        # mês são possíveis porque a nota é por célula (item × mês), não por pedido.
         cols_mes = [f"{m}º mês" for m in range(1, meses + 1)]
+        cols_nf = [f"NF {m}º mês" for m in range(1, meses + 1)]
+
+        def _celulas(it):
+            pares = {}
+            for m, (rot_q, rot_nf) in enumerate(zip(cols_mes, cols_nf), start=1):
+                pares[rot_q] = float(it["recebimentos"].get(m, 0.0))
+                pares[rot_nf] = it.get("notas", {}).get(m, "") or ""
+            return pares
+
         df = pd.DataFrame(
             [
                 {
@@ -1171,7 +1191,7 @@ def _dialog_guarda_chuva():
                     "Preço congelado": (
                         float(it["preco_congelado"]) if it.get("preco_congelado") is not None else None
                     ),
-                    **{rot: float(it["recebimentos"].get(m, 0.0)) for m, rot in enumerate(cols_mes, start=1)},
+                    **_celulas(it),
                     "Saldo": it["saldo_residual"],
                 }
                 for it in p["itens"]
@@ -1191,6 +1211,12 @@ def _dialog_guarda_chuva():
                 "Produto": st.column_config.TextColumn(disabled=True),
                 "Saldo": st.column_config.NumberColumn(disabled=True, format="%.2f"),
                 "Preço congelado": st.column_config.NumberColumn(format="R$ %.2f"),
+                **{
+                    rot: st.column_config.TextColumn(
+                        width="small", help="Nota fiscal desta entrega (número livre)."
+                    )
+                    for rot in cols_nf
+                },
             },
         )
         if st.button(":material/save: Salvar itens", type="primary", width="stretch", key="gc_salvar_itens"):
@@ -1201,6 +1227,7 @@ def _dialog_guarda_chuva():
                     "qtd_prevista_mes": r["Qtd prevista/mês"],
                     "preco_congelado": r["Preço congelado"],
                     "recebimentos": {m: r[rot] for m, rot in enumerate(cols_mes, start=1)},
+                    "notas": {m: r[rot] for m, rot in enumerate(cols_nf, start=1)},
                 }
                 for r in edit.to_dict("records")
             ]

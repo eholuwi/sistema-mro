@@ -647,6 +647,17 @@ def criar_banco():
     c.execute("CREATE INDEX IF NOT EXISTS idx_gc_item_pedido ON guarda_chuva_item(pedido_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_gc_receb_item ON guarda_chuva_recebimento(gc_item_id)")
 
+    # v6.7.0 — a NOTA FISCAL de cada recebimento. Uma por célula (item × mês), porque é
+    # assim que a entrega acontece: dois itens do mesmo acordo podem chegar no mesmo mês
+    # em notas diferentes, e guardar a NF no nível do pedido perderia isso.
+    # TEXT livre: número de NF real vem com série/letra ("1234-1", "000012345").
+    # O `CREATE TABLE IF NOT EXISTS` acima não alcança banco já existente — daí o ALTER
+    # guardado, aditivo e idempotente, no mesmo padrão das colunas de `inventario`.
+    _cols_gc_receb = {r[1] for r in c.execute("PRAGMA table_info(guarda_chuva_recebimento)")}
+    if "nota_fiscal" not in _cols_gc_receb:
+        c.execute("ALTER TABLE guarda_chuva_recebimento ADD COLUMN nota_fiscal TEXT")
+        logger.info("  -> Migracao: nota_fiscal em guarda_chuva_recebimento adicionada.")
+
     # v5.1.0 (F2) — Itens de SC cujo PN NÃO está no inventário MRO. Antes eram
     # simplesmente descartados na ingestão (Excel e API); agora ficam registrados aqui,
     # ligados à SC, para visibilidade completa do ciclo SC→PO e futura "promoção" ao

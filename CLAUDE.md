@@ -20,6 +20,7 @@ contexto.
 | Contagem física por diferença + motivo (v6.5.2) | `ui/paginas/saldo_estoque.py` (`calcular_novo_saldo`, `validar_contagem`, `motivo_efetivo`, `MOTIVOS_AJUSTE`) |
 | Reset do inventário — manual e agendado (v6.5.2) | `db_functions.resetar_inventario`/`aplicar_reset_inventario_agendado`; chaves `reset_inventario_*` em `configuracoes`; UI na aba **Inventário** de `configuracoes.py` |
 | Lógica + acesso a dados | `services/db_functions.py` |
+| Nota fiscal por recebimento do Guarda-Chuva (v6.7.0) | coluna `guarda_chuva_recebimento.nota_fiscal` (uma por célula item×mês); `guarda_chuva.obter_pedido_gc`/`atualizar_itens_gc` |
 | Banco / schema / migração | `database.py` — `criar_banco()` cria e `_migrar()` migra, em runtime |
 | Planejamento (min/máx, cobertura, lead time) | `services/planejamento.py` |
 | Curva ABC / classificação de demanda | `services/classificacao.py` |

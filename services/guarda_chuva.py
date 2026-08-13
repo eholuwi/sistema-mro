@@ -152,7 +152,14 @@ def listar_pedidos_gc():
                        SELECT SUM(r.quantidade) FROM guarda_chuva_recebimento r
                        JOIN guarda_chuva_item i2 ON i2.id = r.gc_item_id
                        WHERE i2.pedido_id = p.id
-                   ), 0) AS qtd_recebida
+                   ), 0) AS qtd_recebida,
+                   COALESCE((
+                       SELECT GROUP_CONCAT(DISTINCT r.nota_fiscal)
+                       FROM guarda_chuva_recebimento r
+                       JOIN guarda_chuva_item i3 ON i3.id = r.gc_item_id
+                       WHERE i3.pedido_id = p.id
+                         AND TRIM(COALESCE(r.nota_fiscal, '')) <> ''
+                   ), '') AS notas_fiscais_raw
             FROM guarda_chuva_pedido p
             LEFT JOIN guarda_chuva_item gi ON gi.pedido_id = p.id
             GROUP BY p.id
@@ -162,6 +169,12 @@ def listar_pedidos_gc():
     for r in rows:
         d = dict(r)
         d["saldo_residual"] = round(float(d["qtd_negociada"] or 0) - float(d["qtd_recebida"] or 0), 4)
+        # v6.7.0 — NFs distintas do pedido, para o cartão do kanban mostrar sem abrir.
+        # `GROUP_CONCAT(DISTINCT)` no SQLite só aceita o separador padrão (vírgula), então
+        # a limpeza e a ordenação ficam aqui.
+        d["notas_fiscais"] = sorted(
+            {n.strip() for n in (d.pop("notas_fiscais_raw", "") or "").split(",") if n.strip()}
+        )
         pedidos.append(d)
     return pedidos
 
@@ -169,7 +182,8 @@ def listar_pedidos_gc():
 def obter_pedido_gc(pedido_id):
     """Pedido + itens + recebimentos por mês, fresco do banco (o dialog relê a cada render).
 
-    Cada item traz `recebimentos` como `{mes_seq: quantidade}`, `qtd_recebida` e `saldo`.
+    Cada item traz `recebimentos` como `{mes_seq: quantidade}`, `notas` como
+    `{mes_seq: nota_fiscal}` (v6.7.0), `qtd_recebida` e `saldo`.
     """
     if not pedido_id:
         return None
@@ -186,19 +200,21 @@ def obter_pedido_gc(pedido_id):
                 (int(pedido_id),),
             ).fetchall()
         ]
-        receb = {}
+        receb, notas = {}, {}
         for r in conn.execute(
-            """SELECT r.gc_item_id, r.mes_seq, r.quantidade
+            """SELECT r.gc_item_id, r.mes_seq, r.quantidade, r.nota_fiscal
                FROM guarda_chuva_recebimento r
                JOIN guarda_chuva_item i2 ON i2.id = r.gc_item_id
                WHERE i2.pedido_id=?""",
             (int(pedido_id),),
         ).fetchall():
             receb.setdefault(r["gc_item_id"], {})[int(r["mes_seq"])] = float(r["quantidade"] or 0)
+            notas.setdefault(r["gc_item_id"], {})[int(r["mes_seq"])] = r["nota_fiscal"] or ""
 
     pedido = dict(p)
     for it in itens:
         it["recebimentos"] = receb.get(it["id"], {})
+        it["notas"] = notas.get(it["id"], {})
         it["qtd_recebida"] = round(sum(it["recebimentos"].values()), 4)
         it["saldo_residual"] = round(float(it["qtd_negociada"] or 0) - it["qtd_recebida"], 4)
     pedido["itens"] = itens
@@ -296,9 +312,10 @@ def atualizar_itens_gc(pedido_id, linhas):
     """Grava a tabela editável INTEIRA (itens + recebimentos do mês) numa transação.
 
     `linhas`: lista de dicts com `id` (do `guarda_chuva_item`), `qtd_negociada`,
-    `qtd_prevista_mes`, `preco_congelado`, `observacao` e `recebimentos`
-    (`{mes_seq: quantidade}`). Linhas sem `id` são ignoradas — a inclusão de material
-    tem caminho próprio (`adicionar_item_gc`), que valida o item.
+    `qtd_prevista_mes`, `preco_congelado`, `observacao`, `recebimentos`
+    (`{mes_seq: quantidade}`) e `notas` (`{mes_seq: nota_fiscal}`, v6.7.0). Linhas sem
+    `id` são ignoradas — a inclusão de material tem caminho próprio
+    (`adicionar_item_gc`), que valida o item.
 
     **Não toca estoque nem movimentações** — é controle do acordo.
     """
@@ -339,15 +356,27 @@ def atualizar_itens_gc(pedido_id, linhas):
                         int(gc_item_id),
                     ),
                 )
-                for mes_seq, qtd in (linha.get("recebimentos") or {}).items():
+                # v6.7.0 — os meses vêm da união de quantidades e notas: a NF pode ser
+                # lançada antes da quantidade (nota chegou, conferência ainda não), e o
+                # contrário também. Iterar só por `recebimentos` perderia a NF solta.
+                notas = linha.get("notas") or {}
+                recebs = linha.get("recebimentos") or {}
+                for mes_seq in sorted(set(recebs) | set(notas), key=int):
                     conn.execute(
                         """INSERT INTO guarda_chuva_recebimento
-                               (gc_item_id, mes_seq, quantidade, atualizado_em)
-                           VALUES (?,?,?,?)
+                               (gc_item_id, mes_seq, quantidade, nota_fiscal, atualizado_em)
+                           VALUES (?,?,?,?,?)
                            ON CONFLICT(gc_item_id, mes_seq)
                            DO UPDATE SET quantidade=excluded.quantidade,
+                                         nota_fiscal=excluded.nota_fiscal,
                                          atualizado_em=excluded.atualizado_em""",
-                        (int(gc_item_id), int(mes_seq), _to_float(qtd or 0), agora),
+                        (
+                            int(gc_item_id),
+                            int(mes_seq),
+                            _to_float(recebs.get(mes_seq) or 0),
+                            (str(notas.get(mes_seq) or "").strip() or None),
+                            agora,
+                        ),
                     )
             conn.execute("UPDATE guarda_chuva_pedido SET atualizado_em=? WHERE id=?", (agora, int(pedido_id)))
         return True, "Pedido salvo."
@@ -384,8 +413,11 @@ def exportar_guarda_chuva_df():
                 "Qtd Prevista/Mês": it.get("qtd_prevista_mes"),
                 "Preço Congelado": it.get("preco_congelado"),
             }
+            # v6.7.0 — a NF sai ao lado do mês, mesma ordem da tela: quem confere a
+            # planilha lê "quanto chegou / em qual nota" sem cruzar duas colunas distantes.
             for mes in range(1, max_meses + 1):
                 linha[f"{mes}º mês"] = it["recebimentos"].get(mes, 0.0)
+                linha[f"NF {mes}º mês"] = it.get("notas", {}).get(mes, "") or ""
             linha["Total Recebido"] = it["qtd_recebida"]
             linha["Saldo"] = it["saldo_residual"]
             linha["Estágio"] = p.get("estagio") or "—"
