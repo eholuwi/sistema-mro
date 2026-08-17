@@ -20,8 +20,13 @@
 
 ---
 
-## 📋 PRÓXIMA VERSÃO — v6.10.0 · Análise de Consumo em PDF (Assistente de Reposição)
+## ✅ ENTREGUE (aguardando validação) — v6.10.0 · Análise de Consumo em PDF (Assistente de Reposição)
 
+> **IMPLEMENTADA em 17/08/2026** — gate verde; falta validar no app real e o OK para commit.
+> Changelog em `changelog/6.10.0.md`; o **conteúdo** do documento segue o
+> `PROMPT_DOCUMENTO_ALMOXARIFE.md` (raiz do projeto). O que está abaixo é o plano aprovado,
+> mantido como registro do que foi decidido.
+>
 > **Planejado em 13/08/2026.** Número **DESLOCADO de v6.9.0**: a v6.9.0 está reservada para a
 > **previsão na Requisição** (fila × 5 min + Pronta para retirada), que o Luis vai trabalhar.
 > Domínios independentes (v6.9.0 = Requisição; v6.10.0 = SC7/Assistente) — único arquivo em

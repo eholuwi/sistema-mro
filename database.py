@@ -704,6 +704,31 @@ def criar_banco():
         )
     """)
 
+    # v6.10.0 — auditoria da Análise de Consumo em PDF (Assistente de Reposição). O
+    # documento sai do sistema e vira anexo de e-mail para justificar compra: quando alguém
+    # perguntar "de onde veio este número", a resposta tem de existir sem depender de
+    # ninguém lembrar. Por isso grava também a VERSÃO DO SC7 usada (`sc7_data_importacao`)
+    # e o MODO — o mesmo item gera documentos diferentes conforme a planilha importada e
+    # conforme tenha caído no fallback por requisição.
+    #
+    # `part_numbers` é TEXT (PNs separados por vírgula), não tabela-filha: é registro
+    # histórico do que foi gerado NAQUELE dia, não uma relação que se consulta por item.
+    # Normalizar convidaria a reescrever o passado quando um PN mudasse.
+    #
+    # Tabela NOVA e vazia ao migrar ⇒ aditiva, idempotente, sem `_backup_db` (mesmo padrão
+    # de `consumo_sc7` acima). Não toca tabela existente, então nenhuma FK é afetada.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS analises_geradas (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            data_hora           TEXT DEFAULT CURRENT_TIMESTAMP,
+            usuario             TEXT,
+            part_numbers        TEXT,
+            n_itens             INTEGER DEFAULT 0,
+            sc7_data_importacao TEXT,
+            modo                TEXT
+        )
+    """)
+
     # v6.1.0 — Usuários e login local (100% local, sem dependência externa: nem OIDC,
     # nem API do SCM, nem TI). Tabela NOVA e vazia ao migrar — não toca linha existente,
     # portanto aditiva e sem `_backup_db` (mesmo padrão de `itens_sc_externos`, v5.1.0).

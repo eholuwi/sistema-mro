@@ -21,6 +21,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+from services import analise_consumo
 from services import consumo_sc7 as C7
 from services.constants import PREVISAO_RUPTURA_SEM_RISCO
 from services.ficha import (
@@ -30,6 +31,7 @@ from services.ficha import (
 )
 from ui.tema import paleta_atual
 from ui.formatos import fmt, fmt_brl, fmt_moeda
+from ui.componentes.analise import aviso_sc7_desatualizado, revisao_e_download
 from ui.componentes.graficos import _barv, _linha_valor, _mes_label
 from ui.componentes.selecao import sel_material
 
@@ -178,6 +180,48 @@ def _ajuda_consumo_sc7(info, unidade):
     return "\n\n".join(linhas) + aviso
 
 
+def _render_analise_individual(ficha):
+    """v6.10.0 — Análise de Consumo em PDF do item aberto na Ficha.
+
+    Reusa o mesmo componente do Assistente (`ui/componentes/analise.py`): idênticos a
+    revisão obrigatória, o campo de observações, a auditoria e o PDF. O que muda é só que
+    o material já está escolhido — não há seletor nem `Analise Geral.pdf`, que é resumo de
+    lote e num item só seria a mesma tabela com uma linha.
+
+    O `session_state` é versionado pelo id do item: sem isso, abrir a Ficha de outro
+    material mostraria o documento revisado do anterior, com o checkbox já marcado.
+    """
+    item = ficha.get("item") or {}
+    item_id = item.get("id")
+    if not item_id:
+        return
+
+    with st.expander(":material/description: Análise de Consumo (PDF)"):
+        st.caption(
+            "Gera o documento de justificativa **deste material** — o mesmo do Assistente de "
+            "Reposição, com os números desta Ficha."
+        )
+        aviso_sc7_desatualizado()
+
+        chave = f"ficha_analise_{item_id}"
+        if st.session_state.get("ficha_analise_item") != item_id:
+            st.session_state.pop("ficha_analise_dados", None)
+            st.session_state["ficha_analise_item"] = item_id
+
+        if st.button(
+            ":material/analytics: Gerar Análise de Consumo",
+            type="primary",
+            width="stretch",
+            key=f"btn_ficha_analise_{item_id}",
+        ):
+            with st.spinner("Levantando consumo e montando o documento…"):
+                st.session_state["ficha_analise_dados"] = [analise_consumo.montar_dados_analise(item_id)]
+
+        dados = st.session_state.get("ficha_analise_dados")
+        if dados:
+            revisao_e_download(dados, chave, prefixo="ficha_analise", incluir_geral=False, com_expander=False)
+
+
 def _render_ficha_visao_geral(ficha):
     """Corpo original da Ficha 360 (v4.4.0: extraido para a 1a aba \"Visao Geral\")."""
     PAL = paleta_atual()
@@ -194,7 +238,10 @@ def _render_ficha_visao_geral(ficha):
     col_img, col_cad = st.columns([1, 2])
     with col_img:
         if ficha["imagem_abs"]:
-            st.image(ficha["imagem_abs"], use_container_width=True)
+            # v6.10.0: `use_container_width` está deprecado (sai depois de 31/12/2025) e o
+            # aviso aparecia no console a cada abertura da Ficha. `width="stretch"` é o
+            # substituto exato — o resto do projeto já usa essa forma.
+            st.image(ficha["imagem_abs"], width="stretch")
         else:
             st.markdown(
                 f"<div style='border:1px dashed {PAL['painel_borda']};border-radius:8px;"
@@ -444,6 +491,13 @@ def _render_ficha_visao_geral(ficha):
             hide_index=True,
             width="stretch",
         )
+
+    # ── Análise de Consumo em PDF (v6.10.0) ───────────────────────────
+    # Aqui, e não só no Assistente, porque a Ficha é onde a pergunta nasce: quem abriu o
+    # item para entender o consumo dele é exatamente quem vai precisar justificar a compra
+    # (pedido do Luis, 17/08/2026). Mesmo motor, mesma revisão obrigatória — só o item já
+    # vem escolhido, e sem o `Analise Geral.pdf`, que é resumo de lote.
+    _render_analise_individual(ficha)
 
     # ── Fornecedores ──────────────────────────────────────────────────
     with st.expander(f":material/apartment: Fornecedores ({len(ficha['fornecedores'])})"):

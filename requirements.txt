@@ -8,6 +8,10 @@
 # database.py; ui/ so tem o smoke de render por rota, entao regressao visual nao
 # aparece no gate automatico.
 streamlit==1.60.0
+# v6.10.0 — geracao dos PDFs da Analise de Consumo (services/analise_consumo.py).
+# Puro-Python, sem extensao C: instala no runtime embeddable pelo `pip --target` do
+# scripts/portatil.py como qualquer outra dependencia.
+reportlab==5.0.0
 pandas==3.0.5
 openpyxl==3.1.5
 plotly==6.9.0

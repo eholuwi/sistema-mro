@@ -34,6 +34,7 @@ contexto.
 | Backup do banco (automático + botão) | `database._backup_db`, `services/backup.py` |
 | Atualização pelo app (v6.6.0) | `services/atualizacao.py` (puro, **stdlib-only**) + `deploy/aplicar_atualizacao.bat` (motor, viaja no release); UI na aba **Atualização** de `configuracoes.py` |
 | Import das fotos da planilha (v6.6.0) | `services/importar_imagens.py` (cadeia rich-value do Excel 365 + casamento por PN); CLI fino em `scripts/importar_imagens_planilha.py`; UI na aba **Importar Base** |
+| Análise de Consumo em PDF (v6.10.0) | `services/analise_consumo.py` (reportlab; **não calcula consumo** — reusa `consumo_sc7` e `classificacao`); tabela `analises_geradas`; bloco reusável em `ui/componentes/analise.py`, usado pelo **Assistente de Reposição** (lote, seletor livre) e pela **Ficha 360** (item aberto) |
 | Testes (regressão por versão) | `tests/test_vXXX_*.py` |
 | **Gate de verificação** | `verify.ps1`, `ruff.toml`, `.github/workflows/verify.yml` |
 | Automação do harness | `.claude/hooks/`, `.claude/settings.json`, `.claude/agents/validador-mro.md` |

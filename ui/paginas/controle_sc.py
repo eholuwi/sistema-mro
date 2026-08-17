@@ -28,6 +28,7 @@ from datetime import date, datetime
 import pandas as pd
 import streamlit as st
 
+from services import analise_consumo
 from services.constants import PREVISAO_RUPTURA_SEM_RISCO, STATUS_SC
 from services.db_functions import (
     GUARDA_CHUVA_ESTAGIOS,
@@ -69,8 +70,9 @@ from services.planejamento import (
     resumir_grupo_sc,
     sugestao_para_item_sc,
 )
-from ui.cache import invalidar_leituras
+from ui.cache import inventario_cached, invalidar_leituras
 from ui.paginas import scm_integrado
+from ui.componentes.analise import aviso_sc7_desatualizado, revisao_e_download
 from ui.componentes.exportar import botoes_export
 from ui.componentes.selecao import sel_material
 from ui.componentes.status import divergencia_recebimento
@@ -248,6 +250,10 @@ def render() -> None:
             "sobrescreve a base do Compras (mín/máx/lead time/categoria)."
         )
 
+        # v6.10.0 — o aviso vem antes de tudo: é o SC7 que sustenta o número principal da
+        # Análise de Consumo, e planilha velha produz documento errado com cara de certo.
+        aviso_sc7_desatualizado()
+
         incluir_sem_mov = st.checkbox(
             "⚪ Mostrar itens sem movimentação (revisão)",
             value=False,
@@ -381,6 +387,11 @@ def render() -> None:
                 label_csv="⬇️ Exportar sugestões (CSV)",
                 width="stretch",
             )
+
+            # v6.10.0 — Análise de Consumo em PDF sobre a MESMA seleção que alimenta as SCs
+            # sugeridas: o comprador marca uma vez e escolhe o que fazer com o conjunto —
+            # abrir a SC ou justificar a compra por documento.
+            _render_analise_consumo(selecionadas)
 
             # --- 📦 SCs sugeridas (agrupadas por TIPO DO MATERIAL) — "de mão beijada" ---
             st.divider()
@@ -840,6 +851,76 @@ def render() -> None:
 def _gc_estado_busca():
     """Resultado da busca na API entre reruns (prévia → confirmação)."""
     return st.session_state.get("_gc_busca")
+
+
+def _render_analise_consumo(marcados_na_tabela):
+    """v6.10.0 — Análise de Consumo em PDF, com escolha LIVRE de material.
+
+    A tabela acima lista só o que está crítico (no/abaixo do ROP) e sem SC aberta — é o
+    recorte certo para abrir SC, e o errado para o documento: o comprador precisa
+    justificar compra de material que ainda não ficou crítico, de item parado que vai
+    voltar a girar, de um tipo inteiro de uma vez. Por isso o seletor daqui varre o
+    inventário INTEIRO, sem filtro de status nem de tipo (pedido do Luis, 17/08/2026).
+
+    Ele **nasce preenchido** com o que estiver marcado na tabela — o caminho comum
+    continua sendo um clique — e a partir daí acrescenta-se ou tira-se qualquer item. A
+    seleção da tabela segue mandando só nas SCs sugeridas; as duas não se misturam.
+    """
+    st.divider()
+    st.markdown("#### :material/description: Análise de Consumo (PDF)")
+    st.caption(
+        "Documento de justificativa de compra — um PDF por material mais o **Analise "
+        "Geral.pdf** para anexar no e-mail. Escolha **qualquer** item do inventário, "
+        "independente de status ou tipo. Os números são os mesmos da Ficha 360."
+    )
+
+    # O inventário inteiro, não a fila: `listar_inventario()` já exclui só o item
+    # DESATIVADO (v6.8.0), que não deve voltar por nenhuma porta.
+    inventario = inventario_cached()
+    rotulo = {i["id"]: f"{i['part_number']} · {i['nome_item']}" for i in inventario}
+    ids_marcados = [s["item_id"] for s in marcados_na_tabela if s["item_id"] in rotulo]
+
+    escolhidos = st.multiselect(
+        "Materiais da análise",
+        options=list(rotulo),
+        default=ids_marcados,
+        format_func=lambda i: rotulo.get(i, str(i)),
+        key="analise_itens",
+        placeholder="Digite o PN ou o nome para buscar qualquer material…",
+        help="Começa com o que você marcou na tabela acima; acrescente ou tire à vontade.",
+    )
+    if ids_marcados:
+        st.caption(
+            f":material/check_box: {len(ids_marcados)} item(ns) vieram da tabela acima · "
+            f"{len(escolhidos)} na análise."
+        )
+
+    if not escolhidos:
+        st.info("Escolha ao menos um material para gerar a análise.")
+        return
+
+    chave_lote = chave_editor("analise_lote", escolhidos)
+    if st.session_state.get("analise_chave") != chave_lote:
+        # A seleção mudou: o lote calculado não corresponde mais ao que está escolhido.
+        st.session_state.pop("analise_dados", None)
+        st.session_state["analise_chave"] = chave_lote
+
+    if st.button(
+        f":material/analytics: Gerar Análise de Consumo ({len(escolhidos)} item(ns))",
+        type="primary",
+        width="stretch",
+        key="btn_gerar_analise",
+    ):
+        with st.spinner("Levantando consumo e montando os documentos…"):
+            st.session_state["analise_dados"] = [
+                analise_consumo.montar_dados_analise(item_id) for item_id in escolhidos
+            ]
+
+    dados_lote = st.session_state.get("analise_dados")
+    if dados_lote:
+        st.markdown("##### :material/fact_check: Revisão obrigatória")
+        st.caption("Revise item a item. O download só libera com **todos** confirmados.")
+        revisao_e_download(dados_lote, chave_lote, prefixo="analise")
 
 
 def _render_import_relatorio_compras():

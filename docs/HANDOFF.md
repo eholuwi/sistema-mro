@@ -9,20 +9,104 @@
 
 ---
 
-## STATUS ATUAL — atualizado em 13/08/2026 (v6.6.0/6.7.0/6.8.0 commitadas e pushadas)
+## STATUS ATUAL — atualizado em 17/08/2026 (v6.8.1, v6.8.2 e v6.10.0 prontas, aguardando OK para commit)
 
-> **Preparado para continuar em OUTRO PC.** As três versões estão em `origin/feat/v5.0.0`,
-> gate exit 0 (**1107 testes**). O que NÃO viaja pelo git está listado em
-> "O que copiar à mão" (fim desta seção) — `mro.db`, `backups/`, `dist/` e o vault.
+> **Preparado para continuar em OUTRO PC.** Até a v6.8.0 tudo está em `origin/feat/v5.0.0`.
+> O que NÃO viaja pelo git está listado em "O que copiar à mão" (fim desta seção) —
+> `mro.db`, `backups/`, `dist/` e o vault.
 
-- **⚠️ Trabalho de OUTRO AGENTE em curso, NÃO commitado (13/08/2026):** troca do `MRO.exe`
-  (PyInstaller) por **`MRO.lnk` + `deploy/criar_atalho.ps1`** no pacote portátil — o binário sem
-  assinatura era o que a quarentena do EDR pegava na máquina real. Toca `scripts/portatil.py`,
-  `tests/test_v580_portatil.py`, `deploy/iniciar_mro.bat`, `deploy/instalar_servidor.ps1` e o
-  `criar_atalho.ps1` novo. **Fica no working tree, fora dos commits desta preparação** — e, como
-  não está no git, **não viaja para o outro PC**: ou termina aqui, ou copie esses 5 arquivos junto.
-  ⚠️ **Colisão de número:** esse trabalho se autodenomina **v6.9.0**, mas `docs/prompt.md` reserva
-  a v6.9.0 para a **previsão na Requisição**. Decidir o número antes de fechar.
+- **✅ A COLISÃO DE NÚMERO FOI RESOLVIDA (17/08/2026): o portátil virou v6.8.2.** Ele não muda
+  app, cálculo nem schema — é empacotamento, então patch. **A v6.9.0 continua reservada** para a
+  previsão na Requisição e a **v6.10.0** para a Análise de Consumo em PDF.
+
+- **v6.10.0 — Análise de Consumo em PDF (Assistente de Reposição). IMPLEMENTADA,
+  ⏳ AGUARDANDO VALIDAÇÃO NO APP REAL E OK PARA COMMIT.** Changelog em `changelog/6.10.0.md`.
+  Traz para dentro do sistema o documento que o Luis gerava **à mão** (os ~30 `.docx` em
+  `Analise de Consumo/`, na raiz do projeto).
+
+  - **O conteúdo do documento NÃO está no `prompt.md`** — está em
+    `PROMPT_DOCUMENTO_ALMOXARIFE.md`, na **raiz do projeto, fora deste repo**. O `prompt.md`
+    é a referência de arquitetura; aquele é a de redação, e foi validado pelo lote manual.
+  - **Nenhum cálculo de consumo novo.** O número do SC7 é literalmente
+    `consumo_sc7_por_item` — o mesmo do card da Ficha 360 — e o fallback é
+    `classificacao.consumo_mensal`. Existe teste que compara os dois
+    (`test_o_consumo_sc7_do_documento_e_o_mesmo_da_ficha_360`) para que uma segunda fórmula
+    não nasça calada.
+  - **O fallback por saídas vale só DENTRO do documento**, sempre rotulado e com a conta
+    escrita ("somamos as retiradas de jan–jul — 70 UN — e dividimos por 7"). É a condição
+    que faltava na v6.5.0, quando o mesmo fallback foi removido do card por medir consumo
+    de almoxarifado anunciando compra. `services/consumo_sc7.py` e o card **não foram
+    tocados**.
+  - **Zero ≠ "não sabemos":** item sem pedido e sem retirada sai como `sem_historico`, com
+    o consumo em branco — não com 0.
+  - **⚠️ Duas armadilhas de PDF, as duas com dado real:** `Paragraph` interpreta mini-HTML
+    (um `&` na descrição ou nas **Observações**, que é texto livre digitado na tela, impede
+    o PDF de sair) e a fonte padrão não mapeia tudo. Medido glifo a glifo: **todo o
+    português passa** — por isso não há fonte embutida; `▪` e `→` viram `?`.
+  - **⚠️ E uma lição de método:** um teste intermediário acusou "bullet perdido" procurando
+    o byte `0x95` (cp1252). O reportlab emite `0x7F`, que **é** o glifo `bullet` no
+    WinAnsiEncoding do PDF. **A autoridade é a tabela de glifos, não a busca de bytes no
+    stream** — quase troquei um caractere correto por causa de um teste errado.
+  - **Dependência nova: `reportlab==5.0.0`** em `requirements.txt` (puro-Python; entra no
+    portátil pelo `pip --target` sem mudança de código).
+  - **Dois pedidos do Luis ao validar (17/08/2026), já atendidos:** (1) o seletor da análise
+    varre o **inventário inteiro**, não a fila de críticos — justifica-se compra de item que
+    **ainda não** ficou crítico, e a tabela do Assistente continua mandando só nas SCs
+    sugeridas; (2) a análise também sai **da Ficha 360**, item a item. O bloco de revisão
+    virou `ui/componentes/analise.py` para as duas telas usarem o MESMO fluxo — revisão
+    duplicada divergiria, e o lado esquecido continuaria liberando PDF sem confirmação.
+  - **⚠️ IMPORT ADIADO TROCA CUSTO DE STARTUP POR FALHA TARDIA** (achado na validação). O
+    import do reportlab vive dentro das funções de PDF, então o app subia, a Ficha abria, a
+    revisão era feita — e o `ModuleNotFoundError` só estourava no `download_button`. No
+    Streamlit exceção não tratada **derruba o render inteiro**: a Ficha virava stack trace
+    depois de a pessoa ter revisado. Agora há checagem ANTES da revisão, com mensagem.
+  - **⚠️ O APP DE DESENVOLVIMENTO RODA COM O PYTHON GLOBAL, NÃO COM O `venv\`.** Foi por
+    isso que o `reportlab` pinado em `requirements.txt` e instalado no venv não existia na
+    hora de gerar o PDF. **Pin não garante pacote instalado onde o app roda** — ao
+    acrescentar dependência, instale nos DOIS interpretadores. No pacote portátil não há
+    esse risco (o `pip --target` instala do próprio `requirements.txt`).
+
+- **v6.8.1 — Unidades livres do CHECK (hotfix). IMPLEMENTADA, gate verde (1117 testes),
+  ⏳ AGUARDANDO VALIDAÇÃO NO APP REAL E OK PARA COMMIT.** Changelog em `changelog/6.8.1.md`.
+  A v6.5.1 tornou Unidades uma lista mestra editável, mas o schema ainda prendia
+  `inventario.unidade` aos 7 valores de sempre: salvar um item na unidade nova (ex.: **KG**)
+  caía em `CHECK constraint failed`, sem mensagem útil.
+
+  - **SQLite não remove CHECK por `ALTER`** → `_migrar_inventario_unidade_livre` faz o rebuild
+    seguro de 12 passos. **Diferente da v2.1.0** (que listava as colunas à mão), as colunas são
+    lidas do próprio banco via `PRAGMA table_info`: o rebuild não pode descartar coluna futura,
+    e preserva o `UNIQUE` de `part_number`, o `AUTOINCREMENT` de `id` e a FK de `ultima_sc_id`.
+  - Guardada por "o `CHECK(unidade` ainda existe?" → **idempotente**, com `.bak` antes e
+    rollback explícito. A prova de que rodou em produção é o
+    `…-inventario-unidade-livre` em `backups/`, nunca o app responder.
+
+- **v6.8.2 — Pacote portátil sem PyInstaller. IMPLEMENTADA, ⏳ AGUARDANDO VALIDAÇÃO NA MÁQUINA
+  REAL E OK PARA COMMIT.** Changelog em `changelog/6.8.2.md`. Começou como trabalho de outro
+  agente (o `MRO.lnk` + `criar_atalho.ps1`) e foi **completada aqui** — faltavam cinco pontas.
+
+  - **⚠️ O `MRO.exe` fazia DUAS coisas além do ícone, e as duas quase se perderam:** ele
+    **abria o navegador** (o bat sobe com `--server.headless=true`, ou seja, sem ele o duplo
+    clique viraria só uma janela preta, com o LEIA-ME prometendo o contrário) e **avisava sobre
+    pasta sincronizada** (OneDrive/Dropbox seguram lock no `mro.db` e corrompem o banco). As
+    duas migraram para o `iniciar_mro.bat`. **Quando um binário sai, procure o que ele fazia
+    além do óbvio.**
+  - **A abertura do navegador ESPERA a porta 8501 aceitar conexão** (`netstat | findstr` +
+    `ping`, ~44 s de teto, medido). Abrir antes mostraria "não foi possível conectar" e a
+    pessoa concluiria que o sistema não subiu. ⚠️ **`timeout` do cmd está proibido nessa
+    espera** — mesma armadilha da v6.6.0 (aborta com stdin redirecionado, e este bat é lançado
+    por `start ""` pelos dois atualizadores). Travado por teste.
+  - **Os dois atualizadores religavam pelo exe.** `atualizar_mro.bat` e
+    `deploy/aplicar_atualizacao.bat` (o motor da atualização pelo app) tinham `if exist
+    MRO.exe` — ramo morto que só cairia no fallback depois de testar um arquivo que nunca mais
+    vai existir. Agora religam direto pelo `iniciar_mro.bat`.
+  - **`deploy/launcher.py` foi APAGADO** e o pin `pyinstaller` saiu do `requirements-dev.txt`.
+    Os ~9 testes do launcher **não foram apagados: foram migrados** para o `.bat`, porque o
+    comportamento migrou para lá.
+  - **⚠️ O RISCO QUE SÓ A MÁQUINA REAL RESPONDE:** o `.lnk` viaja **dentro do zip**, e
+    LNK-em-ZIP baixado é, ele mesmo, um padrão que EDR costuma sinalizar (o Mark-of-the-Web
+    propaga para o extraído). Pode reproduzir o problema que a mudança veio resolver. Se
+    acontecer, o caminho oficial passa a ser só o `criar_atalho.ps1` (gera o atalho
+    localmente) e o `.lnk` sai do pacote.
 
 - **v6.8.0 — Desativar item (soft delete). COMMITADA (`dd2cec7`) e VALIDADA no app real.**
   Changelog em `changelog/6.8.0.md`.
@@ -85,15 +169,12 @@
     `Id` antes de `Target`, openpyxl ao contrário e com barra inicial; o sintoma era
     "0 fotos encontradas".
 
-### Pendências abertas (13/08/2026)
+### Pendências abertas (17/08/2026)
 
 - **v6.9.0 — previsão na Requisição** (fila × 5 min + "Pronta para retirada"). Reservada; o Luis
-  vai trabalhar. ⚠️ Ver a colisão de número com o trabalho do portátil, acima.
-- **v6.10.0 — Análise de Consumo em PDF** (Assistente de Reposição). **Planejada e aprovada**,
-  aguardando implementação: requisitos, épicos (C schema → A motor → B UI), anti-duplicação e
-  testes em `docs/prompt.md`, seção "PRÓXIMA VERSÃO". Esqueleto em `changelog/6.10.0.md`.
-  Dependência nova: **`reportlab`** em `requirements.txt` (entra no portátil via `pip --target`).
-- **Portátil sem PyInstaller** — trabalho do outro agente, no working tree, não commitado.
+  vai trabalhar. ✅ O número está livre — o portátil virou v6.8.2.
+- ✅ **v6.10.0 — Análise de Consumo em PDF: IMPLEMENTADA** nesta sessão (17/08/2026). Ver o
+  bloco dela no STATUS ATUAL, acima. Falta a validação no app real.
 
 ### O que copiar à mão para o outro PC (fora do git)
 
