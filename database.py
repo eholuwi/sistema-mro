@@ -201,7 +201,7 @@ def criar_banco():
             part_number           TEXT UNIQUE NOT NULL,
             nome_item             TEXT NOT NULL,
             descricao             TEXT,
-            unidade               TEXT CHECK(unidade IN ('GL','UN','CX','RL','PCT','LT','RM')),
+            unidade               TEXT,
             importancia           TEXT CHECK(importancia IN ('Parada de Linha','Importante','Admin')),
             tipo_material         TEXT CHECK(tipo_material IN ('Expediente','Consumivel','Spare Parts','Uniforme','Improdutivo')),
             setor_responsavel     TEXT CHECK(setor_responsavel IN ('Improdutivo','Engenharia de SMT','LED DRIVER','MANUTENÇÃO','PRODUÇÃO','QUALIDADE','ALMOXARIFADO','ADMINISTRATIVO','SESMT')),
@@ -907,6 +907,11 @@ def criar_banco():
             logger.info("  -> Migracao: %s em inventario adicionada.", col)
     conn.commit()
 
+    # v6.8.1 — libera `unidade` do CHECK fixo (rebuild seguro). Roda DEPOIS do laço
+    # de ALTER acima: o rebuild lê as colunas do próprio banco via PRAGMA, mas só
+    # faz sentido executar com o schema completo já garantido.
+    _migrar_inventario_unidade_livre(conn)
+
     # v6.4.0 — backfill ÚNICO do Mín/Máx calculado. Sem ele, a sugestão só apareceria no
     # item depois da primeira saída pós-atualização (é `_recalcular_consumo` quem a
     # mantém em dia), e a tela nasceria vazia justamente para os itens parados. Guardado
@@ -1255,7 +1260,7 @@ def _migrar_inventario_tipo_livre(conn):
                 part_number           TEXT UNIQUE NOT NULL,
                 nome_item             TEXT NOT NULL,
                 descricao             TEXT,
-                unidade               TEXT CHECK(unidade IN ('GL','UN','CX','RL','PCT','LT','RM')),
+                unidade               TEXT,
                 importancia           TEXT CHECK(importancia IN ('Parada de Linha','Importante','Admin')),
                 tipo_material         TEXT,
                 setor_responsavel     TEXT CHECK(setor_responsavel IN ('Improdutivo','Engenharia de SMT','LED DRIVER','MANUTENÇÃO','PRODUÇÃO','QUALIDADE','ALMOXARIFADO','ADMINISTRATIVO','SESMT')),
@@ -1285,6 +1290,83 @@ def _migrar_inventario_tipo_livre(conn):
         conn.execute("COMMIT")
         conn.execute("PRAGMA foreign_keys=ON")
         logger.info("  ↳ Rebuild de inventario concluído com sucesso (FKs íntegras).")
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        conn.execute("PRAGMA foreign_keys=ON")
+        raise
+    finally:
+        conn.isolation_level = iso_anterior
+
+
+def _migrar_inventario_unidade_livre(conn):
+    """Migração v6.8.1: remove o CHECK fixo de `unidade` em inventario.
+
+    O v6.5.1 tornou Unidades uma lista mestra editável em Configurações, mas o
+    schema antigo ainda prendia `unidade` aos 7 valores de sempre
+    ('GL','UN','CX','RL','PCT','LT','RM'): salvar um item na unidade recém-criada
+    (ex.: "KG") caía em `CHECK constraint failed` no INSERT/UPDATE. O CHECK saiu
+    de `tipo_material` na v2.1.0 mas ficou de fora de `unidade` — bug latente que
+    só apareceu quando alguém cadastrou uma unidade nova.
+
+    SQLite não remove CHECK via ALTER → rebuild seguro (procedimento oficial de 12
+    passos). Diferente da v2.1.0 (lista fixa de colunas), as colunas são lidas do
+    próprio banco via PRAGMA table_info: o rebuild preserva TODAS as colunas atuais
+    (não pode descartar coluna futura), o UNIQUE de `part_number`, o AUTOINCREMENT
+    de `id` e a FK de `ultima_sc_id`.
+
+    Guarda: só executa se o CHECK de `unidade` ainda existir. Idempotente.
+    """
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='inventario'").fetchone()
+    if not row or not row[0]:
+        return
+    sql_atual = row[0].replace(" ", "").replace("CHECK (", "CHECK(")
+    if "CHECK(unidade" not in sql_atual:
+        return  # já livre
+
+    logger.info("  ↳ Migração v6.8.1: rebuild de inventario (unidade livre)...")
+    _backup_db("inventario-unidade-livre")
+
+    conn.commit()  # garante que não há transação aberta
+    iso_anterior = conn.isolation_level
+    conn.isolation_level = None  # autocommit: permite toggle de foreign_keys
+    try:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN")
+        cols = conn.execute("PRAGMA table_info(inventario)").fetchall()
+        definicoes = []
+        for c in cols:
+            nome, tipo, notnull, dflt, pk = c[1], c[2], c[3], c[4], c[5]
+            d = nome
+            if tipo:
+                d += f" {tipo}"
+            if nome == "part_number":  # UNIQUE era constraint de tabela; recria na coluna
+                d += " UNIQUE"
+            if notnull:
+                d += " NOT NULL"
+            if dflt is not None:
+                d += f" DEFAULT {dflt}"
+            if pk:
+                d += " PRIMARY KEY"
+                if nome == "id":  # PRAGMA não informa AUTOINCREMENT; é sempre o caso aqui
+                    d += " AUTOINCREMENT"
+            definicoes.append(d)
+        if any(c[1] == "ultima_sc_id" for c in cols):
+            definicoes.append("FOREIGN KEY (ultima_sc_id) REFERENCES solicitacoes_compra(id)")
+        conn.execute(f"CREATE TABLE inventario_new ({', '.join(definicoes)})")
+        copia = ", ".join(c[1] for c in cols)
+        conn.execute(f"INSERT INTO inventario_new ({copia}) SELECT {copia} FROM inventario")
+        conn.execute("DROP TABLE inventario")
+        conn.execute("ALTER TABLE inventario_new RENAME TO inventario")
+        problemas = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if problemas:
+            conn.execute("ROLLBACK")
+            raise RuntimeError(f"foreign_key_check falhou no rebuild de inventario: {problemas}")
+        conn.execute("COMMIT")
+        conn.execute("PRAGMA foreign_keys=ON")
+        logger.info("  ↳ Rebuild de inventario concluído com sucesso (FKs íntegras, unidade livre).")
     except Exception:
         try:
             conn.execute("ROLLBACK")
