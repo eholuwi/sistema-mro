@@ -1,4 +1,4 @@
-# Instalação no PC-servidor (v5.8.0)
+# Instalação no PC-servidor (v6.8.2)
 
 Objetivo: os compradores (Miguel, Davi) e o almoxarifado abrem `http://<pc>:8501` no
 navegador. **Zero instalação na máquina deles.** O sistema roda num único PC da rede.
@@ -9,14 +9,16 @@ navegador. **Zero instalação na máquina deles.** O sistema roda num único PC
 
 ```
 C:\MRO\
-├── MRO.exe             launcher (v5.8.0) — dois cliques e o sistema sobe
+├── MRO.lnk             atalho para o iniciar_mro.bat — dois cliques e o sistema sobe
+├── mro.ico             ícone do atalho
 ├── runtime\            Python embeddable + dependências
 ├── app\                código do sistema  ← substituído inteiro a cada release
 ├── dados\
 │   ├── mro.db          o banco
 │   └── backups\        .bak automáticos (migração e sync) + os manuais
-├── iniciar_mro.bat
+├── iniciar_mro.bat     **quem realmente sobe o sistema** (v6.8.2)
 ├── atualizar_mro.bat
+├── criar_atalho.ps1
 └── instalar_servidor.ps1
 ```
 
@@ -38,18 +40,19 @@ python scripts/portatil.py           # → dist/mro-portatil-5.8.0.zip  (~148 MB
 
 Precisa de Windows, do **mesmo minor** de Python que o CI valida (o build aborta se não
 bater) e de internet na primeira vez — o embeddable fica em cache em `build/cache/`.
-`--pular-deps` reaproveita o `runtime\` já montado; `--pular-exe`, o `MRO.exe`.
+`--pular-deps` reaproveita o `runtime\` já montado (o `pip` é o passo lento).
 
 **Na máquina destino (não precisa de Python, nem de admin, nem de internet):**
 
 1. Extraia o zip em **`C:\MRO`**.
 
    > ⚠️ **Não extraia dentro do OneDrive / Dropbox / Google Drive.** O sincronizador
-   > segura lock no `mro.db` e no `-wal` e pode corromper o banco. O `MRO.exe` avisa se
-   > detectar isso, mas não impede.
+   > segura lock no `mro.db` e no `-wal` e pode corromper o banco. O `iniciar_mro.bat`
+   > avisa se detectar isso, mas não impede.
 
-2. Dois cliques em **`MRO.exe`**. O navegador abre sozinho; a janela preta mostra o
-   endereço de rede (`http://<ip>:8501`) para os outros usuários.
+2. Copie o **`MRO.lnk`** para a área de trabalho (ou rode `criar_atalho.ps1`, que o
+   recria apontando para esta pasta) e dê dois cliques nele. O navegador abre sozinho;
+   a janela preta mostra o endereço de rede (`http://<ip>:8501`) para os outros usuários.
 
    **Fechar a janela preta para o sistema.** O Streamlit morre junto — não fica processo
    órfão segurando a porta.
@@ -57,7 +60,7 @@ bater) e de internet na primeira vez — o embeddable fica em cache em `build/ca
 3. **Só se o sistema tiver que subir sozinho quando o PC liga:** botão direito em
    `instalar_servidor.ps1` › *Executar com o PowerShell*. Ele pede admin e faz o que as
    seções 4 e 5 mandam fazer na mão (tarefa agendada `Sistema MRO` + firewall na 8501).
-   Para uso avulso, os dois cliques no `MRO.exe` bastam.
+   Para uso avulso, os dois cliques no atalho bastam.
 
 **Migrando de um MRO existente:** copie o `mro.db` (mais os `-wal`/`-shm`, se houver) para
 `C:\MRO\dados\` **com o app parado**, antes do primeiro boot. Ver seção 3.
@@ -100,7 +103,7 @@ Teste: `C:\MRO\runtime\python.exe -s -c "import streamlit, pandas; print('ok')"`
 > ⚠️ **O `-s` não é decoração.** Com `import site` habilitado, o embeddable também coloca
 > `%APPDATA%\Python\Python3XX\site-packages` no `sys.path` — os pacotes globais da máquina.
 > Sem `-s`, o teste acima passa mesmo com o `pip install` incompleto, e a quebra só aparece
-> num PC que não tenha Python instalado. `iniciar_mro.bat` e `MRO.exe` já usam `-s`.
+> num PC que não tenha Python instalado. O `iniciar_mro.bat` já usa `-s`.
 >
 > ⚠️ **O embeddable IGNORA `PYTHONPATH`** — a presença do `python*._pth` substitui a busca
 > padrão de caminhos. Quem coloca `Lib\site-packages` no `sys.path` é a linha do `._pth` que
@@ -154,15 +157,15 @@ Roda como o **usuário**, sem elevação, sem SYSTEM, sem agendador — muito me
 para o EDR e suficiente para o uso real (a máquina fica ligada no turno comercial).
 
 1. `Win + R` → `shell:startup` (abre a pasta Inicializar do usuário).
-2. Crie ali um atalho para `C:\MRO\MRO.exe`.
+2. Copie ali o `C:\MRO\MRO.lnk` (ou crie um atalho para `C:\MRO\iniciar_mro.bat`).
 
-O sistema volta sozinho quando a pessoa faz login. A janela preta do `MRO.exe` fica aberta —
+O sistema volta sozinho quando a pessoa faz login. A janela preta fica aberta —
 **fechá-la para o sistema**, o que é o comportamento desejado.
 
 ### 4.2 Sem auto-start
 
-Duplo clique no `MRO.exe` quando precisar. É o modo mais simples, e o
-`atualizar_mro.bat` religa por ele.
+Duplo clique no atalho **MRO** quando precisar. É o modo mais simples, e o
+`atualizar_mro.bat` religa pelo `iniciar_mro.bat`.
 
 ### 4.3 Se você ainda assim quiser a tarefa agendada
 
@@ -210,7 +213,7 @@ Deixe `Public` de fora — é uma aplicação de rede interna, sem autenticaçã
 3. **Reboot-test:** reinicie o servidor e confirme que o app volta sozinho.
 4. Navegue as 9 páginas, com atenção a **Movimentação** e **Ficha 360**.
 5. Confirme que o `.bak` da primeira subida está em `C:\MRO\dados\backups\`.
-6. Se subiu pelo `MRO.exe`: **feche a janela preta** e confirme no Gerenciador de Tarefas
+6. Se subiu pelo atalho: **feche a janela preta** e confirme no Gerenciador de Tarefas
    que nenhum `python.exe` sobrou.
 
 > ⚠️ **Servidor no ar não prova que a migração rodou.** O Streamlit só executa o `app.py`
@@ -235,7 +238,7 @@ Quem opera a máquina **não precisa mais mexer em arquivo nenhum**:
 O que acontece por baixo (`deploy/aplicar_atualizacao.bat`, em processo destacado): pausa
 de 3 s → para a tarefa agendada **e** mata o processo do app → espera a porta 8501 liberar
 → backup do banco → `move app\ → app_anterior\` → extrai → religa. Funciona nos dois modos
-de subida (tarefa agendada e `MRO.exe`), e **qualquer falha restaura `app_anterior\` e
+de subida (tarefa agendada e duplo clique no atalho), e **qualquer falha restaura `app_anterior\` e
 religa mesmo assim**.
 
 Log de cada tentativa: `C:\MRO\dados\atualizacoes\ultima_atualizacao.log`.
@@ -257,7 +260,7 @@ extrai a nova → religa. Se a extração falhar, ele restaura sozinho a versão
 Ele mora na **raiz**, fora de `app\`, de propósito: um atualizador que vive dentro da pasta
 que ele substitui não serve de recuperação.
 
-> ⚠️ **Feche o `MRO.exe` antes.** Se o sistema tiver subido por dois cliques, não há tarefa
+> ⚠️ **Feche a janela preta antes.** Se o sistema tiver subido por dois cliques, não há tarefa
 > agendada para o `schtasks /End` parar e a pasta `app\` continua em uso. Desde a v5.8.0 o
 > script **aborta** nesse caso em vez de misturar duas versões na mesma pasta. (O caminho
 > do §7.1 não sofre disso: ele mata o processo pelo PID.)
@@ -265,8 +268,8 @@ que ele substitui não serve de recuperação.
 ### 7.3 Comum aos dois
 
 O zip é o de **release** (`scripts/release.py`), não o portátil: só `app\` é substituída.
-O `runtime\` e o `MRO.exe` ficam como estão — o exe não precisa ser refeito a cada versão,
-porque ele só congela o launcher.
+O `runtime\` e o atalho ficam como estão — nada fora de `app\` precisa ser refeito a cada
+versão.
 
 **Rollback manual:** pare a tarefa, apague `app\`, renomeie `app_anterior\` para `app\`,
 religue. O banco não é tocado pela atualização — mas se a nova versão tiver rodado uma
@@ -326,10 +329,10 @@ mistura dois estados do banco.
 - **O pacote portátil é grande** — ~148 MB zipado, ~440 MB extraído, dos quais 427 MB são o
   `runtime\`. É o preço de não instalar nada na máquina destino. Passe por pendrive ou
   compartilhamento, não por e-mail.
-- **`MRO.exe` pode ser barrado por antivírus.** Executável gerado por PyInstaller
-  (`--onefile`) às vezes cai em falso positivo heurístico. Se acontecer, o
-  `iniciar_mro.bat` faz a mesma coisa e não é um binário — ou libere o exe na exceção do
-  antivírus corporativo.
+- **O `MRO.exe` saiu na v6.8.2 justamente por causa do antivírus.** O executável do
+  PyInstaller, sem assinatura, era o que a quarentena do EDR pegava na máquina real. Hoje
+  o pacote leva um atalho (`MRO.lnk`) para o `iniciar_mro.bat`, e `criar_atalho.ps1`
+  recria esse atalho localmente se o `.lnk` do zip também for barrado.
 - **Nunca coloque a pasta dentro do OneDrive/Dropbox.** O sincronizador segura lock no
   `mro.db` e no `-wal`; dois processos escrevendo no mesmo arquivo corrompem o banco. O
-  `MRO.exe` avisa, mas não impede.
+  `iniciar_mro.bat` avisa, mas não impede.

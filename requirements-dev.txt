@@ -12,7 +12,6 @@ pytest-cov==7.1.0
 # so que no repo inteiro em vez de apenas `app.py` + `ui/`.
 ruff==0.16.0
 
-# v5.8.0 — so para congelar `deploy/launcher.py` em MRO.exe (scripts/portatil.py).
-# NAO entra no requirements.txt: nada muda no que roda no servidor, e o Streamlit
-# continua sendo executado pelo Python do `runtime\`, nunca congelado.
-pyinstaller==6.21.0
+# v6.8.2 — o pin do `pyinstaller` SAIU daqui junto com o MRO.exe. O pacote portatil
+# nao congela mais nada: o atalho `MRO.lnk` aponta direto para o `iniciar_mro.bat`, e
+# quem executa o Streamlit continua sendo o Python do `runtime\`. Ver changelog/6.8.2.md.

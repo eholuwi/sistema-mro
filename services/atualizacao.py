@@ -74,8 +74,8 @@ def raiz_instalacao(db_path: str | os.PathLike | None = None) -> Path:
 
     Deduzida do banco, não de `__file__`: `database.DB_PATH` é a única coisa que sabe
     onde a instalação REAL mora (produção define `MRO_DB_PATH=C:\\MRO\\dados\\mro.db`
-    em `deploy/iniciar_mro.bat` e `deploy/launcher.py`). Em dev o banco fica na raiz do
-    repositório e não há pasta `dados\\` — daí o if.
+    em `deploy/iniciar_mro.bat`, o único caminho de subida desde a v6.8.2). Em dev o
+    banco fica na raiz do repositório e não há pasta `dados\\` — daí o if.
     """
     if db_path is None:
         import database
@@ -270,7 +270,7 @@ def disparar(pacote: Path, raiz: Path | None = None, pid: int | None = None) -> 
     """Lança a troca num processo que SOBREVIVE à morte deste. Volta na hora.
 
     As duas flags são o coração do mecanismo: `DETACHED_PROCESS` corta o vínculo com o
-    console do Streamlit (sem ela o filho morre junto quando o launcher fecha a janela) e
+    console do Streamlit (sem ela o filho morre junto quando a janela preta fecha) e
     `CREATE_NEW_PROCESS_GROUP` tira o filho do grupo que recebe o CTRL_CLOSE_EVENT. Sem
     as duas, o motor morreria no passo 1 — logo depois de matar o app e ANTES de religar.
 

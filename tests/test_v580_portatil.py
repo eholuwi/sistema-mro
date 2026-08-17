@@ -1,23 +1,23 @@
-"""v5.8.0 — Pacote portatil: launcher, empacotador e os contratos entre os .bat/.ps1.
+"""v5.8.0 — Pacote portatil: subida, empacotador e os contratos entre os .bat/.ps1.
 
 O build de verdade NAO roda aqui: precisa de Windows, internet e ~700 MB, e a CI e
 ubuntu-latest. O que da para travar sem construir nada e o que de fato quebra calado:
 
-1. **O launcher so pode importar stdlib.** E isso que mantem o freeze trivial e estavel
-   entre releases. No dia em que alguem importar `streamlit` ou `database` aqui, o
-   PyInstaller passa a arrastar o grafo inteiro e volta a fragilidade que a v5.5.0
-   evitou de proposito (`docs/PLANO_V5_EVOLUCAO.md`: "no maximo no launcher").
+1. **O `iniciar_mro.bat` e o UNICO caminho de subida** (v6.8.2). Ele tem que carregar as
+   flags do Streamlit, o `-s`, o `MRO_DB_PATH` fora de `app\\` e — desde que o MRO.exe
+   saiu — a abertura do navegador e o aviso de pasta sincronizada, que eram do launcher.
 2. **Uma unica lista de arquivos do app.** `portatil.py` reusa `release.itens_do_pacote()`;
    se alguem duplicar a lista, o portatil sai sem um modulo que o zip de release tem.
 3. **O nome da tarefa agendada e um contrato entre tres arquivos.** `instalar_servidor.ps1`
    cria, `atualizar_mro.bat` para e religa. Divergir quebra a atualizacao em silencio.
+
+⚠️ **v6.8.2 — o `deploy/launcher.py` deixou de existir**, junto com o PyInstaller e o
+MRO.exe. Os contratos que os testes do launcher guardavam nao sumiram: eles migraram para
+os testes do `.bat` abaixo, porque o comportamento migrou para la.
 """
 
-import ast
 import re
-import socket
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -27,81 +27,25 @@ sys.path.insert(0, str(PROJ / "scripts"))
 sys.path.insert(0, str(PROJ / "deploy"))
 
 release = pytest.importorskip("release")
-launcher = pytest.importorskip("launcher")
 
-LAUNCHER = PROJ / "deploy" / "launcher.py"
 INICIAR = PROJ / "deploy" / "iniciar_mro.bat"
 ATUALIZAR = PROJ / "deploy" / "atualizar_mro.bat"
 INSTALAR = PROJ / "deploy" / "instalar_servidor.ps1"
+MOTOR = PROJ / "deploy" / "aplicar_atualizacao.bat"
 
 
-# ── O launcher ────────────────────────────────────────────────────────────────
+def _texto(caminho):
+    return caminho.read_text(encoding="utf-8", errors="ignore")
 
 
-def test_launcher_existe_e_compila():
-    assert LAUNCHER.exists(), "deploy/launcher.py ausente — e a fonte do MRO.exe"
-    ast.parse(LAUNCHER.read_text(encoding="utf-8"))
+# ── A subida (iniciar_mro.bat) ────────────────────────────────────────────────
 
 
-def test_launcher_so_importa_stdlib():
-    """A guarda central do CP2: qualquer import fora da stdlib torna o freeze fragil."""
-    arvore = ast.parse(LAUNCHER.read_text(encoding="utf-8"))
-
-    modulos = set()
-    for no in ast.walk(arvore):
-        if isinstance(no, ast.Import):
-            modulos |= {a.name.split(".")[0] for a in no.names}
-        elif isinstance(no, ast.ImportFrom) and no.level == 0 and no.module:
-            modulos.add(no.module.split(".")[0])
-
-    externos = modulos - sys.stdlib_module_names - {"__future__"}
-    assert not externos, (
-        f"deploy/launcher.py so pode importar stdlib (o PyInstaller congela ele): {sorted(externos)}"
-    )
-
-
-def test_saida_do_console_e_ascii():
-    """A janela do MRO.exe e um console Windows na codepage do sistema, nao UTF-8.
-
-    Medido no CP4: `print(f"Sistema MRO — iniciando...")` saia como `Sistema MRO ? iniciando`
-    na tela. Docstrings e comentarios podem ter acento — so o que vai para o console nao pode.
-    """
-    arvore = ast.parse(LAUNCHER.read_text(encoding="utf-8"))
-
-    ruins = []
-    for no in ast.walk(arvore):
-        if isinstance(no, ast.Call) and isinstance(no.func, ast.Name) and no.func.id in ("print", "input"):
-            for parte in ast.walk(no):
-                if isinstance(parte, ast.Constant) and isinstance(parte.value, str):
-                    if not parte.value.isascii():
-                        ruins.append(f"linha {parte.lineno}: {parte.value!r}")
-
-    assert not ruins, "saida de console tem que ser ASCII (codepage do Windows):\n" + "\n".join(ruins)
-
-
-def test_launcher_nao_toca_no_app():
-    """Nem por import indireto: nada de `database`, `services` ou `ui` aqui dentro."""
-    arvore = ast.parse(LAUNCHER.read_text(encoding="utf-8"))
-    modulos = set()
-    for no in ast.walk(arvore):
-        if isinstance(no, ast.Import):
-            modulos |= {a.name.split(".")[0] for a in no.names}
-        elif isinstance(no, ast.ImportFrom) and no.module:
-            modulos.add(no.module.split(".")[0])
-
-    assert not (modulos & {"database", "services", "ui", "streamlit", "pandas"})
-
-
-def test_launcher_e_o_bat_sobem_na_mesma_porta_e_flags():
-    """Os dois caminhos de subida (MRO.exe e tarefa agendada) tem que convergir.
-
-    Divergir daria um sistema que se comporta diferente conforme quem o iniciou — e o
-    sintoma apareceria so no servidor.
-    """
-    argv = launcher.comando(Path("C:/MRO"))
-    bat = INICIAR.read_text(encoding="utf-8", errors="ignore")
-
-    assert launcher.PORTA == 8501
+def test_o_bat_sobe_com_a_porta_e_as_flags_do_servidor():
+    """As flags do servidor vivem em UM lugar so desde a v6.8.2 — antes o launcher tinha
+    a sua copia e as duas podiam divergir, dando um sistema que se comporta diferente
+    conforme quem o iniciou."""
+    bat = _texto(INICIAR)
     for flag in (
         "--server.headless=true",
         "--server.address=0.0.0.0",
@@ -109,57 +53,92 @@ def test_launcher_e_o_bat_sobem_na_mesma_porta_e_flags():
         "--server.fileWatcherType=none",
         "--browser.gatherUsageStats=false",
     ):
-        assert flag in argv, f"{flag} faltando no launcher"
-        assert flag.split("=")[0] in bat, f"{flag} faltando em iniciar_mro.bat"
+        assert flag in bat, f"{flag} faltando em iniciar_mro.bat"
 
 
 def test_sobe_sem_o_site_packages_do_usuario():
-    """`-s` nos DOIS caminhos de subida.
+    """`-s` no caminho de subida.
 
     Medido no CP3: o embeddable com `import site` habilitado coloca
     `%APPDATA%\\Python\\PythonXY\\site-packages` no sys.path. Sem `-s`, o pacote portatil
     deixa de ser auto-contido — funciona na maquina do dev (que tem tudo instalado global)
     e quebra na maquina limpa, que e exatamente o cenario que o pacote existe para atender.
     """
-    argv = launcher.comando(Path("C:/MRO"))
-    assert "-s" in argv, "launcher precisa de -s (ignorar site-packages do usuario)"
-    assert argv.index("-s") < argv.index("-m"), "-s tem que vir antes de -m"
-
-    bat = INICIAR.read_text(encoding="utf-8", errors="ignore")
-    assert "-s -m streamlit" in bat, "iniciar_mro.bat precisa de -s antes de -m streamlit"
+    assert "-s -m streamlit" in _texto(INICIAR), "iniciar_mro.bat precisa de -s antes de -m streamlit"
 
 
-def test_esperar_porta_desiste_quando_o_filho_morre():
-    """Sem isto, um Streamlit que aborta na largada faria o launcher esperar os 90s
-    inteiros antes de dizer qualquer coisa — e o usuario olhando uma janela parada."""
-
-    class FilhoMorto:
-        returncode = 1
-
-        def poll(self):
-            return 1
-
-    inicio = time.monotonic()
-    assert launcher.esperar_porta(1, 30, FilhoMorto()) is False
-    assert time.monotonic() - inicio < 3, "deveria desistir na hora, nao esperar o limite"
+def test_o_bat_define_o_db_fora_da_pasta_app():
+    """`MRO_DB_PATH` -> dados\\mro.db. Sem isso o banco nasceria dentro de app\\, que o
+    `atualizar_mro.bat` substitui inteira a cada release."""
+    bat = _texto(INICIAR)
+    assert "MRO_DB_PATH" in bat
+    assert r"dados\mro.db" in bat
 
 
-def test_porta_em_uso_detecta_instancia_ja_rodando(monkeypatch):
-    """Num app de duplo clique a pessoa clica duas vezes. Sem esta deteccao o segundo
-    processo anunciava "MRO no ar" apontando para a instancia do PRIMEIRO, enquanto o
-    proprio filho morria sem conseguir o bind."""
-    fonte = LAUNCHER.read_text(encoding="utf-8")
+def test_o_bat_abre_o_navegador_e_espera_a_porta():
+    """v6.8.2 — quem abria o navegador era o MRO.exe (launcher.py); com ele fora, se o bat
+    nao abrir NINGUEM abre, e o duplo clique no atalho vira so uma janela preta — enquanto
+    o LEIA-ME continua prometendo que "o navegador abre sozinho".
 
-    # A guarda tem que vir ANTES do Popen, senao o segundo Streamlit ainda e disparado.
-    assert fonte.index("if porta_em_uso(PORTA):") < fonte.index("subprocess.Popen(")
+    A espera pela porta e parte do contrato: abrir antes de o Streamlit atender mostra
+    "nao foi possivel conectar" e a pessoa conclui que o sistema nao subiu.
+    """
+    bat = _texto(INICIAR)
+    assert "--abrir-navegador" in bat, "o bat precisa do modo de abertura do navegador"
+    assert 'start "" http://localhost:8501' in bat, "falta abrir a URL"
+    assert "LISTENING" in bat, "tem que ESPERAR a porta aceitar conexao antes de abrir"
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
-        srv.bind(("127.0.0.1", 0))
-        srv.listen(1)
-        porta = srv.getsockname()[1]
-        assert launcher.porta_em_uso(porta) is True
 
-    assert launcher.porta_em_uso(porta) is False
+def test_a_espera_da_porta_nao_usa_timeout():
+    """Mesma armadilha travada na v6.6.0 (`test_motor_nao_usa_timeout`): com stdin
+    redirecionado o `timeout` do cmd aborta na hora, e o laco daria as voltas em
+    milissegundos. Este bat e lancado por `start ""` a partir dos dois atualizadores —
+    exatamente a condicao do problema. `ping` no loopback nao le stdin."""
+    bat = _texto(INICIAR)
+    assert "timeout /t" not in bat and "timeout /nobreak" not in bat, (
+        "use `ping -n` para esperar; `timeout` aborta com stdin redirecionado"
+    )
+    assert "ping -n" in bat
+
+
+def test_o_bat_avisa_sobre_pasta_sincronizada():
+    """Era `launcher.em_pasta_sincronizada`. O sincronizador segura lock no `mro.db` e no
+    `-wal`; dois processos escrevendo no mesmo arquivo corrompem o banco. Avisa e segue —
+    o launcher tambem nao impedia."""
+    bat = _texto(INICIAR)
+    assert "findstr" in bat and "OneDrive" in bat and "Dropbox" in bat
+
+
+def test_saida_do_console_e_ascii():
+    """A janela preta e um console Windows na codepage do sistema, nao UTF-8.
+
+    Medido no CP4: `Sistema MRO — iniciando...` saia como `Sistema MRO ? iniciando` na
+    tela. Vale para os tres .bat de deploy, que so imprimem via `echo`.
+    """
+    ruins = []
+    for arquivo in (INICIAR, ATUALIZAR, MOTOR):
+        for n, linha in enumerate(_texto(arquivo).splitlines(), 1):
+            if re.match(r"\s*(echo|call :log)\b", linha, re.IGNORECASE) and not linha.isascii():
+                ruins.append(f"{arquivo.name}:{n}: {linha.strip()!r}")
+
+    assert not ruins, "saida de console tem que ser ASCII (codepage do Windows):\n" + "\n".join(ruins)
+
+
+def test_nenhum_bat_de_deploy_religa_pelo_exe():
+    """v6.8.2 — o MRO.exe nao existe mais. Um `if exist MRO.exe` sobrevivente seria ramo
+    morto nos dois atualizadores: eles cairiam no fallback so depois de testar um arquivo
+    que nunca vai estar la, e a mensagem mandaria fechar uma janela que nao existe.
+
+    Olha so o CODIGO: os comentarios continuam podendo citar o exe para explicar por que
+    ele saiu — apagar a explicacao junto com o ramo e como o proximo leitor reintroduz o
+    problema."""
+    for arquivo in (INICIAR, ATUALIZAR, MOTOR, INSTALAR):
+        codigo = [
+            linha
+            for linha in _texto(arquivo).splitlines()
+            if not re.match(r"\s*(REM\b|::|#)", linha, re.IGNORECASE)
+        ]
+        assert "MRO.exe" not in "\n".join(codigo), f"{arquivo.name} ainda EXECUTA o MRO.exe"
 
 
 def test_leia_me_e_ascii_puro():
@@ -169,24 +148,6 @@ def test_leia_me_e_ascii_puro():
 
     texto = portatil.LEIA_ME.format(versao="9.9.9")
     texto.encode("ascii")  # levanta UnicodeEncodeError se alguem colar acento
-
-
-def test_launcher_define_o_db_fora_da_pasta_app():
-    """`MRO_DB_PATH` -> dados\\mro.db. Sem isso o banco nasceria dentro de app\\, que o
-    `atualizar_mro.bat` substitui inteira a cada release."""
-    fonte = LAUNCHER.read_text(encoding="utf-8")
-    assert "MRO_DB_PATH" in fonte
-    assert 'base / "dados" / "mro.db"' in fonte
-
-    # Em dev (sem runtime\ embutido ao lado) nao pode sequestrar o banco do desenvolvedor:
-    # so define MRO_DB_PATH quando o layout do pacote portatil esta de fato presente.
-    assert launcher.ambiente(Path("C:/MRO")).get("MRO_DB_PATH") is None
-
-
-def test_launcher_avisa_sobre_pasta_sincronizada():
-    assert launcher.em_pasta_sincronizada(Path(r"C:\Users\x\OneDrive\Documentos\MRO"))
-    assert launcher.em_pasta_sincronizada(Path(r"C:\Users\x\Dropbox\MRO"))
-    assert not launcher.em_pasta_sincronizada(Path(r"C:\MRO"))
 
 
 # ── O empacotador ─────────────────────────────────────────────────────────────
@@ -211,6 +172,8 @@ def test_portatil_leva_o_essencial_para_a_raiz_do_pacote():
         "iniciar_mro.bat",
         "atualizar_mro.bat",
         "instalar_servidor.ps1",
+        "criar_atalho.ps1",
+        "mro.ico",
     }
 
 
@@ -228,12 +191,40 @@ def test_portatil_le_a_minor_do_python_do_ci():
     assert portatil.versao_python().startswith(minor + ".")
 
 
-def test_portatil_usa_icone_com_caminho_absoluto():
-    """O PyInstaller resolve `--icon` relativo ao `--specpath`, nao ao cwd: com caminho
-    relativo o build morre com FileNotFoundError. Ja aconteceu no CP2."""
-    fonte = (PROJ / "scripts" / "portatil.py").read_text(encoding="utf-8")
-    assert '(RAIZ / "deploy" / "mro.ico").resolve()' in fonte
+def test_portatil_nao_empacota_exe_e_sim_atalho():
+    """v6.8.2 — sem PyInstaller: o pacote leva o atalho MRO.lnk + o mro.ico.
+
+    O MRO.exe era um binario PyInstaller sem assinatura apontando para o bat — o
+    gatilho classico de EDR corporativo, e foi o que a quarentena da maquina real pegou.
+    Quem sobe o sistema sempre foi o iniciar_mro.bat; o atalho entrega o mesmo duplo
+    clique com menos superficie.
+    """
+    portatil = pytest.importorskip("portatil")
+
+    assert "mro.ico" in portatil.RAIZ_DO_PACOTE, "o icone tem que viajar no zip"
+    assert "criar_atalho.ps1" in portatil.RAIZ_DO_PACOTE
     assert (PROJ / "deploy" / "mro.ico").exists(), "deploy/mro.ico ausente"
+
+    fonte = (PROJ / "scripts" / "portatil.py").read_text(encoding="utf-8")
+    assert '"PyInstaller"' not in fonte, "v6.8.2 tirou o PyInstaller do build"
+    assert '"--icon"' not in fonte
+    assert "construir_exe" not in fonte
+    assert "MRO.lnk" in fonte, "o build precisa gerar o atalho"
+
+    ps = (PROJ / "deploy" / "criar_atalho.ps1").read_text(encoding="ascii")
+    assert "CreateShortcut" in ps
+    assert "GetFolderPath('Desktop')" in ps, "atalho vai para a area de trabalho"
+    assert "iniciar_mro.bat" in ps
+    assert "mro.ico" in ps
+
+
+def test_leia_me_ensina_o_atalho_em_vez_do_exe():
+    portatil = pytest.importorskip("portatil")
+
+    texto = portatil.LEIA_ME.format(versao="9.9.9")
+    assert "MRO.lnk" in texto
+    assert "criar_atalho.ps1" in texto
+    assert "MRO.exe" not in texto, "o LEIA-ME nao pode mais mandar dar dois cliques no exe"
 
 
 # ── Contratos entre os scripts de deploy ──────────────────────────────────────
@@ -285,10 +276,22 @@ def test_atualizar_aborta_se_nao_conseguir_mover_o_app():
     assert "exit /b %ERRO%" in bat
 
 
-def test_pyinstaller_esta_fixado_so_no_dev():
-    """Congelar e passo de build: o runtime do servidor nao muda."""
+def test_pyinstaller_saiu_das_duas_listas():
+    """v6.8.2 — inverte o contrato da v5.8.0 (`pyinstaller` fixado no dev, ausente no prod).
+
+    O pin so existia para congelar o `deploy/launcher.py` em MRO.exe. Sem o freeze, ele
+    passa a ser dependencia de desenvolvimento que ninguem usa: pesada de instalar e
+    enganosa para quem le o arquivo e conclui que o build ainda congela algo.
+    """
     dev = (PROJ / "requirements-dev.txt").read_text(encoding="utf-8")
     prod = (PROJ / "requirements.txt").read_text(encoding="utf-8")
 
-    assert re.search(r"^pyinstaller==\d+\.\d+", dev, re.M)
+    assert not re.search(r"^pyinstaller==", dev, re.M), (
+        "o pin do pyinstaller saiu na v6.8.2 — o pacote portatil nao congela mais nada"
+    )
     assert "pyinstaller" not in prod.lower()
+    assert not (PROJ / "deploy" / "launcher.py").exists(), (
+        "deploy/launcher.py foi apagado na v6.8.2 (era so a fonte do exe)"
+    )
+    # Que o BUILD nao invoca mais o freeze ja e travado por
+    # `test_portatil_nao_empacota_exe_e_sim_atalho`; aqui e so a lista de dependencias.

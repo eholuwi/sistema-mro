@@ -107,7 +107,7 @@ REM Sem esta guarda o script seguia e o Expand-Archive -Force do passo 4 escrevi
 REM cima da versao antiga: duas versoes misturadas na mesma pasta, sem aviso nenhum.
 if exist "%MRO_RAIZ%app" (
     echo ERRO: nao consegui mover app\ - algo ainda esta usando a pasta.
-    echo        FECHE a janela do MRO.exe e tente de novo.
+    echo        FECHE a janela preta do MRO e tente de novo.
     echo        Atualizacao ABORTADA - nada foi alterado.
     REM Aborta ANTES do Expand-Archive. `goto fim` em vez de `exit /b 1` direto so para
     REM a janela PAUSAR e mostrar o motivo; o codigo de saida 1 vem do ERRO.
@@ -129,24 +129,23 @@ move "%MRO_RAIZ%app_anterior" "%MRO_RAIZ%app" >nul 2>&1
 
 :religar
 echo [5/5] Religando...
-REM Tres caminhos, porque nem toda instalacao usa tarefa agendada. A versao anterior
+REM Dois caminhos, porque nem toda instalacao usa tarefa agendada. A versao anterior
 REM so chamava `schtasks /Run`: em maquina SEM a tarefa (o caso do PC da sala MRO, onde
 REM o antivirus corporativo tratou a tarefa como ameaca) o sistema ficava NO CHAO depois
-REM da atualizacao, sem nenhuma mensagem dizendo isso.
+REM da atualizacao, sem nenhuma mensagem dizendo isso. (Eram tres ate a v6.8.1, quando
+REM o MRO.exe ainda existia.)
 if defined TEM_TAREFA (
     schtasks /Run /TN "%TAREFA%" >nul 2>&1
     echo   tarefa agendada reiniciada
 ) else (
-    if exist "%MRO_RAIZ%MRO.exe" (
-        start "" "%MRO_RAIZ%MRO.exe"
-        echo   MRO.exe reiniciado
+    REM v6.8.2 - o ramo do MRO.exe saiu junto com o PyInstaller. Quem sobe o sistema
+    REM sempre foi este bat; o exe so dava o duplo clique, hoje feito pelo atalho MRO.lnk
+    REM (que aponta para ele). Um `if exist MRO.exe` aqui seria ramo morto.
+    if exist "%MRO_RAIZ%iniciar_mro.bat" (
+        start "" "%MRO_RAIZ%iniciar_mro.bat"
+        echo   iniciar_mro.bat reiniciado
     ) else (
-        if exist "%MRO_RAIZ%iniciar_mro.bat" (
-            start "" "%MRO_RAIZ%iniciar_mro.bat"
-            echo   iniciar_mro.bat reiniciado
-        ) else (
-            echo   AVISO: nao achei como religar - abra o MRO manualmente.
-        )
+        echo   AVISO: nao achei como religar - abra o MRO manualmente.
     )
 )
 

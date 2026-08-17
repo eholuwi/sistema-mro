@@ -38,7 +38,7 @@ contexto.
 | **Gate de verificação** | `verify.ps1`, `ruff.toml`, `.github/workflows/verify.yml` |
 | Automação do harness | `.claude/hooks/`, `.claude/settings.json`, `.claude/agents/validador-mro.md` |
 | Distribuição (servidor) | `deploy/`, `scripts/release.py`, `docs/INSTALACAO_SERVIDOR.md` |
-| Distribuição (pacote portátil / MRO.exe) | `scripts/portatil.py`, `deploy/launcher.py`, `deploy/instalar_servidor.ps1` |
+| Distribuição (pacote portátil / MRO.lnk) | `scripts/portatil.py`, `deploy/iniciar_mro.bat`, `deploy/criar_atalho.ps1`, `deploy/instalar_servidor.ps1` |
 | Continuidade / backlog | `docs/HANDOFF.md` (seção "STATUS ATUAL" no topo), `docs/prompt.md` |
 | Changelog | `changelog/*.md` |
 

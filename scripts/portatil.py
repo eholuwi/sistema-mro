@@ -1,4 +1,4 @@
-"""Monta o pacote PORTATIL do Sistema MRO — extrair e clicar duas vezes (v5.8.0).
+"""Monta o pacote PORTATIL do Sistema MRO — extrair, arrastar o atalho e clicar (v6.8.2).
 
     python scripts/portatil.py            # -> dist/mro-portatil-<versao>.zip
 
@@ -9,12 +9,20 @@ Python embeddable com as dependencias ja instaladas — para que trocar o PC-ser
 extrair um zip.
 
     C:\\MRO\\
-    ├── MRO.exe                  launcher congelado (deploy/launcher.py)
+    ├── MRO.lnk                  atalho p/ iniciar_mro.bat (so arrastar p/ Desktop)
+    ├── mro.ico                  icone do atalho
     ├── runtime\\                Python embeddable + deps
     ├── app\\                    identico ao payload de release.py
     ├── dados\\                  vazio; o banco nasce no primeiro boot
-    ├── iniciar_mro.bat · atualizar_mro.bat · instalar_servidor.ps1
+    ├── iniciar_mro.bat · atualizar_mro.bat · instalar_servidor.ps1 · criar_atalho.ps1
     └── LEIA-ME.txt
+
+**Nao ha MRO.exe desde a v6.8.2.** Quem sobe o sistema e `iniciar_mro.bat`; o exe
+congelado so existia para dar icone clicavel, e um binario PyInstaller sem assinatura e o
+gatilho classico de EDR corporativo (na maquina real foi o que a quarentena pegou). No
+lugar dele o build gera `MRO.lnk` apontando para o bat, com o `mro.ico` da propria raiz —
+menos superficie, mesmo resultado. `deploy/criar_atalho.ps1` recria o atalho na area de
+trabalho se o pacote foi extraido em outro caminho.
 
 **O conteudo de `app\\` vem de `release.itens_do_pacote()`, nao de uma segunda lista.**
 Duas listas de arquivos divergem — e a que ninguem roda diverge calada. Assim o
@@ -46,7 +54,17 @@ CACHE = RAIZ / "build" / "cache"
 MONTAGEM = RAIZ / "build" / "portatil"
 
 # Arquivos da raiz do pacote (fora de `app\`), copiados de deploy/.
-RAIZ_DO_PACOTE = ["iniciar_mro.bat", "atualizar_mro.bat", "instalar_servidor.ps1"]
+RAIZ_DO_PACOTE = [
+    "iniciar_mro.bat",
+    "atualizar_mro.bat",
+    "instalar_servidor.ps1",
+    "criar_atalho.ps1",
+    "mro.ico",
+]
+
+# Caminho que o MRO.lnk do zip aponta. O LEIA-ME manda extrair em C:\MRO; quem extrair
+# em outro lugar roda `criar_atalho.ps1`, que resolve a raiz pelo proprio local.
+PASTA_ALVO = Path("C:/MRO")
 
 URL_EMBED = "https://www.python.org/ftp/python/{versao}/python-{versao}-embed-amd64.zip"
 URL_GETPIP = "https://bootstrap.pypa.io/get-pip.py"
@@ -62,21 +80,26 @@ LEIA_ME = """Sistema MRO {versao} - pacote portatil
    NAO extraia dentro do OneDrive / Dropbox / Google Drive. O sincronizador
    segura lock no banco e pode corrompe-lo.
 
-2. De dois cliques em MRO.exe.
+2. Arrume o atalho na area de trabalho:
+   - Copie o arquivo MRO.lnk (desta pasta) para a area de trabalho; ou
+   - Clique com o botao direito em criar_atalho.ps1 > "Executar com o
+     PowerShell" (cria o atalho MRO sozinho - util se extraiu em outro lugar).
+
+3. De dois cliques no atalho MRO.
 
    O navegador abre sozinho. Os outros usuarios acessam pelo endereco de rede
    que aparece na janela preta (http://<ip>:8501).
 
    Feche a janela preta para parar o sistema.
 
-3. (Opcional) Para o sistema subir sozinho quando o PC liga, clique com o botao
+4. (Opcional) Para o sistema subir sozinho quando o PC liga, clique com o botao
    direito em instalar_servidor.ps1 > "Executar com o PowerShell". Ele cria a
    tarefa agendada e libera a porta 8501 no firewall. Pede admin.
 
 O banco fica em dados\\mro.db e os backups em dados\\backups\\ - essa pasta
 sobrevive as atualizacoes. Backup sob demanda: aba Configuracoes no sistema.
 
-Atualizar: feche o MRO.exe (ou pare a tarefa) e rode
+Atualizar: feche o atalho MRO (ou pare a tarefa) e rode
   atualizar_mro.bat C:\\caminho\\mro-<nova-versao>.zip
 """
 
@@ -165,7 +188,7 @@ def instalar_deps(runtime: Path) -> None:
     )
 
 
-# ── Aplicacao e launcher ──────────────────────────────────────────────────────
+# ── Aplicacao e atalho ────────────────────────────────────────────────────────
 
 
 def montar_app(destino: Path) -> int:
@@ -178,39 +201,39 @@ def montar_app(destino: Path) -> int:
     return len(itens)
 
 
-def construir_exe(destino: Path) -> None:
-    """Congela `deploy/launcher.py` em MRO.exe.
+def criar_atalho_lnk(raiz_instalacao: Path, destino: Path) -> Path:
+    """Gera `MRO.lnk` apontando para `raiz_instalacao\\iniciar_mro.bat`.
 
-    So o launcher — o Streamlit continua sendo executado pelo Python do `runtime\\`. E o
-    que `docs/PLANO_V5_EVOLUCAO.md` chamou de "no maximo no launcher": congelar o app
-    inteiro e fragil a cada release, congelar ~150 linhas de stdlib nao.
+    Substitui o MRO.exe da v5.8.0 (v6.8.2): binario PyInstaller sem assinatura e o
+    gatilho classico de EDR corporativo, e quem sobe o sistema de verdade sempre foi o
+    bat. O atalho ja vai pronto no zip — na maquina destino e so arrastar para a area
+    de trabalho.
+
+    Aponta para PASTA_ALVO (C:\\MRO), o caminho fixo que o LEIA-ME manda extrair.
+    Quem extrair em outro lugar roda `criar_atalho.ps1`, que resolve a raiz pelo
+    proprio local.
+
+    Caminhos vao por variaveis de ambiente, nao interpolados no -Command: o caminho do
+    build tem espaco e acento, e embutir isso no texto quebra. Ambiente no Windows e
+    UTF-16 — o acento sobrevive sem problema.
     """
-    saida = MONTAGEM.parent / "exe"
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "PyInstaller",
-            "--onefile",
-            "--console",
-            "--name",
-            "MRO",
-            # Caminho ABSOLUTO: o PyInstaller resolve --icon relativo ao --specpath.
-            "--icon",
-            str((RAIZ / "deploy" / "mro.ico").resolve()),
-            "--distpath",
-            str(saida),
-            "--workpath",
-            str(MONTAGEM.parent / "pyinstaller"),
-            "--specpath",
-            str(MONTAGEM.parent),
-            "--noconfirm",
-            str(RAIZ / "deploy" / "launcher.py"),
-        ],
-        check=True,
-        cwd=str(RAIZ),
+    atalho = destino / "MRO.lnk"
+    env = os.environ.copy()
+    env["MRO_ATALHO"] = str(atalho)
+    env["MRO_BAT"] = str(raiz_instalacao / "iniciar_mro.bat")
+    env["MRO_RAIZ"] = str(raiz_instalacao)
+    env["MRO_ICO"] = str(raiz_instalacao / "mro.ico")
+    cmd = (
+        "$w = New-Object -ComObject WScript.Shell; "
+        "$s = $w.CreateShortcut($env:MRO_ATALHO); "
+        "$s.TargetPath = $env:MRO_BAT; "
+        "$s.WorkingDirectory = $env:MRO_RAIZ; "
+        "$s.IconLocation = $env:MRO_ICO + ',0'; "
+        "$s.Description = 'Sistema MRO'; "
+        "$s.Save()"
     )
-    shutil.copy2(saida / "MRO.exe", destino / "MRO.exe")
+    subprocess.run(["powershell", "-NoProfile", "-Command", cmd], check=True, env=env)
+    return atalho
 
 
 # ── Orquestracao ──────────────────────────────────────────────────────────────
@@ -234,8 +257,8 @@ def zipar(origem: Path, alvo: Path) -> Path:
                 zf.write(caminho, rel)
             elif not any(caminho.iterdir()):
                 # Pasta vazia (`dados\`): sem uma entrada de diretorio explicita ela
-                # simplesmente nao existe no zip extraido. O launcher a recria, mas o
-                # layout tem que estar visivel para quem abre o pacote.
+                # simplesmente nao existe no zip extraido. O iniciar_mro.bat a recria,
+                # mas o layout tem que estar visivel para quem abre o pacote.
                 zf.writestr(rel + "/", "")
     return alvo
 
@@ -244,7 +267,6 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Monta o pacote portatil do Sistema MRO.")
     p.add_argument("--versao", help="sobrescreve a versao lida de ui/sidebar.py")
     p.add_argument("--saida", default=str(RAIZ / "dist"), help="pasta do zip (padrao: dist/)")
-    p.add_argument("--pular-exe", action="store_true", help="reaproveita o MRO.exe ja montado")
     p.add_argument(
         "--pular-deps",
         action="store_true",
@@ -285,11 +307,8 @@ def main() -> int:
     (MONTAGEM / "dados").mkdir(exist_ok=True)
     gravar_leia_me(MONTAGEM / "LEIA-ME.txt", versao)
 
-    print("[4/5] MRO.exe...")
-    if args.pular_exe and (MONTAGEM / "MRO.exe").exists():
-        print("  (reaproveitando MRO.exe existente)")
-    else:
-        construir_exe(MONTAGEM)
+    print("[4/5] Atalho MRO...")
+    criar_atalho_lnk(PASTA_ALVO, MONTAGEM)
 
     print("[5/5] Compactando...")
     destino = zipar(MONTAGEM, Path(args.saida) / f"mro-portatil-{versao}.zip")
@@ -298,7 +317,8 @@ def main() -> int:
     print()
     print(f"Pacote gerado: {destino}  ({mb:.0f} MB)")
     print()
-    print("Na maquina destino: extrair em C:\\MRO e dar dois cliques em MRO.exe.")
+    print("Na maquina destino: extrair em C:\\MRO, arrastar MRO.lnk para a area")
+    print("de trabalho e dar dois cliques nele.")
     return 0
 
 

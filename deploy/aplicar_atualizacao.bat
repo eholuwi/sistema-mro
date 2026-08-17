@@ -9,7 +9,7 @@ REM  script mata o app, troca `app\` e religa - por isso ele NAO pode rodar de d
 REM  de `app\`: o proprio app o copia para `dados\atualizacoes\` antes de disparar.
 REM
 REM  Diferencas para o `atualizar_mro.bat` da raiz (que continua existindo):
-REM    - mata o PID do Streamlit, nao so a tarefa agendada (cobre o modo MRO.exe);
+REM    - mata o PID do Streamlit, nao so a tarefa agendada (cobre o modo duplo clique);
 REM    - espera a PORTA liberar em vez de um `timeout /t 5` cego;
 REM    - religa sozinho pelos dois caminhos de subida;
 REM    - restaura `app_anterior\` e religa em QUALQUER falha;
@@ -141,16 +141,14 @@ if defined TEM_TAREFA (
     schtasks /Run /TN "%TAREFA%" >nul 2>&1
     call :log "      tarefa agendada reiniciada"
 ) else (
-    if exist "%RAIZ%\MRO.exe" (
-        start "" "%RAIZ%\MRO.exe"
-        call :log "      MRO.exe reiniciado"
+    REM v6.8.2 - o ramo do MRO.exe saiu junto com o PyInstaller. Quem sobe o sistema
+    REM sempre foi o iniciar_mro.bat; o exe so dava o duplo clique, hoje feito pelo
+    REM atalho MRO.lnk (que aponta para o bat). Um `if exist MRO.exe` seria ramo morto.
+    if exist "%RAIZ%\iniciar_mro.bat" (
+        start "" "%RAIZ%\iniciar_mro.bat"
+        call :log "      iniciar_mro.bat reiniciado"
     ) else (
-        if exist "%RAIZ%\iniciar_mro.bat" (
-            start "" "%RAIZ%\iniciar_mro.bat"
-            call :log "      iniciar_mro.bat reiniciado"
-        ) else (
-            call :log "      AVISO: nao achei como religar - abra o MRO manualmente."
-        )
+        call :log "      AVISO: nao achei como religar - abra o MRO manualmente."
     )
 )
 REM A mensagem final tem que dizer a verdade: no caminho de rollback a versao anterior

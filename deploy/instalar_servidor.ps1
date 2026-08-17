@@ -6,7 +6,7 @@
 #
 #  Uso: botao direito > "Executar com o PowerShell"  (ele se auto-eleva se precisar).
 #  Opcional — so faz falta se o sistema tem que subir sozinho no boot. Para uso avulso,
-#  dois cliques no MRO.exe bastam.
+#  dois cliques no atalho MRO bastam.
 #
 #  Idempotente: remove a tarefa e a regra antes de recriar, entao pode rodar de novo.
 # ============================================================================
@@ -34,7 +34,7 @@ $BAT  = Join-Path $RAIZ 'iniciar_mro.bat'
 
 if (-not (Test-Path $BAT)) {
     Write-Host "ERRO: nao encontrei $BAT." -ForegroundColor Red
-    Write-Host 'Este script tem que ficar na mesma pasta do iniciar_mro.bat e do MRO.exe.'
+    Write-Host 'Este script tem que ficar na mesma pasta do iniciar_mro.bat e do atalho MRO.'
     Read-Host 'Enter para fechar'
     exit 1
 }
